@@ -18,12 +18,23 @@ date_range:
 
 # 数据下载
 data:
+  # ===== 数据源 =====
+  provider: "fmp"                  # 当前仅支持 fmp（Financial Modeling Prep）
+
+  # FMP (Financial Modeling Prep) 配置
+  fmp:
+    # API key 加载优先级：环境变量 FMP_API_KEY > 此处配置
+    # 推荐用环境变量，避免提交到 git。在终端 `export FMP_API_KEY=xxx`
+    api_key: ""                    # 环境变量未设置时回退到这里
+    request_timeout: 30            # 单次请求超时秒数
+    retry: 3                       # 失败重试次数（指数退避）
+
   raw_dir: "data/raw"
   processed_dir: "data/processed"
-  chunk_size: 50                   # yfinance 批量下载 chunk 大小（一次请求多少只）
-  sleep_between: 1.5               # chunk 之间睡眠秒数（避免被限流）
-  max_workers: 1                   # 已改为批量串行下载，保留字段但不再使用
-  retry_times: 3                   # 下载失败重试次数（指数退避）
+  chunk_size: 100                  # 进度条更新粒度（FMP 实际逐只请求）
+  sleep_between: 0.0               # Premium 套餐不需要节流（750 req/min）
+  max_workers: 1                   # 保留字段不使用
+  retry_times: 3                   # 下载失败重试次数
   cache_days: 7                    # 本地缓存有效期（天），过期重新下载
 
 # 因子预处理
@@ -38,7 +49,7 @@ preprocessing:
 ic_analysis:
   forward_periods: 5               # 前向收益窗口（交易日）
   method: "spearman"               # pearson / spearman（Rank IC 用 spearman）
-  min_stocks: 20                   # 单日截面最少股票数，低于则跳过（小样本调试时可调低）
+  min_stocks: 10                   # 单日截面最少股票数，低于则跳过（生产 500 只池建议改 100）
 
 # 五分位回测
 backtest:
@@ -71,7 +82,7 @@ logging:
 # Web 服务
 webapp:
   host: "0.0.0.0"                  # 0.0.0.0 允许手机访问
-  port: 8000
+  port: 18823
   reload: false
   title: "Multi-Factor Quant Research"
   output_dir: "outputs"            # 图表 / JSON 缓存目录

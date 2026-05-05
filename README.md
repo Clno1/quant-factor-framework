@@ -9,8 +9,8 @@
 
 ## 特性
 
-- 🎯 **股票池**：S&P 500 成分股（自动从 Wikipedia 抓取）
-- 📈 **数据源**：`yfinance`（免费、无需 token）
+- 🎯 **股票池**：S&P 500 成分股（FMP 直拉，含 GICS sector）
+- 📈 **数据源**：**FMP（Financial Modeling Prep）**（推荐，稳定）/ yfinance（免费但常被限流）
 - 🏭 **因子库**：先实现 MOM_6M，预留 VOL / REVERSAL / TURNOVER 等扩展槽位
 - 🧪 **有效性检验**：Rank IC（Spearman）+ IC_IR + t 统计量（对齐研报 IC 汇总表）
 - 📊 **五分位回测**：Quintile Analysis + Long-Short（Q5 - Q1）
@@ -52,27 +52,53 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. 运行完整 pipeline
+### 2. 配置数据源（FMP，推荐）
+
+注册 FMP 拿到 API key：https://site.financialmodelingprep.com/
+
+**两种方式配置 key（任选一种）：**
 
 ```bash
+# 方式 A：环境变量（推荐，不会进 git）
+export FMP_API_KEY="你的_key"
+# 永久生效写到 ~/.zshrc 或 ~/.bashrc
+```
+
+```yaml
+# 方式 B：configs/default.yaml
+data:
+  provider: "fmp"
+  fmp:
+    api_key: "你的_key"   # 注意不要 commit
+```
+
+切换数据源只需改 `data.provider` 字段：`"fmp"` 或 `"yfinance"`。
+
+### 3. 运行完整 pipeline
+
+```bash
+# 烟雾测试（20 只）
+python scripts/run_mvp.py --universe 20 --no-web
+
+# 全量 + 启动 Web
 python scripts/run_mvp.py
 ```
 
 这会完成：
-1. 抓取 S&P 500 成分股列表
+1. 抓取 S&P 500 成分股列表（FMP 直接带 sector）
 2. 下载 5 年日线行情（Parquet 缓存，二次运行秒开）
 3. 计算 MOM_6M 因子 + 预处理
 4. 计算 Rank IC 序列 + 汇总指标
 5. 跑五分位回测 + Long-Short 组合
 6. 生成可视化图表到 `outputs/`
 
-### 3. 启动 Web 服务
+### 4. 启动 Web 服务
 
 ```bash
-uvicorn src.webapp.app:app --host 0.0.0.0 --port 8000
+python scripts/run_mvp.py --serve-only
 ```
 
-然后浏览器访问 `http://<你的电脑IP>:8000`（手机同 WiFi 可直接打开）。
+浏览器访问 `http://<服务器IP>:18823`（手机/电脑均可）。
 
 ---
 

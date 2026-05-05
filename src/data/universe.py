@@ -115,7 +115,19 @@ def get_universe(force_refresh: bool = False) -> pd.DataFrame:
         log.info("Loading S&P 500 universe from cache: %s", cache)
         return pd.read_parquet(cache)
 
-    df = _fetch_sp500_from_wikipedia(CONFIG.universe.sp500_url)
+    # 优先 FMP（直接带 sector，无需爬 Wikipedia）
+    provider = str(getattr(CONFIG.data, "provider", "fmp")).lower()
+    df: pd.DataFrame | None = None
+    if provider == "fmp":
+        try:
+            from src.data.fmp import get_sp500_constituents
+            df = get_sp500_constituents()
+        except Exception as e:  # noqa: BLE001
+            log.warning("FMP universe fetch failed (%s). Falling back to Wikipedia.", e)
+
+    if df is None or df.empty:
+        df = _fetch_sp500_from_wikipedia(CONFIG.universe.sp500_url)
+
     df.to_parquet(cache)
     log.info("Saved S&P 500 universe to %s (fetched at %s)", cache, datetime.now().isoformat(timespec="seconds"))
     return df

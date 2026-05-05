@@ -60,8 +60,16 @@ def build_wide_tables(
     cache_days = float(CONFIG.data.cache_days)
 
     if not force and all(is_cache_fresh(p, cache_days) for p in _WIDE_FILES.values()):
-        log.info("Processed wide tables are fresh, loading from cache.")
-        return {k: read_parquet(p) for k, p in _WIDE_FILES.items()}
+        cached = {k: read_parquet(p) for k, p in _WIDE_FILES.items()}
+        # 非空校验：如果缓存其实是空表（历史故障留下的占位），强制重建
+        adj = cached.get("adj_close", pd.DataFrame())
+        if not adj.empty and adj.shape[1] > 0:
+            log.info(
+                "Processed wide tables are fresh, loading from cache. shape=%s",
+                adj.shape,
+            )
+            return cached
+        log.warning("Cached wide tables are empty (shape=%s). Rebuilding ...", adj.shape)
 
     if tickers is None:
         tickers = get_universe()["ticker"].tolist()
