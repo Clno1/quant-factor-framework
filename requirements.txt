@@ -1,0 +1,28 @@
+# ========== 数据获取 ==========
+yfinance>=0.2.40
+requests>=2.31.0
+lxml>=4.9.0            # Wikipedia 表格解析
+
+# ========== 数据处理 ==========
+pandas>=2.0.0
+numpy>=1.24.0
+pyarrow>=14.0.0        # Parquet 读写
+pyyaml>=6.0            # 配置加载
+
+# ========== 科学计算 ==========
+scipy>=1.11.0          # Spearman 相关、t 检验
+statsmodels>=0.14.0    # OLS 回归（行业中性化预留）
+
+# ========== 可视化 ==========
+matplotlib>=3.7.0
+seaborn>=0.13.0
+plotly>=5.18.0         # 交互图表，Web 嵌入
+
+# ========== Web 服务 ==========
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+jinja2>=3.1.0
+python-multipart>=0.0.9
+
+# ========== 工具 ==========
+tqdm>=4.66.0           # 进度条

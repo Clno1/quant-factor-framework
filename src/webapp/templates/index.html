@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+
+{% block content %}
+    <h1 class="page-title">Strategy Overview</h1>
+    <div class="page-sub">
+        {% if hero_factor %}
+            Showing latest results for <span class="badge">{{ hero_factor }}</span>
+        {% else %}
+            No factor results yet. Run <code class="mono">python scripts/run_mvp.py</code> first.
+        {% endif %}
+    </div>
+
+    {% if hero_factor %}
+    <section class="cards">
+        <div class="card">
+            <div class="label">Long-Short Ann. Return</div>
+            <div class="value {% if hero_metrics.AnnReturn.startswith('-') %}neg{% else %}pos{% endif %}">
+                {{ hero_metrics.AnnReturn }}
+            </div>
+        </div>
+        <div class="card">
+            <div class="label">Sharpe Ratio</div>
+            <div class="value">{{ hero_metrics.Sharpe }}</div>
+        </div>
+        <div class="card">
+            <div class="label">Max Drawdown</div>
+            <div class="value neg">{{ hero_metrics.MaxDD }}</div>
+        </div>
+        <div class="card">
+            <div class="label">Calmar Ratio</div>
+            <div class="value">{{ hero_metrics.Calmar }}</div>
+        </div>
+    </section>
+
+    <section class="chart-panel">
+        <div class="panel-title">
+            <span>Quintile Cumulative NAV</span>
+            <a class="mono" href="/backtest/{{ hero_factor }}">Full backtest →</a>
+        </div>
+        <div class="plot" style="width:100%;height:460px;"
+             data-plotly-json='{{ hero_fig_json|safe }}'></div>
+    </section>
+    {% else %}
+    <div class="empty">
+        <p>No factor artifacts found under <code class="mono">outputs/factors/</code>.</p>
+        <p>Run the MVP pipeline to populate results:</p>
+        <p><code class="mono">python scripts/run_mvp.py</code></p>
+    </div>
+    {% endif %}
+
+    {% if rows %}
+    <section class="table-panel">
+        <div class="table-title">Factor IC Summary</div>
+        <div class="table-wrap">
+            <table class="data">
+                <thead>
+                    <tr>
+                        <th>Factor</th>
+                        <th>IC Mean</th>
+                        <th>IC Std</th>
+                        <th>IC IR</th>
+                        <th>IC &gt; 0</th>
+                        <th>|IC| &gt; 0.02</th>
+                        <th>t-stat</th>
+                        <th>N</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for r in rows %}
+                    <tr>
+                        <td>
+                            <a href="/factor/{{ r.factor }}"><strong>{{ r.factor }}</strong></a>
+                            <div style="color:var(--text-2); font-size:11px; font-family:'Roboto';">
+                                {{ r.description }}
+                            </div>
+                        </td>
+                        <td class="{% if r.IC_mean.startswith('-') %}neg{% else %}pos{% endif %}">{{ r.IC_mean }}</td>
+                        <td>{{ r.IC_std }}</td>
+                        <td>{{ r.IC_IR }}</td>
+                        <td>{{ r.IC_gt0_pct }}</td>
+                        <td>{{ r.IC_abs_gt_thr_pct }}</td>
+                        <td>{{ r.t_stat }}</td>
+                        <td>{{ r.N }}</td>
+                        <td><a href="/backtest/{{ r.factor }}">Backtest →</a></td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    {% endif %}
+{% endblock %}

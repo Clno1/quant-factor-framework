@@ -1,0 +1,75 @@
+# ============================================================
+# 多因子量化研究框架 - 默认配置
+# 所有模块统一从此文件读取参数，避免硬编码
+# ============================================================
+
+# 股票池
+universe:
+  name: "SP500"                    # 可选: SP500 / NASDAQ100 / CUSTOM
+  custom_tickers: []               # 当 name=CUSTOM 时生效
+  # Wikipedia 成分股页面
+  sp500_url: "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+  cache_days: 7                    # 成分股列表缓存有效期（天）
+
+# 回测时间范围（近 5 年）
+date_range:
+  start: "2020-01-01"
+  end: "2025-12-31"
+
+# 数据下载
+data:
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  max_workers: 8                   # yfinance 多线程下载并发数
+  retry_times: 2                   # 下载失败重试次数
+  cache_days: 7                    # 本地缓存有效期（天），过期重新下载
+
+# 因子预处理
+preprocessing:
+  winsorize_method: "mad"          # mad / 3sigma
+  winsorize_n: 3                   # MAD 倍数
+  standardize: true                # 是否做 Z-score 标准化
+  neutralize_industry: false       # MVP 暂不启用，接口已预留
+  neutralize_mcap: false
+
+# 单因子 IC 分析
+ic_analysis:
+  forward_periods: 5               # 前向收益窗口（交易日）
+  method: "spearman"               # pearson / spearman（Rank IC 用 spearman）
+  min_stocks: 50                   # 单日截面最少股票数，低于则跳过
+
+# 五分位回测
+backtest:
+  n_groups: 5                      # 分组数（Quintile = 5）
+  rebalance_days: 5                # 调仓周期（交易日）
+  weight_method: "equal"           # 等权
+  transaction_cost: 0.0005         # 单边交易成本（5bp），MVP 先不启用
+  risk_free_rate: 0.0              # 年化无风险利率（计算 Sharpe 用）
+  trading_days_per_year: 252
+
+# 当前启用因子
+factors:
+  enabled:
+    - MOM_6M                       # MVP 仅跑通这一个
+  # 预留扩展（未来）
+  # - MOM_1M
+  # - MOM_3M
+  # - MOM_12M
+  # - VOL_20D
+  # - VOL_60D
+  # - REVERSAL
+  # - TURNOVER
+
+# 日志
+logging:
+  level: "INFO"                    # DEBUG / INFO / WARNING / ERROR
+  log_dir: "logs"
+  file_name: "quant.log"
+
+# Web 服务
+webapp:
+  host: "0.0.0.0"                  # 0.0.0.0 允许手机访问
+  port: 8000
+  reload: false
+  title: "Multi-Factor Quant Research"
+  output_dir: "outputs"            # 图表 / JSON 缓存目录
