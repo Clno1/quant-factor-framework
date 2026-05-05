@@ -79,9 +79,9 @@ def compute_ic(
     -------
     pd.Series (index=date, value=IC)
     """
-    periods = int(periods or CONFIG.ic_analysis.forward_periods)
+    periods = int(periods if periods is not None else CONFIG.ic_analysis.forward_periods)
     method = (method or CONFIG.ic_analysis.method).lower()
-    min_stocks = int(min_stocks or CONFIG.ic_analysis.min_stocks)
+    min_stocks = int(min_stocks if min_stocks is not None else CONFIG.ic_analysis.min_stocks)
 
     fwd = compute_forward_returns(returns_df, periods=periods)
 

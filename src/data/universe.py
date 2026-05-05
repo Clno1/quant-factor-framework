@@ -9,10 +9,12 @@
 """
 from __future__ import annotations
 
+import io
 from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
+import requests
 
 from src.config import CONFIG, PROJECT_ROOT
 from src.utils.io import ensure_dir, is_cache_fresh
@@ -22,16 +24,45 @@ log = get_logger(__name__)
 
 _CACHE_DIR = PROJECT_ROOT / "data" / "raw" / "universe"
 
+# 伪装成常见桌面浏览器，避免 Wikipedia 对默认 urllib/pandas UA 返回 403
+_BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+# 兜底数据源：datahub 维护的 S&P 500 成分股 CSV（社区常用镜像）
+_FALLBACK_CSV_URL = (
+    "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/"
+    "main/data/constituents.csv"
+)
+
 
 def _sp500_cache_path() -> Path:
     return _CACHE_DIR / "sp500.parquet"
 
 
 def _fetch_sp500_from_wikipedia(url: str) -> pd.DataFrame:
-    """从 Wikipedia 抓取 S&P 500 成分股（第一张表）。"""
+    """从 Wikipedia 抓取 S&P 500 成分股（第一张表）。
+
+    说明：pandas.read_html 默认 UA 会被 Wikipedia 403 拦截，
+    所以先用 requests 带浏览器 UA 拿到 HTML，再交给 pandas 解析。
+    若 Wikipedia 失败，自动降级到 datahub 的备用 CSV。
+    """
     log.info("Fetching S&P 500 constituents from Wikipedia ...")
-    tables = pd.read_html(url, header=0)
-    df = tables[0].copy()
+    try:
+        resp = requests.get(url, headers=_BROWSER_HEADERS, timeout=30)
+        resp.raise_for_status()
+        tables = pd.read_html(io.StringIO(resp.text), header=0)
+        df = tables[0].copy()
+    except Exception as e:  # noqa: BLE001
+        log.warning("Wikipedia fetch failed (%s). Falling back to datahub CSV.", e)
+        resp = requests.get(_FALLBACK_CSV_URL, headers=_BROWSER_HEADERS, timeout=30)
+        resp.raise_for_status()
+        df = pd.read_csv(io.StringIO(resp.text))
 
     # 列名标准化（Wikipedia 偶尔会改列名）
     rename_map = {}

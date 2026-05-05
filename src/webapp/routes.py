@@ -138,8 +138,7 @@ def index(request: Request):
             hero_fig_json = fig_to_json(fig)
             hero_metrics = _performance_card(data["group_metrics"], "LongShort")
 
-    return templates.TemplateResponse("index.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "index.html", {
         "title": CONFIG.webapp.title,
         "factors": factors,
         "rows": rows,
@@ -159,8 +158,7 @@ def factor_detail(request: Request, name: str):
     nav_fig = plot_quintile_nav_plotly(data["group_nav"], data["ls_nav"],
                                        title=f"{name} · Quintile NAV")
 
-    return templates.TemplateResponse("factor.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "factor.html", {
         "title": f"{name} · Factor Detail",
         "factors": list_factors(),
         "name": name,
@@ -183,8 +181,7 @@ def factor_detail(request: Request, name: str):
 def backtest_index(request: Request):
     factors = list_factors()
     if not factors:
-        return templates.TemplateResponse("backtest.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "backtest.html", {
             "title": "Backtest",
             "factors": [],
             "name": None,
@@ -205,8 +202,7 @@ def backtest_detail(request: Request, name: str):
     dd_fig = plot_drawdown_plotly(data["ls_returns"],
                                   title=f"{name} · Long-Short Drawdown")
 
-    return templates.TemplateResponse("backtest.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "backtest.html", {
         "title": f"{name} · Backtest",
         "factors": list_factors(),
         "name": name,

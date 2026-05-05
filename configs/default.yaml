@@ -20,8 +20,10 @@ date_range:
 data:
   raw_dir: "data/raw"
   processed_dir: "data/processed"
-  max_workers: 8                   # yfinance 多线程下载并发数
-  retry_times: 2                   # 下载失败重试次数
+  chunk_size: 50                   # yfinance 批量下载 chunk 大小（一次请求多少只）
+  sleep_between: 1.5               # chunk 之间睡眠秒数（避免被限流）
+  max_workers: 1                   # 已改为批量串行下载，保留字段但不再使用
+  retry_times: 3                   # 下载失败重试次数（指数退避）
   cache_days: 7                    # 本地缓存有效期（天），过期重新下载
 
 # 因子预处理
@@ -36,7 +38,7 @@ preprocessing:
 ic_analysis:
   forward_periods: 5               # 前向收益窗口（交易日）
   method: "spearman"               # pearson / spearman（Rank IC 用 spearman）
-  min_stocks: 50                   # 单日截面最少股票数，低于则跳过
+  min_stocks: 20                   # 单日截面最少股票数，低于则跳过（小样本调试时可调低）
 
 # 五分位回测
 backtest:
