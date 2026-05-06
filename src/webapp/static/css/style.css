@@ -115,6 +115,172 @@ h1.page-title {
     color: var(--text-2); font-size: 13px; margin-bottom: 24px;
 }
 
+/* ==================== 现代化 toolbar + dropdown ==================== */
+
+.hero-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    margin: 8px 0 24px;
+    background: rgba(26, 31, 46, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 12px;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    flex-wrap: wrap;
+    /* 关键：toolbar 自身需要建立层叠上下文，且层级要高于下面的 .cards/.chart-panel */
+    position: relative;
+    z-index: 50;
+}
+
+.toolbar-label {
+    color: #78829A;
+    font-size: 11px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    font-weight: 600;
+    flex-shrink: 0;
+}
+
+/* ----- dropdown 主体 ----- */
+.dropdown {
+    position: relative;
+    display: inline-block;
+    /* 关键：当 open 时把整个容器拉到最上层，避免被卡片遮住 */
+    z-index: 1;
+}
+.dropdown[open] {
+    z-index: 9999;
+}
+.dropdown[open] .dropdown-arrow {
+    transform: rotate(180deg);
+}
+
+.dropdown-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 140px;
+    padding: 7px 12px;
+    background: linear-gradient(180deg, #1F2638 0%, #1A1F2E 100%);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    color: #E8EAED;
+    font-size: 13px;
+    font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+    font-weight: 500;
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+    transition: all 0.15s ease;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+.dropdown-trigger::-webkit-details-marker { display: none; }
+.dropdown-trigger::marker { content: ''; }
+.dropdown-trigger:hover {
+    border-color: rgba(66, 165, 245, 0.5);
+    background: linear-gradient(180deg, #243049 0%, #1E2436 100%);
+}
+.dropdown[open] .dropdown-trigger {
+    border-color: #42A5F5;
+    box-shadow: 0 0 0 3px rgba(66, 165, 245, 0.15);
+}
+
+.dropdown-value {
+    flex: 1;
+    text-align: left;
+    color: #fff;
+}
+
+.dropdown-arrow {
+    color: #78829A;
+    transition: transform 0.2s ease;
+    flex-shrink: 0;
+}
+
+/* ----- dropdown 浮层菜单 ----- */
+.dropdown-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    min-width: 100%;
+    width: max-content;
+    max-width: 320px;
+    background: #1A1F2E;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+    padding: 6px;
+    box-shadow:
+        0 10px 25px rgba(0, 0, 0, 0.5),
+        0 4px 10px rgba(0, 0, 0, 0.3),
+        0 0 0 1px rgba(0, 0, 0, 0.1);
+    z-index: 10000;            /* 顶到最高，避免被后续 section 遮住 */
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    animation: dropdownIn 0.12s ease-out;
+}
+
+@keyframes dropdownIn {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.dropdown-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 12px;
+    color: #A4ACBE;
+    font-size: 13px;
+    font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+    text-decoration: none;
+    border-radius: 6px;
+    transition: background 0.1s ease, color 0.1s ease;
+    cursor: pointer;
+}
+.dropdown-item:hover {
+    background: rgba(66, 165, 245, 0.1);
+    color: #fff;
+}
+.dropdown-item.is-selected {
+    color: #fff;
+    background: rgba(66, 165, 245, 0.08);
+    font-weight: 500;
+}
+.dropdown-item.is-selected:hover {
+    background: rgba(66, 165, 245, 0.15);
+}
+
+/* ----- 右侧详情链接 ----- */
+.toolbar-link {
+    color: #42A5F5;
+    font-size: 12.5px;
+    font-family: 'JetBrains Mono', monospace;
+    text-decoration: none;
+    margin-left: auto;
+    padding: 6px 10px;
+    border-radius: 6px;
+    transition: background 0.15s;
+    flex-shrink: 0;
+}
+.toolbar-link:hover {
+    background: rgba(66, 165, 245, 0.12);
+    color: #64B5F6;
+}
+
+/* ----- 移动端 ----- */
+@media (max-width: 640px) {
+    .hero-toolbar {
+        padding: 10px 12px;
+        gap: 8px;
+    }
+    .dropdown-trigger { min-width: 120px; padding: 6px 10px; font-size: 12.5px; }
+    .toolbar-link { margin-left: 0; }
+}
+
 /* ------------------ 卡片 ------------------ */
 .cards {
     display: grid;
@@ -128,12 +294,12 @@ h1.page-title {
     border-radius: 14px;
     padding: 18px 18px;
     box-shadow: var(--shadow);
-    backdrop-filter: blur(6px);
-    -webkit-backdrop-filter: blur(6px);
-    transition: transform .2s, border-color .2s, box-shadow .2s;
+    /* 不要在这里使用 backdrop-filter / transform，
+       否则 .card 会创建独立 stacking context，
+       让 dropdown 浮层无法浮到上面（即使 z-index 再高也没用）。 */
+    transition: border-color .2s, box-shadow .2s;
 }
 .card:hover {
-    transform: translateY(-2px);
     border-color: rgba(66, 165, 245, 0.4);
     box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45);
 }
@@ -258,3 +424,159 @@ footer.site-footer {
     table.data thead th,
     table.data tbody td { padding: 8px 10px; }
 }
+
+/* ==================== 顶部股票搜索框 ==================== */
+.stock-search {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: 18px;
+    padding: 6px 10px 6px 8px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    transition: border-color .15s, background .15s;
+}
+.stock-search:focus-within {
+    border-color: #42A5F5;
+    background: rgba(66, 165, 245, 0.06);
+}
+.stock-search .search-icon {
+    color: #78829A;
+    display: inline-flex;
+    align-items: center;
+}
+.stock-search input {
+    background: transparent;
+    border: none;
+    outline: none;
+    color: #E8EAED;
+    font-size: 12.5px;
+    font-family: 'JetBrains Mono', monospace;
+    width: 160px;
+}
+.stock-search input::placeholder {
+    color: #78829A;
+}
+@media (max-width: 640px) {
+    .stock-search { margin-left: auto; }
+    .stock-search input { width: 110px; }
+}
+
+/* ==================== 股票池 tab ==================== */
+.universe-tabs {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 18px;
+    padding: 6px;
+    background: rgba(26, 31, 46, 0.5);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 10px;
+    width: fit-content;
+}
+.universe-tabs .tabs-label {
+    color: #78829A;
+    font-size: 11px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    margin: 0 8px 0 6px;
+    font-weight: 600;
+}
+.universe-tab {
+    padding: 5px 14px;
+    color: #A4ACBE;
+    font-size: 13px;
+    font-family: 'JetBrains Mono', monospace;
+    text-decoration: none;
+    border-radius: 6px;
+    transition: all .15s;
+}
+.universe-tab:hover {
+    color: #fff;
+    background: rgba(66, 165, 245, 0.1);
+}
+.universe-tab.is-active {
+    color: #fff;
+    background: linear-gradient(135deg, #1E88E5 0%, #00ACC1 100%);
+    box-shadow: 0 2px 6px rgba(30, 136, 229, 0.3);
+    font-weight: 600;
+}
+
+/* ==================== 单股页 ==================== */
+.page-sub-inline {
+    color: #A4ACBE;
+    font-size: 14px;
+    font-weight: 400;
+    margin-left: 10px;
+}
+
+/* tab 切换 */
+.tab-bar {
+    display: flex;
+    gap: 4px;
+    margin: 18px 0 16px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.tab-btn {
+    padding: 10px 18px;
+    color: #78829A;
+    font-size: 13px;
+    text-decoration: none;
+    border-bottom: 2px solid transparent;
+    transition: all .15s;
+    margin-bottom: -1px;
+}
+.tab-btn:hover {
+    color: #E8EAED;
+}
+.tab-btn.is-active {
+    color: #42A5F5;
+    border-bottom-color: #42A5F5;
+    font-weight: 600;
+}
+
+/* 快照元信息 */
+.snapshot-meta {
+    color: #A4ACBE;
+    font-size: 13px;
+    margin-bottom: 14px;
+}
+
+/* 分位条 */
+.percentile-bar {
+    position: relative;
+    width: 140px;
+    height: 8px;
+    background: rgba(255, 255, 255, 0.06);
+    border-radius: 4px;
+    overflow: hidden;
+    display: inline-block;
+    vertical-align: middle;
+}
+.percentile-fill {
+    height: 100%;
+    border-radius: 4px;
+}
+.percentile-label {
+    margin-left: 10px;
+    color: #E8EAED;
+    font-size: 12px;
+    font-family: 'JetBrains Mono', monospace;
+}
+
+/* 五分位 badge */
+.quintile-badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 4px;
+    font-size: 11.5px;
+    font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+    color: #fff;
+}
+.q-q1 { background: #FF5252; }
+.q-q2 { background: #FF9100; }
+.q-q3 { background: #FFB300; color: #1A1F2E; }
+.q-q4 { background: #69F0AE; color: #1A1F2E; }
+.q-q5 { background: #00C853; }

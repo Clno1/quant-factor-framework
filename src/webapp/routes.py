@@ -1,17 +1,20 @@
 """
 路由定义。
 
-页面：
-  GET /                 首页（策略概览）
-  GET /factor/{name}    因子详情页
-  GET /backtest         回测结果页（默认展示第一个因子）
-  GET /backtest/{name}  回测结果页（指定因子）
+页面（统一支持 ?universe=XXX 切换股票池）：
+  GET /                     首页（策略概览）
+  GET /factor/{name}        因子详情页
+  GET /backtest             回测结果页
+  GET /backtest/{name}      回测结果页（指定因子）
+  GET /stock/{ticker}       单股诊断页（A 诊断卡 + B 时序图）
 
 JSON API：
-  GET /api/factors               因子列表与元信息
-  GET /api/factor/{name}/ic      IC 时序 JSON
-  GET /api/factor/{name}/nav     分组净值 + Long-Short 净值
-  GET /api/factor/{name}/summary IC 汇总 + 绩效汇总
+  GET /api/universes
+  GET /api/factors
+  GET /api/factor/{name}/ic
+  GET /api/factor/{name}/nav
+  GET /api/factor/{name}/summary
+  GET /api/stock/{ticker}                  完整因子 + 快照 JSON
 """
 from __future__ import annotations
 
@@ -20,10 +23,11 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
+from src.analysis import compute_single_stock_factors
 from src.config import CONFIG
 from src.visualization import (
     fig_to_json,
@@ -32,7 +36,12 @@ from src.visualization import (
     plot_ic_series_plotly,
     plot_quintile_nav_plotly,
 )
-from src.webapp.results_store import list_factors, load_factor
+from src.webapp.results_store import (
+    DEFAULT_UNIVERSE,
+    list_factors,
+    list_universes,
+    load_factor,
+)
 
 _HERE = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(_HERE / "templates"))
@@ -43,7 +52,6 @@ router = APIRouter()
 # ----------------------------- 工具 -----------------------------
 
 def _sanitize(obj: Any) -> Any:
-    """递归将 NaN/Inf 替换为 None（JSON 兼容）。"""
     if isinstance(obj, dict):
         return {k: _sanitize(v) for k, v in obj.items()}
     if isinstance(obj, list):
@@ -54,23 +62,32 @@ def _sanitize(obj: Any) -> Any:
     return obj
 
 
-def _format_pct(x: float | None, digits: int = 2) -> str:
+def _format_pct(x, digits: int = 2) -> str:
     if x is None or (isinstance(x, float) and (math.isnan(x) or math.isinf(x))):
         return "—"
     return f"{x * 100:.{digits}f}%"
 
 
-def _format_num(x: float | None, digits: int = 4) -> str:
+def _format_num(x, digits: int = 4) -> str:
     if x is None or (isinstance(x, float) and (math.isnan(x) or math.isinf(x))):
         return "—"
     return f"{x:.{digits}f}"
 
 
-def _ic_summary_rows() -> list[dict]:
-    """组装所有因子 IC 汇总表（首页 + 因子页共用）。"""
+def _resolve_universe(requested: str | None) -> str:
+    """规范化 universe 参数：未指定则取配置默认。"""
+    if requested:
+        return requested.upper()
+    try:
+        return str(CONFIG.universes.default).upper()
+    except AttributeError:
+        return DEFAULT_UNIVERSE
+
+
+def _ic_summary_rows(universe: str) -> list[dict]:
     rows = []
-    for name in list_factors():
-        data = load_factor(name)
+    for name in list_factors(universe=universe):
+        data = load_factor(name, universe=universe)
         if not data:
             continue
         s = data["ic_summary"]
@@ -102,7 +119,6 @@ def _performance_card(metrics_df: pd.DataFrame, group: str = "LongShort") -> dic
 
 
 def _group_metrics_table(metrics_df: pd.DataFrame) -> list[dict]:
-    """格式化分组绩效表。"""
     if metrics_df.empty:
         return []
     rows = []
@@ -123,23 +139,50 @@ def _group_metrics_table(metrics_df: pd.DataFrame) -> list[dict]:
 # ----------------------------- 页面 -----------------------------
 
 @router.get("/", response_class=HTMLResponse)
-def index(request: Request):
-    factors = list_factors()
-    rows = _ic_summary_rows()
+def index(
+    request: Request,
+    factor: str | None = None,
+    universe: str | None = Query(None),
+):
+    universe = _resolve_universe(universe)
+    factors = list_factors(universe=universe)
+    rows = _ic_summary_rows(universe)
+    universes = list_universes()
     hero_fig_json = None
     hero_factor = None
     hero_metrics = {}
+
     if factors:
-        hero_factor = factors[0]
-        data = load_factor(hero_factor)
+        if factor and factor in factors:
+            hero_factor = factor
+        else:
+            best = None
+            best_abs_ir = -1.0
+            for name in factors:
+                d = load_factor(name, universe=universe)
+                if not d:
+                    continue
+                ir = d["ic_summary"].get("IC_IR")
+                if ir is None or (isinstance(ir, float) and math.isnan(ir)):
+                    continue
+                if abs(ir) > best_abs_ir:
+                    best_abs_ir = abs(ir)
+                    best = name
+            hero_factor = best or factors[0]
+
+        data = load_factor(hero_factor, universe=universe)
         if data:
-            fig = plot_quintile_nav_plotly(data["group_nav"], data["ls_nav"],
-                                           title=f"{hero_factor} · Quintile NAV")
+            fig = plot_quintile_nav_plotly(
+                data["group_nav"], data["ls_nav"],
+                title=f"[{universe}] {hero_factor} · 五分位累计净值",
+            )
             hero_fig_json = fig_to_json(fig)
             hero_metrics = _performance_card(data["group_metrics"], "LongShort")
 
     return templates.TemplateResponse(request, "index.html", {
         "title": CONFIG.webapp.title,
+        "universe": universe,
+        "universes": universes,
         "factors": factors,
         "rows": rows,
         "hero_factor": hero_factor,
@@ -149,18 +192,30 @@ def index(request: Request):
 
 
 @router.get("/factor/{name}", response_class=HTMLResponse)
-def factor_detail(request: Request, name: str):
-    data = load_factor(name)
+def factor_detail(
+    request: Request,
+    name: str,
+    universe: str | None = Query(None),
+):
+    universe = _resolve_universe(universe)
+    data = load_factor(name, universe=universe)
     if not data:
-        raise HTTPException(status_code=404, detail=f"Factor {name} not found")
+        raise HTTPException(
+            status_code=404,
+            detail=f"Factor {name} not found in universe {universe}",
+        )
 
-    ic_fig = plot_ic_series_plotly(data["ic"], title=f"{name} · IC Time Series")
-    nav_fig = plot_quintile_nav_plotly(data["group_nav"], data["ls_nav"],
-                                       title=f"{name} · Quintile NAV")
+    ic_fig = plot_ic_series_plotly(data["ic"], title=f"[{universe}] {name} · IC 时序")
+    nav_fig = plot_quintile_nav_plotly(
+        data["group_nav"], data["ls_nav"],
+        title=f"[{universe}] {name} · 五分位累计净值",
+    )
 
     return templates.TemplateResponse(request, "factor.html", {
-        "title": f"{name} · Factor Detail",
-        "factors": list_factors(),
+        "title": f"{name} · 因子详情",
+        "universe": universe,
+        "universes": list_universes(),
+        "factors": list_factors(universe=universe),
         "name": name,
         "meta": data["meta"],
         "ic_summary": {
@@ -178,33 +233,52 @@ def factor_detail(request: Request, name: str):
 
 
 @router.get("/backtest", response_class=HTMLResponse)
-def backtest_index(request: Request):
-    factors = list_factors()
+def backtest_index(request: Request, universe: str | None = Query(None)):
+    universe = _resolve_universe(universe)
+    factors = list_factors(universe=universe)
     if not factors:
         return templates.TemplateResponse(request, "backtest.html", {
-            "title": "Backtest",
+            "title": "回测",
+            "universe": universe,
+            "universes": list_universes(),
             "factors": [],
             "name": None,
         })
-    return backtest_detail(request, factors[0])
+    return backtest_detail(request, factors[0], universe=universe)
 
 
 @router.get("/backtest/{name}", response_class=HTMLResponse)
-def backtest_detail(request: Request, name: str):
-    data = load_factor(name)
+def backtest_detail(
+    request: Request,
+    name: str,
+    universe: str | None = Query(None),
+):
+    universe = _resolve_universe(universe)
+    data = load_factor(name, universe=universe)
     if not data:
-        raise HTTPException(status_code=404, detail=f"Factor {name} not found")
+        raise HTTPException(
+            status_code=404,
+            detail=f"Factor {name} not found in universe {universe}",
+        )
 
-    nav_fig = plot_quintile_nav_plotly(data["group_nav"], data["ls_nav"],
-                                       title=f"{name} · Quintile NAV")
-    bar_fig = plot_group_bar_plotly(data["group_metrics"], column="AnnReturn",
-                                    title=f"{name} · Group Annualized Return")
-    dd_fig = plot_drawdown_plotly(data["ls_returns"],
-                                  title=f"{name} · Long-Short Drawdown")
+    nav_fig = plot_quintile_nav_plotly(
+        data["group_nav"], data["ls_nav"],
+        title=f"[{universe}] {name} · 五分位累计净值",
+    )
+    bar_fig = plot_group_bar_plotly(
+        data["group_metrics"], column="AnnReturn",
+        title=f"[{universe}] {name} · 分组年化收益",
+    )
+    dd_fig = plot_drawdown_plotly(
+        data["ls_returns"],
+        title=f"[{universe}] {name} · 多空回撤",
+    )
 
     return templates.TemplateResponse(request, "backtest.html", {
-        "title": f"{name} · Backtest",
-        "factors": list_factors(),
+        "title": f"{name} · 回测详情",
+        "universe": universe,
+        "universes": list_universes(),
+        "factors": list_factors(universe=universe),
         "name": name,
         "meta": data["meta"],
         "backtest_config": data["backtest_config"],
@@ -216,26 +290,118 @@ def backtest_detail(request: Request, name: str):
     })
 
 
+# ---- 单股 ----
+
+@router.get("/stock", response_class=HTMLResponse)
+def stock_search(request: Request, ticker: str = Query(...)):
+    """支持顶部搜索框：/stock?ticker=INTC -> 跳到 /stock/INTC。"""
+    ticker = (ticker or "").strip().upper()
+    if not ticker:
+        raise HTTPException(status_code=400, detail="ticker is required")
+    return RedirectResponse(url=f"/stock/{ticker}", status_code=302)
+
+
+@router.get("/stock/{ticker}", response_class=HTMLResponse)
+def stock_detail(
+    request: Request,
+    ticker: str,
+    universe: str | None = Query(None),
+):
+    universe = _resolve_universe(universe)
+    ticker = ticker.upper().strip()
+    res = compute_single_stock_factors(ticker, reference_universe=universe)
+
+    # 时序图：每个因子一条线（双 Y 轴：左轴动量/反转/换手率值域较大，右轴波动率较小）
+    ts_fig_json = None
+    if not res.factor_ts.empty:
+        import plotly.graph_objects as go
+        from plotly.subplots import make_subplots
+        # 简单方案：所有因子归一化到 z-score 后画在同一张图上，便于对比形态
+        ts = res.factor_ts.copy()
+        # 沿时间标准化：x -> (x - mean) / std
+        ts_z = (ts - ts.mean()) / ts.std(ddof=1).replace(0, pd.NA)
+        fig = go.Figure()
+        palette = ["#42A5F5", "#FF5252", "#00C853", "#FFB300",
+                   "#AB47BC", "#26C6DA", "#FF9100", "#9CCC65"]
+        for i, col in enumerate(ts_z.columns):
+            fig.add_trace(go.Scatter(
+                x=ts_z.index, y=ts_z[col].values, mode="lines",
+                name=col,
+                line=dict(color=palette[i % len(palette)], width=1.6),
+            ))
+        fig.update_layout(
+            title=dict(text=f"{ticker} · 8 因子时序（Z-Score 标准化）",
+                       font=dict(color="#E8EAED", size=15)),
+            paper_bgcolor="#0E1117", plot_bgcolor="#1A1F2E",
+            font=dict(color="#E8EAED"),
+            margin=dict(l=40, r=40, t=60, b=40),
+            height=460,
+            hovermode="x unified",
+            legend=dict(bgcolor="rgba(0,0,0,0)", bordercolor="#262B3A", borderwidth=0.5),
+        )
+        fig.update_xaxes(gridcolor="#262B3A")
+        fig.update_yaxes(gridcolor="#262B3A", title_text="Z-Score")
+        ts_fig_json = fig_to_json(fig)
+
+    # 把 snapshot 格式化成模板友好的列表
+    snapshot_rows: list[dict] = []
+    snapshot = res.snapshot or {}
+    for fname, item in (snapshot.get("factors") or {}).items():
+        snapshot_rows.append({
+            "factor": fname,
+            "value":  _format_num(item.get("value"), 4),
+            "rank":   item.get("rank"),
+            "pool_size": item.get("pool_size"),
+            "quintile": item.get("quintile") or "—",
+            "percentile": _format_num(item.get("percentile"), 1) if item.get("percentile") is not None else "—",
+        })
+
+    return templates.TemplateResponse(request, "stock.html", {
+        "title": f"{ticker} · 单股诊断",
+        "universe": universe,
+        "universes": list_universes(),
+        "ticker": ticker,
+        "result": res,
+        "meta": res.meta,
+        "source": res.source,
+        "snapshot_date": (res.snapshot or {}).get("date") or "—",
+        "snapshot_rows": snapshot_rows,
+        "ts_fig_json": ts_fig_json,
+        "error": res.error,
+    })
+
+
 # ----------------------------- JSON API -----------------------------
 
+@router.get("/api/universes")
+def api_universes():
+    return JSONResponse({"universes": list_universes(),
+                         "default": _resolve_universe(None)})
+
+
 @router.get("/api/factors")
-def api_factors():
-    factors = list_factors()
+def api_factors(universe: str | None = Query(None)):
+    universe = _resolve_universe(universe)
+    factors = list_factors(universe=universe)
     metas = []
     for n in factors:
-        d = load_factor(n)
+        d = load_factor(n, universe=universe)
         if d:
             metas.append(d["meta"])
-    return JSONResponse(_sanitize({"count": len(factors), "factors": metas}))
+    return JSONResponse(_sanitize({
+        "universe": universe, "count": len(factors), "factors": metas,
+    }))
 
 
 @router.get("/api/factor/{name}/ic")
-def api_factor_ic(name: str):
-    d = load_factor(name)
+def api_factor_ic(name: str, universe: str | None = Query(None)):
+    universe = _resolve_universe(universe)
+    d = load_factor(name, universe=universe)
     if not d:
         raise HTTPException(status_code=404, detail="Factor not found")
     ic: pd.Series = d["ic"]
     payload = {
+        "universe": universe,
         "name": name,
         "dates": [dt.strftime("%Y-%m-%d") for dt in ic.index],
         "ic":    ic.tolist(),
@@ -246,13 +412,15 @@ def api_factor_ic(name: str):
 
 
 @router.get("/api/factor/{name}/nav")
-def api_factor_nav(name: str):
-    d = load_factor(name)
+def api_factor_nav(name: str, universe: str | None = Query(None)):
+    universe = _resolve_universe(universe)
+    d = load_factor(name, universe=universe)
     if not d:
         raise HTTPException(status_code=404, detail="Factor not found")
     group_nav: pd.DataFrame = d["group_nav"]
     ls_nav: pd.Series = d["ls_nav"]
     payload = {
+        "universe": universe,
         "name": name,
         "dates": [dt.strftime("%Y-%m-%d") for dt in group_nav.index],
         "groups": {col: group_nav[col].tolist() for col in group_nav.columns},
@@ -262,17 +430,39 @@ def api_factor_nav(name: str):
 
 
 @router.get("/api/factor/{name}/summary")
-def api_factor_summary(name: str):
-    d = load_factor(name)
+def api_factor_summary(name: str, universe: str | None = Query(None)):
+    universe = _resolve_universe(universe)
+    d = load_factor(name, universe=universe)
     if not d:
         raise HTTPException(status_code=404, detail="Factor not found")
     metrics = d["group_metrics"]
     payload = {
+        "universe": universe,
         "name": name,
         "meta": d["meta"],
         "ic_summary": d["ic_summary"],
         "backtest_config": d["backtest_config"],
         "group_metrics": {idx: row.to_dict() for idx, row in metrics.iterrows()} if not metrics.empty else {},
+    }
+    return JSONResponse(_sanitize(payload))
+
+
+@router.get("/api/stock/{ticker}")
+def api_stock(ticker: str, universe: str | None = Query(None)):
+    universe = _resolve_universe(universe)
+    res = compute_single_stock_factors(ticker, reference_universe=universe)
+    ts = res.factor_ts
+    payload = {
+        "ticker": res.ticker,
+        "source": res.source,
+        "pool_universe": res.pool_universe,
+        "meta":   res.meta,
+        "snapshot": res.snapshot,
+        "factor_ts": {
+            "dates":   [dt.strftime("%Y-%m-%d") for dt in ts.index],
+            "factors": {col: ts[col].tolist() for col in ts.columns},
+        } if not ts.empty else {},
+        "error": res.error,
     }
     return JSONResponse(_sanitize(payload))
 

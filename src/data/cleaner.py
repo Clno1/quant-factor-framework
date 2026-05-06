@@ -1,7 +1,8 @@
 """
 数据清洗与宽表构建。
 
-从单股票 OHLCV 集合构造统一宽表（索引=date，列=ticker）：
+从单股票 OHLCV 集合构造统一宽表（索引=date，列=ticker），
+按 universe 名称分别缓存到 data/processed/<UNIVERSE>/：
   - close.parquet       : 原始收盘价
   - adj_close.parquet   : 复权收盘价（因子计算用）
   - volume.parquet      : 成交量
@@ -23,23 +24,25 @@ from src.utils.logger import get_logger
 
 log = get_logger(__name__)
 
-_PROCESSED_DIR = (
+_PROCESSED_BASE = (
     Path(CONFIG.data.processed_dir)
     if Path(CONFIG.data.processed_dir).is_absolute()
     else PROJECT_ROOT / CONFIG.data.processed_dir
 )
 
-_WIDE_FILES = {
-    "close":     _PROCESSED_DIR / "close.parquet",
-    "adj_close": _PROCESSED_DIR / "adj_close.parquet",
-    "volume":    _PROCESSED_DIR / "volume.parquet",
-    "returns":   _PROCESSED_DIR / "returns.parquet",
-    "sector":    _PROCESSED_DIR / "sector.parquet",
-}
+
+def _wide_files_for(universe: str) -> dict[str, Path]:
+    base = _PROCESSED_BASE / universe
+    return {
+        "close":     base / "close.parquet",
+        "adj_close": base / "adj_close.parquet",
+        "volume":    base / "volume.parquet",
+        "returns":   base / "returns.parquet",
+        "sector":    base / "sector.parquet",
+    }
 
 
 def _pivot_one(series_map: dict[str, pd.Series]) -> pd.DataFrame:
-    """{ticker: pd.Series(index=date)} -> 宽表 DataFrame。"""
     if not series_map:
         return pd.DataFrame()
     df = pd.concat(series_map, axis=1)
@@ -50,38 +53,42 @@ def _pivot_one(series_map: dict[str, pd.Series]) -> pd.DataFrame:
 
 def build_wide_tables(
     tickers: Iterable[str] | None = None,
+    *,
+    universe: str = "SP500",
     force: bool = False,
 ) -> dict[str, pd.DataFrame]:
     """
-    构造 close/adj_close/volume/returns/sector 宽表，落盘到 data/processed/。
+    构造 close/adj_close/volume/returns/sector 宽表，落盘到
+    data/processed/<UNIVERSE>/。
     若 force=False 且缓存新鲜，直接读取。
     """
-    ensure_dir(_PROCESSED_DIR)
+    files = _wide_files_for(universe)
+    base_dir = _PROCESSED_BASE / universe
+    ensure_dir(base_dir / ".touch")  # 创建目录
     cache_days = float(CONFIG.data.cache_days)
 
-    if not force and all(is_cache_fresh(p, cache_days) for p in _WIDE_FILES.values()):
-        cached = {k: read_parquet(p) for k, p in _WIDE_FILES.items()}
-        # 非空校验：如果缓存其实是空表（历史故障留下的占位），强制重建
+    if not force and all(is_cache_fresh(p, cache_days) for p in files.values()):
+        cached = {k: read_parquet(p) for k, p in files.items()}
         adj = cached.get("adj_close", pd.DataFrame())
         if not adj.empty and adj.shape[1] > 0:
             log.info(
-                "Processed wide tables are fresh, loading from cache. shape=%s",
-                adj.shape,
+                "[%s] Processed wide tables are fresh, loading from cache. shape=%s",
+                universe, adj.shape,
             )
             return cached
-        log.warning("Cached wide tables are empty (shape=%s). Rebuilding ...", adj.shape)
+        log.warning("[%s] Cached wide tables are empty (shape=%s). Rebuilding ...",
+                    universe, adj.shape)
 
     if tickers is None:
-        tickers = get_universe()["ticker"].tolist()
+        tickers = get_universe(name=universe)["ticker"].tolist()
     tickers = list(tickers)
-    log.info("Building wide tables from %d tickers ...", len(tickers))
+    log.info("[%s] Building wide tables from %d tickers ...", universe, len(tickers))
 
     data = load_or_download(tickers)
 
     close_map: dict[str, pd.Series] = {}
     adj_map: dict[str, pd.Series] = {}
     vol_map: dict[str, pd.Series] = {}
-
     for t, df in data.items():
         if df is None or df.empty:
             continue
@@ -92,26 +99,22 @@ def build_wide_tables(
     close_df = _pivot_one(close_map)
     adj_df = _pivot_one(adj_map)
     vol_df = _pivot_one(vol_map)
-
-    # 日收益（以复权收盘价计算）
     returns_df = adj_df.pct_change()
 
-    # 行业映射（Series -> 1 列 DataFrame 写盘，便于 read_parquet 统一处理）
-    sector_series = get_sector_map()
-    # 只保留当前有价格数据的 ticker
+    sector_series = get_sector_map(name=universe)
     sector_series = sector_series.reindex(close_df.columns)
     sector_df = sector_series.rename("sector").to_frame()
 
-    # 写盘
-    write_parquet(close_df,   _WIDE_FILES["close"])
-    write_parquet(adj_df,     _WIDE_FILES["adj_close"])
-    write_parquet(vol_df,     _WIDE_FILES["volume"])
-    write_parquet(returns_df, _WIDE_FILES["returns"])
-    write_parquet(sector_df,  _WIDE_FILES["sector"])
+    write_parquet(close_df,   files["close"])
+    write_parquet(adj_df,     files["adj_close"])
+    write_parquet(vol_df,     files["volume"])
+    write_parquet(returns_df, files["returns"])
+    write_parquet(sector_df,  files["sector"])
 
     log.info(
-        "Wide tables built: shape=%s, date range=%s -> %s, tickers=%d",
-        close_df.shape, close_df.index.min(), close_df.index.max(), close_df.shape[1],
+        "[%s] Wide tables built: shape=%s, date range=%s -> %s, tickers=%d",
+        universe, close_df.shape,
+        close_df.index.min(), close_df.index.max(), close_df.shape[1],
     )
 
     return {
@@ -123,15 +126,16 @@ def build_wide_tables(
     }
 
 
-def load_wide_tables() -> dict[str, pd.DataFrame]:
+def load_wide_tables(universe: str = "SP500") -> dict[str, pd.DataFrame]:
     """仅从缓存读取（不触发网络）。若缓存不存在，抛 FileNotFoundError。"""
-    missing = [k for k, p in _WIDE_FILES.items() if not p.exists()]
+    files = _wide_files_for(universe)
+    missing = [k for k, p in files.items() if not p.exists()]
     if missing:
         raise FileNotFoundError(
-            f"Processed wide tables missing: {missing}. "
+            f"[{universe}] Processed wide tables missing: {missing}. "
             "Run build_wide_tables() first."
         )
-    return {k: read_parquet(p) for k, p in _WIDE_FILES.items()}
+    return {k: read_parquet(p) for k, p in files.items()}
 
 
 __all__ = ["build_wide_tables", "load_wide_tables"]

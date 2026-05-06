@@ -1,29 +1,42 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5">
     <meta name="theme-color" content="#0E1117">
-    <title>{{ title or "Multi-Factor Quant Research" }}</title>
+    <title>{{ title or "多因子量化研究" }}</title>
 
     <!-- Plotly.js CDN -->
     <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
 
     <!-- Custom styles -->
-    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/style.css?v={{ asset_ver }}">
 </head>
 <body>
     <nav class="navbar">
         <div class="nav-inner">
             <a href="/" class="brand">
                 <span class="brand-badge">Q</span>
-                <span>Multi-Factor Quant</span>
+                <span>多因子量化</span>
             </a>
             <div class="nav-links">
-                <a href="/"{% if request.url.path == '/' %} class="active"{% endif %}>Overview</a>
-                <a href="/backtest"{% if request.url.path.startswith('/backtest') %} class="active"{% endif %}>Backtest</a>
-                <a href="/docs">API</a>
+                <a href="/{% if universe %}?universe={{ universe }}{% endif %}"
+                   {% if request.url.path == '/' %} class="active"{% endif %}>策略概览</a>
+                <a href="/backtest{% if universe %}?universe={{ universe }}{% endif %}"
+                   {% if request.url.path.startswith('/backtest') %} class="active"{% endif %}>回测</a>
+                <a href="/docs">接口文档</a>
             </div>
+            <form action="/stock" method="get" class="stock-search">
+                <span class="search-icon">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                        <circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.6"/>
+                        <path d="M11 11l3 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                    </svg>
+                </span>
+                <input type="text" name="ticker" placeholder="搜索股票（如 INTC）"
+                       autocomplete="off" spellcheck="false"
+                       oninput="this.value=this.value.toUpperCase()">
+            </form>
         </div>
     </nav>
 
@@ -32,9 +45,9 @@
     </main>
 
     <footer class="site-footer">
-        <span>Multi-Factor Quant Research · Dark Bloomberg-style Dashboard</span>
+        <span>多因子量化研究 · 深色仪表盘</span>
     </footer>
 
-    <script src="/static/js/app.js"></script>
+    <script src="/static/js/app.js?v={{ asset_ver }}"></script>
 </body>
 </html>

@@ -7,8 +7,13 @@ from __future__ import annotations
 
 from src.factors.base import FactorBase, FACTOR_REGISTRY, register
 
-# 导入具体因子以触发注册
-from src.factors.momentum import Momentum6M  # noqa: F401
+# 导入所有因子以触发 @register 注册
+from src.factors.momentum import (  # noqa: F401
+    Momentum1M, Momentum3M, Momentum6M, Momentum12M,
+)
+from src.factors.volatility import Volatility20D, Volatility60D  # noqa: F401
+from src.factors.reversal import Reversal5D  # noqa: F401
+from src.factors.turnover import Turnover20D  # noqa: F401
 
 __all__ = ["FactorBase", "FACTOR_REGISTRY", "register", "get_factor"]
 

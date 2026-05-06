@@ -2,79 +2,79 @@
 
 {% block content %}
     {% if not name %}
-    <h1 class="page-title">Backtest</h1>
+    <h1 class="page-title">回测</h1>
     <div class="empty">
-        <p>No factor results available.</p>
-        <p>Run <code class="mono">python scripts/run_mvp.py</code> first.</p>
+        <p>暂无回测结果。</p>
+        <p>请先运行 <code class="mono">python scripts/run_mvp.py</code>。</p>
     </div>
     {% else %}
     <h1 class="page-title">
-        Backtest · {{ name }}
-        <span class="badge">n_groups = {{ backtest_config.n_groups }}</span>
-        <span class="badge">rebalance = {{ backtest_config.rebalance_days }}d</span>
+        回测 · {{ name }}
+        <span class="badge">分组数 = {{ backtest_config.n_groups }}</span>
+        <span class="badge">调仓周期 = {{ backtest_config.rebalance_days }} 日</span>
         <span class="badge {% if backtest_config.direction == 1 %}green{% else %}red{% endif %}">
-            direction = {% if backtest_config.direction == 1 %}+1{% else %}-1{% endif %}
+            方向 = {% if backtest_config.direction == 1 %}+1{% else %}-1{% endif %}
         </span>
     </h1>
     <div class="page-sub">{{ meta.description }}</div>
 
     <section class="cards">
         <div class="card">
-            <div class="label">L/S Ann. Return</div>
+            <div class="label">多空年化收益</div>
             <div class="value {% if ls_metrics.AnnReturn.startswith('-') %}neg{% else %}pos{% endif %}">{{ ls_metrics.AnnReturn }}</div>
         </div>
         <div class="card">
-            <div class="label">L/S Sharpe</div>
+            <div class="label">多空 Sharpe</div>
             <div class="value">{{ ls_metrics.Sharpe }}</div>
         </div>
         <div class="card">
-            <div class="label">L/S Max DD</div>
+            <div class="label">多空最大回撤</div>
             <div class="value neg">{{ ls_metrics.MaxDD }}</div>
         </div>
         <div class="card">
-            <div class="label">L/S Calmar</div>
+            <div class="label">多空 Calmar</div>
             <div class="value">{{ ls_metrics.Calmar }}</div>
         </div>
     </section>
 
     <section class="chart-panel">
-        <div class="panel-title"><span>Quintile Cumulative NAV</span></div>
+        <div class="panel-title"><span>五分位累计净值</span></div>
         <div class="plot" style="width:100%;height:480px;"
              data-plotly-json='{{ nav_fig_json|safe }}'></div>
     </section>
 
     <section class="chart-panel">
-        <div class="panel-title"><span>Group Annualized Return (monotonicity check)</span></div>
+        <div class="panel-title"><span>分组年化收益（单调性检查）</span></div>
         <div class="plot" style="width:100%;height:380px;"
              data-plotly-json='{{ bar_fig_json|safe }}'></div>
     </section>
 
     <section class="chart-panel">
-        <div class="panel-title"><span>Long-Short Drawdown</span></div>
+        <div class="panel-title"><span>多空回撤曲线</span></div>
         <div class="plot" style="width:100%;height:320px;"
              data-plotly-json='{{ dd_fig_json|safe }}'></div>
     </section>
 
     <section class="table-panel">
-        <div class="table-title">Group Performance</div>
+        <div class="table-title">分组绩效明细</div>
         <div class="table-wrap">
             <table class="data">
                 <thead>
                     <tr>
-                        <th>Group</th>
-                        <th>Ann Return</th>
-                        <th>Ann Vol</th>
+                        <th>分组</th>
+                        <th>年化收益</th>
+                        <th>年化波动</th>
                         <th>Sharpe</th>
-                        <th>Max DD</th>
+                        <th>最大回撤</th>
                         <th>Calmar</th>
-                        <th>Win Rate</th>
-                        <th>Avg Turnover</th>
+                        <th>胜率</th>
+                        <th>平均换手</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for r in group_rows %}
                     <tr class="{% if r.group == 'LongShort' %}highlight{% endif %}">
-                        <td><strong>{{ r.group }}</strong></td>
+                        <td><strong>{% if r.group == 'LongShort' %}多空{% else %}{{ r.group }}{% endif %}</strong></td>
                         <td class="{% if r.AnnReturn.startswith('-') %}neg{% else %}pos{% endif %}">{{ r.AnnReturn }}</td>
                         <td>{{ r.AnnVol }}</td>
                         <td>{{ r.Sharpe }}</td>

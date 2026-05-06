@@ -1,9 +1,10 @@
 """
 股票池管理。
 
-当前支持：
-  - SP500: 从 Wikipedia 抓取 S&P 500 成分股列表（附带 GICS Sector / Sub-Industry）
-  - CUSTOM: 从配置读取用户自定义列表
+支持的股票池：
+  - SP500   : S&P 500 成分股（FMP 抓取，含 GICS sector / sub_industry）
+  - MAG7    : Magnificent 7（AAPL/MSFT/GOOGL/AMZN/META/NVDA/TSLA）
+  - CUSTOM  : 从配置 universe.custom_tickers 读取自定义列表
 
 输出统一为 pandas.DataFrame，包含列：ticker, name, sector, sub_industry
 """
@@ -24,7 +25,6 @@ log = get_logger(__name__)
 
 _CACHE_DIR = PROJECT_ROOT / "data" / "raw" / "universe"
 
-# 伪装成常见桌面浏览器，避免 Wikipedia 对默认 urllib/pandas UA 返回 403
 _BROWSER_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -33,25 +33,35 @@ _BROWSER_HEADERS = {
     ),
     "Accept-Language": "en-US,en;q=0.9",
 }
-
-# 兜底数据源：datahub 维护的 S&P 500 成分股 CSV（社区常用镜像）
 _FALLBACK_CSV_URL = (
     "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/"
     "main/data/constituents.csv"
 )
+
+# 已知股票池（除了 SP500，其它都是固定列表）
+_BUILTIN_UNIVERSES: dict[str, list[tuple[str, str, str]]] = {
+    # MAG7 = Magnificent 7（华尔街 2023 年起常用术语）
+    "MAG7": [
+        ("AAPL",  "Apple Inc.",          "Technology"),
+        ("MSFT",  "Microsoft Corp.",     "Technology"),
+        ("GOOGL", "Alphabet Inc. (A)",   "Communication Services"),
+        ("AMZN",  "Amazon.com Inc.",     "Consumer Discretionary"),
+        ("META",  "Meta Platforms Inc.", "Communication Services"),
+        ("NVDA",  "NVIDIA Corp.",        "Technology"),
+        ("TSLA",  "Tesla Inc.",          "Consumer Discretionary"),
+    ],
+}
 
 
 def _sp500_cache_path() -> Path:
     return _CACHE_DIR / "sp500.parquet"
 
 
-def _fetch_sp500_from_wikipedia(url: str) -> pd.DataFrame:
-    """从 Wikipedia 抓取 S&P 500 成分股（第一张表）。
+# ============================================================
+# SP500
+# ============================================================
 
-    说明：pandas.read_html 默认 UA 会被 Wikipedia 403 拦截，
-    所以先用 requests 带浏览器 UA 拿到 HTML，再交给 pandas 解析。
-    若 Wikipedia 失败，自动降级到 datahub 的备用 CSV。
-    """
+def _fetch_sp500_from_wikipedia(url: str) -> pd.DataFrame:
     log.info("Fetching S&P 500 constituents from Wikipedia ...")
     try:
         resp = requests.get(url, headers=_BROWSER_HEADERS, timeout=30)
@@ -64,7 +74,6 @@ def _fetch_sp500_from_wikipedia(url: str) -> pd.DataFrame:
         resp.raise_for_status()
         df = pd.read_csv(io.StringIO(resp.text))
 
-    # 列名标准化（Wikipedia 偶尔会改列名）
     rename_map = {}
     for c in df.columns:
         cl = c.lower()
@@ -77,22 +86,73 @@ def _fetch_sp500_from_wikipedia(url: str) -> pd.DataFrame:
         elif "gics sub" in cl or "sub-industry" in cl or "sub industry" in cl:
             rename_map[c] = "sub_industry"
     df = df.rename(columns=rename_map)
-
     keep_cols = [c for c in ["ticker", "name", "sector", "sub_industry"] if c in df.columns]
     df = df[keep_cols].dropna(subset=["ticker"])
-
-    # yfinance 对含点号的股票（如 BRK.B）需替换为 '-'
     df["ticker"] = df["ticker"].astype(str).str.strip().str.replace(".", "-", regex=False)
     df = df.drop_duplicates(subset=["ticker"]).reset_index(drop=True)
     log.info("Fetched %d S&P 500 tickers.", len(df))
     return df
 
 
-def get_universe(force_refresh: bool = False) -> pd.DataFrame:
+def _get_sp500(force_refresh: bool = False) -> pd.DataFrame:
+    cache = _sp500_cache_path()
+    ensure_dir(cache)
+    if not force_refresh and is_cache_fresh(cache, CONFIG.universe.cache_days):
+        log.info("Loading S&P 500 universe from cache: %s", cache)
+        return pd.read_parquet(cache)
+
+    provider = str(getattr(CONFIG.data, "provider", "fmp")).lower()
+    df: pd.DataFrame | None = None
+    if provider == "fmp":
+        try:
+            from src.data.fmp import get_sp500_constituents
+            df = get_sp500_constituents()
+        except Exception as e:  # noqa: BLE001
+            log.warning("FMP universe fetch failed (%s). Falling back to Wikipedia.", e)
+    if df is None or df.empty:
+        df = _fetch_sp500_from_wikipedia(CONFIG.universe.sp500_url)
+
+    df.to_parquet(cache)
+    log.info("Saved S&P 500 universe to %s (fetched at %s)", cache, datetime.now().isoformat(timespec="seconds"))
+    return df
+
+
+# ============================================================
+# 内置静态股票池（MAG7 等）
+# ============================================================
+
+def _get_builtin(name: str) -> pd.DataFrame:
+    rows = _BUILTIN_UNIVERSES[name]
+    return pd.DataFrame({
+        "ticker":       [r[0] for r in rows],
+        "name":         [r[1] for r in rows],
+        "sector":       [r[2] for r in rows],
+        "sub_industry": [None] * len(rows),
+    })
+
+
+# ============================================================
+# 公共入口
+# ============================================================
+
+def list_universe_names() -> list[str]:
+    """框架已支持的所有股票池名（用于前端切换）。"""
+    return ["SP500"] + sorted(_BUILTIN_UNIVERSES.keys())
+
+
+def get_universe(name: str | None = None, force_refresh: bool = False) -> pd.DataFrame:
     """
-    返回当前启用的股票池 DataFrame。列：ticker, name, sector, sub_industry（后三列可能缺失）。
+    返回指定股票池 DataFrame：ticker / name / sector / sub_industry。
+
+    Parameters
+    ----------
+    name : str | None
+        股票池名（"SP500" / "MAG7" / "CUSTOM"）。
+        若 None，则从配置 CONFIG.universe.name 读取（向后兼容旧调用）。
     """
-    name = str(CONFIG.universe.name).upper()
+    if name is None:
+        name = str(CONFIG.universe.name)
+    name = name.upper()
 
     if name == "CUSTOM":
         tickers = list(CONFIG.universe.custom_tickers or [])
@@ -105,40 +165,24 @@ def get_universe(force_refresh: bool = False) -> pd.DataFrame:
             "sub_industry": [None] * len(tickers),
         })
 
-    if name != "SP500":
-        raise ValueError(f"Unsupported universe: {name}")
+    if name == "SP500":
+        return _get_sp500(force_refresh=force_refresh)
 
-    cache = _sp500_cache_path()
-    ensure_dir(cache)
+    if name in _BUILTIN_UNIVERSES:
+        return _get_builtin(name)
 
-    if not force_refresh and is_cache_fresh(cache, CONFIG.universe.cache_days):
-        log.info("Loading S&P 500 universe from cache: %s", cache)
-        return pd.read_parquet(cache)
-
-    # 优先 FMP（直接带 sector，无需爬 Wikipedia）
-    provider = str(getattr(CONFIG.data, "provider", "fmp")).lower()
-    df: pd.DataFrame | None = None
-    if provider == "fmp":
-        try:
-            from src.data.fmp import get_sp500_constituents
-            df = get_sp500_constituents()
-        except Exception as e:  # noqa: BLE001
-            log.warning("FMP universe fetch failed (%s). Falling back to Wikipedia.", e)
-
-    if df is None or df.empty:
-        df = _fetch_sp500_from_wikipedia(CONFIG.universe.sp500_url)
-
-    df.to_parquet(cache)
-    log.info("Saved S&P 500 universe to %s (fetched at %s)", cache, datetime.now().isoformat(timespec="seconds"))
-    return df
+    raise ValueError(
+        f"Unsupported universe: {name}. "
+        f"Available: {list_universe_names() + ['CUSTOM']}"
+    )
 
 
-def get_sector_map() -> pd.Series:
+def get_sector_map(name: str | None = None) -> pd.Series:
     """返回 ticker -> sector 的映射 Series。"""
-    df = get_universe()
+    df = get_universe(name=name)
     if "sector" not in df.columns:
         return pd.Series(dtype="object", name="sector")
     return df.set_index("ticker")["sector"]
 
 
-__all__ = ["get_universe", "get_sector_map"]
+__all__ = ["get_universe", "get_sector_map", "list_universe_names"]

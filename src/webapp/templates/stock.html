@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+
+{% block content %}
+    <h1 class="page-title">
+        {{ ticker }}
+        {% if meta.name %}<span class="page-sub-inline">{{ meta.name }}</span>{% endif %}
+        {% if source == "pool" %}
+            <span class="badge green">在池内 · {{ universe }}</span>
+        {% elif source == "live" %}
+            <span class="badge amber">实时拉取 · 池外</span>
+        {% else %}
+            <span class="badge red">无数据</span>
+        {% endif %}
+    </h1>
+    <div class="page-sub">
+        {% if meta.sector %}行业：<strong>{{ meta.sector }}</strong>{% endif %}
+        {% if meta.sub_industry %} · {{ meta.sub_industry }}{% endif %}
+        {% if meta.data_start %} · 数据范围：{{ meta.data_start }} → {{ meta.data_end }}（{{ meta.n_days }} 个交易日）{% endif %}
+    </div>
+
+    {% if error %}
+    <div class="empty">
+        <p style="color:var(--red);">⚠ {{ error }}</p>
+        <p>检查股票代码拼写，或者尝试别的代码（如 NVDA / AMD / INTC）。</p>
+    </div>
+    {% else %}
+
+    {# Tabs #}
+    <div class="tab-bar">
+        <a href="#snapshot" class="tab-btn is-active" data-tab="snapshot">最新快照 · 分位排名</a>
+        <a href="#timeseries" class="tab-btn" data-tab="timeseries">因子时序图</a>
+    </div>
+
+    {# ---------- Tab A: 最新快照 ---------- #}
+    <section class="tab-panel" id="tab-snapshot">
+        <div class="snapshot-meta">
+            最新交易日：<strong>{{ snapshot_date }}</strong>
+            · 参考池：<strong>{{ universe }}</strong>
+            {% if source == "pool" %}
+                · <span style="color:var(--green);">秒级响应（来自缓存）</span>
+            {% elif source == "live" %}
+                · <span style="color:#FFB300;">实时下载（FMP）</span>
+            {% endif %}
+        </div>
+
+        <div class="table-panel">
+            <div class="table-wrap">
+                <table class="data">
+                    <thead>
+                        <tr>
+                            <th>因子</th>
+                            <th>因子值</th>
+                            <th>在池中分位</th>
+                            <th>分位组</th>
+                            <th>排名</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    {% for r in snapshot_rows %}
+                        <tr>
+                            <td><strong>{{ r.factor }}</strong></td>
+                            <td class="mono">{{ r.value }}</td>
+                            <td>
+                                {% if r.percentile != "—" %}
+                                <div class="percentile-bar">
+                                    <div class="percentile-fill"
+                                         style="width: {{ r.percentile }}%;
+                                                background: linear-gradient(90deg, #FF5252, #FFD740, #00C853);"></div>
+                                    <span class="percentile-label">{{ r.percentile }}%</span>
+                                </div>
+                                {% else %}—{% endif %}
+                            </td>
+                            <td>
+                                {% if r.quintile != "—" %}
+                                <span class="quintile-badge q-{{ r.quintile|lower }}">{{ r.quintile }}</span>
+                                {% else %}—{% endif %}
+                            </td>
+                            <td class="mono">
+                                {% if r.rank %}{{ r.rank }} / {{ r.pool_size }}{% else %}—{% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="page-sub" style="margin-top:14px;">
+            <strong>解读说明</strong>：
+            分位 50% = 位于池中间；
+            <span class="quintile-badge q-q1">Q1</span> 表示因子值在池中最低 20%（排名最差），
+            <span class="quintile-badge q-q5">Q5</span> 表示最高 20%（排名最好）。
+            对动量类正向因子，高 Q5 是强势股；对换手率类负向因子，高 Q5 是不利信号。
+        </div>
+    </section>
+
+    {# ---------- Tab B: 时序图 ---------- #}
+    <section class="tab-panel" id="tab-timeseries" style="display:none;">
+        {% if ts_fig_json %}
+        <div class="chart-panel">
+            <div class="panel-title">
+                <span>{{ ticker }} · 因子时序（已对每个因子做 Z-Score 标准化便于对比）</span>
+            </div>
+            <div class="plot" style="width:100%;height:480px;"
+                 data-plotly-json='{{ ts_fig_json|safe }}'></div>
+        </div>
+        <div class="page-sub" style="margin-top:14px;">
+            <strong>读图技巧</strong>：每条线是一个因子的 Z-score 时间序列（值 = (factor - 均值)/标准差）。
+            正值代表"高于该因子历史均值"，负值反之。例如 MOM_12M 长期为正 → 这只股票持续呈现强动量。
+        </div>
+        {% else %}
+        <div class="empty"><p>暂无时序数据。</p></div>
+        {% endif %}
+    </section>
+    {% endif %}
+
+    <script>
+    // 简单 tab 切换：监听 data-tab 按钮
+    document.querySelectorAll('.tab-btn').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+            e.preventDefault();
+            const target = btn.dataset.tab;
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('is-active', b === btn));
+            document.querySelectorAll('.tab-panel').forEach(p => {
+                p.style.display = (p.id === 'tab-' + target) ? '' : 'none';
+            });
+            // 触发 Plotly 重新计算尺寸（隐藏-显示后偶尔需要）
+            if (typeof Plotly !== 'undefined') {
+                document.querySelectorAll('.tab-panel:not([style*="none"]) [data-plotly-json]')
+                    .forEach(el => Plotly.Plots.resize(el));
+            }
+        });
+    });
+    </script>
+{% endblock %}

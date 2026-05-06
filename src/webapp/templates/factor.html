@@ -4,18 +4,18 @@
     <h1 class="page-title">
         {{ name }}
         <span class="badge {% if meta.direction == 1 %}green{% elif meta.direction == -1 %}red{% else %}amber{% endif %}">
-            direction = {{ meta.direction }}
+            方向 = {{ meta.direction }}
         </span>
     </h1>
     <div class="page-sub">{{ meta.description }}</div>
 
     <section class="cards">
         <div class="card">
-            <div class="label">IC Mean</div>
+            <div class="label">IC 均值</div>
             <div class="value {% if ic_summary.IC_mean.startswith('-') %}neg{% else %}pos{% endif %}">{{ ic_summary.IC_mean }}</div>
         </div>
         <div class="card">
-            <div class="label">IC Std</div>
+            <div class="label">IC 标准差</div>
             <div class="value">{{ ic_summary.IC_std }}</div>
         </div>
         <div class="card">
@@ -23,24 +23,24 @@
             <div class="value">{{ ic_summary.IC_IR }}</div>
         </div>
         <div class="card">
-            <div class="label">t-stat</div>
+            <div class="label">t 统计量</div>
             <div class="value">{{ ic_summary.t_stat }}</div>
         </div>
     </section>
 
     <section class="table-panel">
-        <div class="table-title">IC Summary</div>
+        <div class="table-title">IC 汇总指标</div>
         <div class="table-wrap">
             <table class="data">
                 <thead>
                     <tr>
-                        <th>IC Mean</th>
-                        <th>IC Std</th>
+                        <th>IC 均值</th>
+                        <th>IC 标准差</th>
                         <th>IC_IR</th>
-                        <th>IC &gt; 0</th>
-                        <th>|IC| &gt; 0.02</th>
-                        <th>t-stat</th>
-                        <th>Days</th>
+                        <th>IC&gt;0 占比</th>
+                        <th>|IC|&gt;0.02 占比</th>
+                        <th>t 统计量</th>
+                        <th>样本天数</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -59,15 +59,15 @@
     </section>
 
     <section class="chart-panel">
-        <div class="panel-title"><span>IC Time Series</span></div>
+        <div class="panel-title"><span>IC 时序</span></div>
         <div class="plot" style="width:100%;height:450px;"
              data-plotly-json='{{ ic_fig_json|safe }}'></div>
     </section>
 
     <section class="chart-panel">
         <div class="panel-title">
-            <span>Quintile Cumulative NAV</span>
-            <a class="mono" href="/backtest/{{ name }}">Full backtest →</a>
+            <span>五分位累计净值</span>
+            <a class="mono" href="/backtest/{{ name }}">查看完整回测 →</a>
         </div>
         <div class="plot" style="width:100%;height:460px;"
              data-plotly-json='{{ nav_fig_json|safe }}'></div>

@@ -5,11 +5,18 @@
 
 # 股票池
 universe:
-  name: "SP500"                    # 可选: SP500 / NASDAQ100 / CUSTOM
-  custom_tickers: []               # 当 name=CUSTOM 时生效
-  # Wikipedia 成分股页面
+  # 旧字段（向后兼容，单一池场景）
+  name: "SP500"                    # 默认主池：用于 /stock/{ticker} 分位排名参考
+  custom_tickers: []
   sp500_url: "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-  cache_days: 7                    # 成分股列表缓存有效期（天）
+  cache_days: 7
+
+# 多股票池配置（新版本，pipeline 会循环跑每一个）
+universes:
+  enabled:
+    - SP500                        # 503 只 - 完整大盘统计
+    - MAG7                         # 7 只 - 头部科技股快速参考
+  default: "SP500"                 # Web 首页默认展示的池
 
 # 回测时间范围（近 5 年）
 date_range:
@@ -60,18 +67,17 @@ backtest:
   risk_free_rate: 0.0              # 年化无风险利率（计算 Sharpe 用）
   trading_days_per_year: 252
 
-# 当前启用因子
+# 当前启用因子（与研报 8 因子对齐）
 factors:
   enabled:
-    - MOM_6M                       # MVP 仅跑通这一个
-  # 预留扩展（未来）
-  # - MOM_1M
-  # - MOM_3M
-  # - MOM_12M
-  # - VOL_20D
-  # - VOL_60D
-  # - REVERSAL
-  # - TURNOVER
+    - MOM_1M       # 1 个月动量
+    - MOM_3M       # 3 个月动量
+    - MOM_6M       # 6 个月动量
+    - MOM_12M      # 12 个月动量
+    - VOL_20D      # 20 日波动率
+    - VOL_60D      # 60 日波动率
+    - REVERSAL     # 5 日短期反转
+    - TURNOVER     # 20 日相对换手率
 
 # 日志
 logging:
@@ -84,5 +90,5 @@ webapp:
   host: "0.0.0.0"                  # 0.0.0.0 允许手机访问
   port: 18823
   reload: false
-  title: "Multi-Factor Quant Research"
+  title: "多因子量化研究"
   output_dir: "outputs"            # 图表 / JSON 缓存目录

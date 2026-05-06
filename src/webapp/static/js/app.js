@@ -34,3 +34,30 @@
         });
     });
 })();
+
+/**
+ * <details class="dropdown"> 增强：点外面自动收起、Esc 关闭。
+ */
+(function () {
+    function init() {
+        const dropdowns = document.querySelectorAll('details.dropdown');
+        if (!dropdowns.length) return;
+
+        // 点击文档其它位置时收起所有 dropdown
+        document.addEventListener('click', function (e) {
+            dropdowns.forEach(function (d) {
+                if (d.open && !d.contains(e.target)) {
+                    d.removeAttribute('open');
+                }
+            });
+        });
+
+        // Esc 关闭
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape') {
+                dropdowns.forEach(function (d) { d.removeAttribute('open'); });
+            }
+        });
+    }
+    document.addEventListener('DOMContentLoaded', init);
+})();

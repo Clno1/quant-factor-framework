@@ -40,27 +40,27 @@ def _apply_layout(fig: go.Figure, title: str = "", height: int = 420) -> go.Figu
     return fig
 
 
-def plot_ic_series_plotly(ic: pd.Series, title: str = "IC Time Series") -> go.Figure:
+def plot_ic_series_plotly(ic: pd.Series, title: str = "IC 时序") -> go.Figure:
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     colors = [_GREEN if v >= 0 else _RED for v in ic.values]
     fig.add_trace(
-        go.Bar(x=ic.index, y=ic.values, marker_color=colors, name="Daily IC",
+        go.Bar(x=ic.index, y=ic.values, marker_color=colors, name="日度 IC",
                opacity=0.75),
         secondary_y=False,
     )
     fig.add_trace(
         go.Scatter(x=ic.index, y=ic.cumsum().values, mode="lines",
-                   line=dict(color=_AMBER, width=2.2), name="Cumulative IC"),
+                   line=dict(color=_AMBER, width=2.2), name="累计 IC"),
         secondary_y=True,
     )
     _apply_layout(fig, title=title, height=440)
-    fig.update_yaxes(title_text="Daily IC", secondary_y=False)
-    fig.update_yaxes(title_text="Cumulative IC", secondary_y=True, showgrid=False)
+    fig.update_yaxes(title_text="日度 IC", secondary_y=False)
+    fig.update_yaxes(title_text="累计 IC", secondary_y=True, showgrid=False)
     return fig
 
 
 def plot_quintile_nav_plotly(group_nav: pd.DataFrame, ls_nav: pd.Series,
-                             title: str = "Quintile Cumulative NAV") -> go.Figure:
+                             title: str = "五分位累计净值") -> go.Figure:
     fig = go.Figure()
     for i, col in enumerate(group_nav.columns):
         fig.add_trace(go.Scatter(
@@ -69,11 +69,11 @@ def plot_quintile_nav_plotly(group_nav: pd.DataFrame, ls_nav: pd.Series,
             line=dict(color=_QUINTILE_PALETTE[i % len(_QUINTILE_PALETTE)], width=1.8),
         ))
     fig.add_trace(go.Scatter(
-        x=ls_nav.index, y=ls_nav.values, mode="lines", name="Long-Short",
+        x=ls_nav.index, y=ls_nav.values, mode="lines", name="多空组合",
         line=dict(color=_BLUE, width=2.4, dash="dash"),
     ))
     _apply_layout(fig, title=title, height=480)
-    fig.update_yaxes(title_text="NAV (init=1.0)")
+    fig.update_yaxes(title_text="净值（初始 = 1.0）")
     fig.add_hline(y=1.0, line_color=_GRID, line_width=1)
     return fig
 
@@ -88,13 +88,22 @@ def plot_group_bar_plotly(metrics_df: pd.DataFrame, column: str = "AnnReturn",
         x=list(vals.index), y=vals.values, marker_color=colors,
         text=text, textposition="outside",
     ))
-    _apply_layout(fig, title=title or f"Quintile {column}", height=380)
-    fig.update_yaxes(title_text=column)
-    fig.update_xaxes(title_text="Group")
+    _COL_LABELS = {
+        "AnnReturn": "年化收益",
+        "AnnVol": "年化波动",
+        "Sharpe": "Sharpe",
+        "MaxDD": "最大回撤",
+        "Calmar": "Calmar",
+        "WinRate": "胜率",
+    }
+    y_label = _COL_LABELS.get(column, column)
+    _apply_layout(fig, title=title or f"分组 {y_label}", height=380)
+    fig.update_yaxes(title_text=y_label)
+    fig.update_xaxes(title_text="分组")
     return fig
 
 
-def plot_drawdown_plotly(daily_ret: pd.Series, title: str = "Long-Short Drawdown") -> go.Figure:
+def plot_drawdown_plotly(daily_ret: pd.Series, title: str = "多空回撤") -> go.Figure:
     r = daily_ret.dropna()
     nav = (1.0 + r).cumprod()
     peak = nav.cummax()
@@ -104,10 +113,10 @@ def plot_drawdown_plotly(daily_ret: pd.Series, title: str = "Long-Short Drawdown
         x=dd.index, y=dd.values, mode="lines", fill="tozeroy",
         line=dict(color=_RED, width=1.3),
         fillcolor="rgba(255,82,82,0.35)",
-        name="Drawdown",
+        name="回撤",
     ))
     _apply_layout(fig, title=title, height=320)
-    fig.update_yaxes(title_text="Drawdown", tickformat=".2%")
+    fig.update_yaxes(title_text="回撤", tickformat=".2%")
     return fig
 
 

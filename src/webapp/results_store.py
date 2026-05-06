@@ -2,17 +2,20 @@
 结果存储层：统一把 pipeline 计算产物持久化到 outputs/，
 Web 服务仅消费这些缓存，不做任何重计算。
 
-目录结构：
+新目录结构（v2，按股票池分区）：
   outputs/
-    factors/<name>/
-      meta.json          # 因子元信息
-      ic.parquet         # IC 时序 (date -> ic)
-      ic_summary.json    # IC 汇总指标
-      group_nav.parquet  # 分组累计净值
-      ls_nav.parquet     # Long-Short 净值
-      ls_returns.parquet # Long-Short 日收益
-      group_metrics.parquet
-      backtest_config.json
+    universes/<UNIVERSE>/
+      factors/<FACTOR_NAME>/
+        meta.json
+        ic.parquet
+        ic_summary.json
+        group_nav.parquet
+        ls_nav.parquet
+        ls_returns.parquet
+        group_metrics.parquet
+        backtest_config.json
+
+为兼容旧版（outputs/factors/...），如果新路径不存在会回退读旧路径。
 """
 from __future__ import annotations
 
@@ -30,12 +33,31 @@ _OUT_DIR = (
     else PROJECT_ROOT / CONFIG.webapp.output_dir
 )
 
+DEFAULT_UNIVERSE = "SP500"
 
-def factor_dir(name: str) -> Path:
-    p = _OUT_DIR / "factors" / name
+
+# ---------------------------------------------------------------
+# 路径解析
+# ---------------------------------------------------------------
+
+def _universe_root(universe: str) -> Path:
+    return _OUT_DIR / "universes" / universe / "factors"
+
+
+def _legacy_root() -> Path:
+    """兼容旧路径 outputs/factors/。"""
+    return _OUT_DIR / "factors"
+
+
+def factor_dir(name: str, universe: str = DEFAULT_UNIVERSE) -> Path:
+    p = _universe_root(universe) / name
     ensure_dir(p)
     return p
 
+
+# ---------------------------------------------------------------
+# 写入
+# ---------------------------------------------------------------
 
 def save_factor_artifacts(
     name: str,
@@ -48,8 +70,9 @@ def save_factor_artifacts(
     ls_returns: pd.Series,
     group_metrics: pd.DataFrame,
     backtest_config: dict,
+    universe: str = DEFAULT_UNIVERSE,
 ) -> Path:
-    d = factor_dir(name)
+    d = factor_dir(name, universe=universe)
     save_json(meta, d / "meta.json")
     write_parquet(ic.to_frame("IC"), d / "ic.parquet")
     save_json(ic_summary, d / "ic_summary.json")
@@ -61,18 +84,45 @@ def save_factor_artifacts(
     return d
 
 
-def list_factors() -> list[str]:
-    root = _OUT_DIR / "factors"
+# ---------------------------------------------------------------
+# 读取
+# ---------------------------------------------------------------
+
+def list_universes() -> list[str]:
+    """返回所有有产物的股票池名（按字母序）。"""
+    root = _OUT_DIR / "universes"
+    universes: list[str] = []
+    if root.exists():
+        for p in root.iterdir():
+            if p.is_dir() and (p / "factors").exists():
+                # 至少有一个因子目录才算有效
+                if any((p / "factors").iterdir()):
+                    universes.append(p.name)
+    # 兼容旧路径
+    if (_legacy_root()).exists() and any((_legacy_root()).iterdir()):
+        if DEFAULT_UNIVERSE not in universes:
+            universes.append(DEFAULT_UNIVERSE)
+    return sorted(universes) or [DEFAULT_UNIVERSE]
+
+
+def list_factors(universe: str = DEFAULT_UNIVERSE) -> list[str]:
+    root = _universe_root(universe)
     if not root.exists():
-        return []
-    return sorted([p.name for p in root.iterdir() if p.is_dir() and (p / "meta.json").exists()])
+        # 兼容旧路径：universe=SP500 时 fallback 到 outputs/factors/
+        if universe == DEFAULT_UNIVERSE and _legacy_root().exists():
+            root = _legacy_root()
+        else:
+            return []
+    return sorted([
+        p.name for p in root.iterdir()
+        if p.is_dir() and (p / "meta.json").exists()
+    ])
 
 
-def load_factor(name: str) -> dict[str, Any] | None:
-    d = _OUT_DIR / "factors" / name
+def _load_factor_dir(d: Path, name: str) -> dict[str, Any] | None:
     if not (d / "meta.json").exists():
         return None
-    out: dict[str, Any] = {
+    return {
         "name": name,
         "meta": load_json(d / "meta.json"),
         "ic_summary": load_json(d / "ic_summary.json"),
@@ -83,7 +133,21 @@ def load_factor(name: str) -> dict[str, Any] | None:
         "ls_returns": read_parquet(d / "ls_returns.parquet")["LongShort"] if (d / "ls_returns.parquet").exists() else pd.Series(dtype=float),
         "group_metrics": read_parquet(d / "group_metrics.parquet") if (d / "group_metrics.parquet").exists() else pd.DataFrame(),
     }
-    return out
 
 
-__all__ = ["save_factor_artifacts", "list_factors", "load_factor", "factor_dir"]
+def load_factor(name: str, universe: str = DEFAULT_UNIVERSE) -> dict[str, Any] | None:
+    d = _universe_root(universe) / name
+    out = _load_factor_dir(d, name)
+    if out is not None:
+        return out
+    # fallback to legacy
+    if universe == DEFAULT_UNIVERSE:
+        return _load_factor_dir(_legacy_root() / name, name)
+    return None
+
+
+__all__ = [
+    "DEFAULT_UNIVERSE",
+    "save_factor_artifacts", "list_factors", "load_factor",
+    "factor_dir", "list_universes",
+]
