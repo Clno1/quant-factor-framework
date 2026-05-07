@@ -67,17 +67,32 @@ def build_wide_tables(
     ensure_dir(base_dir / ".touch")  # 创建目录
     cache_days = float(CONFIG.data.cache_days)
 
+    # 解析 end 日期（支持 "today" 等动态写法）
+    from src.utils.date_utils import parse_date_str
+    end_iso = parse_date_str(CONFIG.date_range.end)
+    end_date = pd.Timestamp(end_iso).date()
+
     if not force and all(is_cache_fresh(p, cache_days) for p in files.values()):
         cached = {k: read_parquet(p) for k, p in files.items()}
         adj = cached.get("adj_close", pd.DataFrame())
         if not adj.empty and adj.shape[1] > 0:
-            log.info(
-                "[%s] Processed wide tables are fresh, loading from cache. shape=%s",
-                universe, adj.shape,
-            )
-            return cached
-        log.warning("[%s] Cached wide tables are empty (shape=%s). Rebuilding ...",
-                    universe, adj.shape)
+            last_date = pd.Timestamp(adj.index.max()).date()
+            gap = (end_date - last_date).days
+            # 容忍 3 天（周末 + 节假日 + 盘后延迟）
+            if gap > 3:
+                log.info(
+                    "[%s] Cached wide tables cover only up to %s (end=%s, gap=%d days). Rebuilding ...",
+                    universe, last_date, end_date, gap,
+                )
+            else:
+                log.info(
+                    "[%s] Processed wide tables are fresh, loading from cache. shape=%s (last=%s)",
+                    universe, adj.shape, last_date,
+                )
+                return cached
+        else:
+            log.warning("[%s] Cached wide tables are empty (shape=%s). Rebuilding ...",
+                        universe, adj.shape)
 
     if tickers is None:
         tickers = get_universe(name=universe)["ticker"].tolist()

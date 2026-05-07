@@ -56,6 +56,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--no-web", action="store_true", help="不启动 Web 服务，只跑计算")
     p.add_argument("--serve-only", action="store_true", help="跳过计算，直接启动 Web")
     p.add_argument("--force-refresh", action="store_true", help="强制刷新数据")
+    p.add_argument("--update", action="store_true",
+                   help="快捷指令：刷新到今天（等价于 --force-refresh + --no-web）")
     p.add_argument("--universe", type=int, default=None,
                    help="smoke test：仅取每个池的前 N 只股票")
     p.add_argument("--only-universe", default=None,
@@ -193,6 +195,15 @@ def run_pipeline(
     force_refresh: bool = False,
     only_universe: str | None = None,
 ) -> None:
+    from src.utils.date_utils import resolve_date_range
+    start_iso, end_iso, dynamic = resolve_date_range(
+        CONFIG.date_range.start, CONFIG.date_range.end
+    )
+    log.info(
+        "Date range: %s → %s  (start=%r  end=%r  dynamic=%s)",
+        start_iso, end_iso, CONFIG.date_range.start, CONFIG.date_range.end, dynamic,
+    )
+
     universes = _enabled_universes()
     if only_universe:
         only_universe = only_universe.upper()
@@ -216,6 +227,10 @@ def serve_web(host: str | None = None, port: int | None = None) -> None:
 
 def main() -> int:
     args = parse_args()
+    # --update 是 --force-refresh + --no-web 的快捷写法
+    if args.update:
+        args.force_refresh = True
+        args.no_web = True
     if not args.serve_only:
         run_pipeline(
             universe_limit=args.universe,

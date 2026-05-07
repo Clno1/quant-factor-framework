@@ -36,6 +36,23 @@ def _provider_name() -> str:
     return str(getattr(CONFIG.data, "provider", "fmp")).lower()
 
 
+def _cache_covers_end(path: Path, end_iso: str, tolerance_days: int = 3) -> bool:
+    """
+    检查缓存 parquet 里的数据是否覆盖到 end 日期（允许 tolerance_days 的容忍：
+    美股周末/节假日、FMP 更新延迟、今天还没收盘等情况）。
+    """
+    try:
+        df = read_parquet(path)
+        if df is None or df.empty:
+            return False
+        last_date = pd.Timestamp(df.index.max()).date()
+        end_date = pd.Timestamp(end_iso).date()
+        gap = (end_date - last_date).days
+        return gap <= tolerance_days
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def download_ohlcv(
     tickers: Iterable[str],
     start: str,
@@ -68,7 +85,10 @@ def download_ohlcv(
     to_fetch: list[str] = []
     for t in tickers:
         p = _ticker_cache_path(t)
-        if not force and is_cache_fresh(p, cache_days):
+        # 两个条件都要满足才算缓存命中：
+        #   1. 文件新鲜（没超过 cache_days 天）
+        #   2. 数据范围能覆盖到 end（否则要重拉最新的）
+        if not force and is_cache_fresh(p, cache_days) and _cache_covers_end(p, end):
             results[t] = p
         else:
             to_fetch.append(t)
@@ -114,8 +134,9 @@ def load_or_download(
     end: str | None = None,
     force: bool = False,
 ) -> dict[str, pd.DataFrame]:
-    start = start or CONFIG.date_range.start
-    end = end or CONFIG.date_range.end
+    from src.utils.date_utils import parse_date_str
+    start = parse_date_str(start or CONFIG.date_range.start)
+    end = parse_date_str(end or CONFIG.date_range.end)
     paths = download_ohlcv(tickers, start=start, end=end, force=force)
     out: dict[str, pd.DataFrame] = {}
     for t, p in paths.items():

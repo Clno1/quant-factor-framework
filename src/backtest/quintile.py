@@ -57,8 +57,9 @@ def _assign_groups_on_rebalance(
     assign = pd.DataFrame(np.nan, index=dates, columns=factor_df.columns)
     for dt in rebal_dates:
         row = factor_df.loc[dt].dropna()
-        if len(row) < n_groups * 3:
-            continue  # 样本不足
+        # 要求每组至少 1 只；小样本（如 MAG7 共 7 只分 3 组）也能工作
+        if len(row) < n_groups:
+            continue
         try:
             labels = pd.qcut(row.rank(method="first"),
                              q=n_groups,

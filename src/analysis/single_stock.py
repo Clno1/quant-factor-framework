@@ -33,8 +33,9 @@ log = get_logger(__name__)
 
 def _build_single_stock_wide(ticker: str) -> dict[str, pd.DataFrame] | None:
     """实时拉一只股票的 OHLCV，构造能喂给因子的 wide 字典。"""
-    start = CONFIG.date_range.start
-    end = CONFIG.date_range.end
+    from src.utils.date_utils import parse_date_str
+    start = parse_date_str(CONFIG.date_range.start)
+    end = parse_date_str(CONFIG.date_range.end)
     df = get_historical_ohlcv(ticker, start, end, dividend_adjusted=True)
     if df is None or df.empty:
         return None
