@@ -7,6 +7,15 @@ from src.backtest.metrics import (
     max_drawdown,
 )
 from src.backtest.quintile import QuintileResult, quintile_backtest
+from src.backtest.composer import (
+    CompositionResult,
+    FactorDataMissingError,
+    compose_factor,
+)
+from src.backtest.adhoc import (
+    AdhocResult,
+    adhoc_compose,
+)
 
 __all__ = [
     "QuintileResult",
@@ -16,4 +25,9 @@ __all__ = [
     "annualized_volatility",
     "sharpe_ratio",
     "max_drawdown",
+    "CompositionResult",
+    "FactorDataMissingError",
+    "compose_factor",
+    "AdhocResult",
+    "adhoc_compose",
 ]

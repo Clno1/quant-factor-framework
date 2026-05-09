@@ -46,7 +46,11 @@ from src.visualization.plots_mpl import (  # noqa: E402
     plot_quintile_nav_mpl,
     save_fig,
 )
-from src.webapp.results_store import factor_dir, save_factor_artifacts  # noqa: E402
+from src.webapp.results_store import (  # noqa: E402
+    factor_dir,
+    save_factor_artifacts,
+    save_factor_values,
+)
 
 log = get_logger("run_mvp")
 
@@ -139,6 +143,10 @@ def run_pipeline_for_universe(
 
         clean = preprocess_factor(raw, sector_map=wide.get("sector"))
         log.info("Preprocessed shape=%s", clean.shape)
+
+        # 落盘因子原始值矩阵（用于策略合成 composer 读取）
+        save_factor_values(fname, clean, universe=universe)
+        log.info("[%s] factor_values.parquet saved for %s", universe, fname)
 
         ic = compute_ic(clean, returns, min_stocks=min_stocks)
         summary = ic_summary(ic)

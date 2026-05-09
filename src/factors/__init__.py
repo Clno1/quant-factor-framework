@@ -15,7 +15,11 @@ from src.factors.volatility import Volatility20D, Volatility60D  # noqa: F401
 from src.factors.reversal import Reversal5D  # noqa: F401
 from src.factors.turnover import Turnover20D  # noqa: F401
 
-__all__ = ["FactorBase", "FACTOR_REGISTRY", "register", "get_factor"]
+__all__ = [
+    "FactorBase", "FACTOR_REGISTRY", "register", "get_factor",
+    "get_factor_catalog", "list_factor_ids", "get_factor_entry",
+    "assert_valid_factor_ids", "FactorEntry", "FactorLibraryError",
+]
 
 
 def get_factor(name: str) -> FactorBase:
@@ -25,3 +29,14 @@ def get_factor(name: str) -> FactorBase:
         raise KeyError(f"Unknown factor: {name}. Available: [{available}]")
     cls = FACTOR_REGISTRY[name]
     return cls()
+
+
+# 因子库统一视图（YAML + 代码合并）
+from src.factors.library import (  # noqa: E402, F401
+    FactorEntry,
+    FactorLibraryError,
+    assert_valid_factor_ids,
+    get_factor_catalog,
+    get_factor_entry,
+    list_factor_ids,
+)

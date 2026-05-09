@@ -111,6 +111,80 @@ python scripts/run_mvp.py --serve-only
 
 ---
 
+## 因子库 / 策略库 / 回测（v2）
+
+系统三层解耦：**因子（计算定义）→ 策略（因子加权配方）→ 回测（策略 × 股票池 × 日期 → 异步执行）**。
+
+### Web 入口
+
+| 路径 | 说明 |
+|---|---|
+| `/factors` | 因子库（只读，按分类卡片展示）|
+| `/strategies` / `/strategies/new` / `/strategies/{id}` | 策略库 CRUD |
+| `/watchlists` / `/watchlists/new` / `/watchlists/{id}` | 自定义股票组（Watchlist）CRUD |
+| `/backtests` / `/backtests/new` / `/backtests/{id}` | 回测任务 CRUD + 异步执行 |
+
+### 因子库元信息
+
+`configs/factor_library.yaml` 记录每个因子的中文展示名、分类、公式、描述与风险提示，与 `src/factors/` 中代码注册的 `FACTOR_REGISTRY` 通过 `id` 关联。启动时做一致性校验。
+
+### 策略 = 因子配方（不绑定股票池）
+
+```
+outputs/strategies/<UUID>/definition.json
+```
+
+通过 Web 表单创建，可选若干因子并赋予权重（允许任意数字、负值、自动归一化）。
+
+### 回测异步执行
+
+```
+outputs/backtests/<UUID>/
+  ├─ task.json        # 状态 pending/running/success/failed + strategy_snapshot 冻结
+  ├─ returns.parquet  # Top 组日收益
+  ├─ nav.parquet      # 净值曲线
+  ├─ metrics.json     # AnnReturn / Sharpe / MaxDD / Calmar / WinRate
+  ├─ holdings.parquet # 每个调仓日的 Top 组持仓
+  └─ log.txt          # 任务执行日志
+```
+
+**合成算法**：`Σ wᵢ · Zscore(因子ᵢ)` → 五分位回测 → 取 Top 组（Q_n）作为策略持仓与收益。
+
+**异步**：`ThreadPoolExecutor(max_workers=2)`，前端 1 秒轮询 `/api/backtests/{id}/status`。服务重启时遗留 running 任务会被 startup_recovery 标记为 failed。
+
+### Watchlist（自定义股票组）
+
+- 存储：`outputs/watchlists/<UUID>/definition.json` + `_index.json`
+- 每行一个 `{ticker, weight, name}`——回测时**只用 ticker 集合**（忽略权重），留着权重给未来模拟盘按权重下单
+- **两种添加方式**：
+  - 上传 `.csv` / `.txt`（每行一个 ticker，或 `ticker,weight` 两列）
+  - 搜索下拉（调 FMP `/search-symbol` + `/search-name`）
+  - 所有 ticker 会先经过 `/api/ticker_verify` 校验存在性
+- 支持编辑（改名 / 增减 ticker / 改权重）。**编辑对历史回测无影响**——回测任务创建时冻结快照（`watchlist_snapshot`）。
+
+### 回测两种股票池路径
+
+| universe 值 | 合成方式 | 速度 | 能否支持任意 ticker |
+|---|---|---|---|
+| `SP500` / `MAG7` | 读预算好的 `factor_values.parquet` | ms 级 | 否（必须先跑 pipeline）|
+| `watchlist:<uuid>` | `src/backtest/adhoc.py` 即时拉价格 + 现算因子 | 秒级 | 是 |
+
+### 重要：升级到 v2 需重跑 pipeline
+
+回测合成依赖每个因子的 `factor_values.parquet`（每日因子值矩阵），这是 v2 才落盘的产物。**请用以下命令重建一次**：
+
+```bash
+# 全量重建（SP500 + MAG7）
+python scripts/run_mvp.py --update
+
+# 仅 MAG7（快速验证）
+python scripts/run_mvp.py --update --only-universe MAG7
+```
+
+> Watchlist 不需要预跑 pipeline——回测任务运行时自动按需下载 + 现算（按 ticker 缓存在 `data/cache/`）。
+
+---
+
 ## 扩展新因子
 
 在 `src/factors/` 新建一个文件，继承 `FactorBase`：

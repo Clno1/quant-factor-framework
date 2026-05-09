@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1 class="page-title">
+    {{ task.name or task.id[:8] }}
+    <span class="badge">{{ task.universe }}</span>
+    <span id="status-badge" class="status-pill status-{{ task.status }}">
+        {% if task.status == 'pending' %}待执行
+        {% elif task.status == 'running' %}运行中
+        {% elif task.status == 'success' %}成功
+        {% elif task.status == 'failed' %}失败
+        {% else %}{{ task.status }}{% endif %}
+    </span>
+</h1>
+<div class="page-sub">
+    策略：<strong>{{ task.strategy_snapshot.name }}</strong>
+    · 日期：<span class="mono">{{ task.date_range.resolved_start }} → {{ task.date_range.resolved_end }}</span>
+    · 分组：{{ task.n_groups }}（Top = Q{{ task.top_group }}）
+    · 调仓：{{ task.rebalance_days }} 日
+</div>
+
+{% if is_running %}
+<section id="running-panel" class="chart-panel" style="text-align:center; padding: 40px 20px;">
+    <div class="spinner"></div>
+    <div style="margin-top: 16px; color: var(--text-1); font-size: 15px;">
+        回测运行中...
+    </div>
+    <div id="running-elapsed" class="mono" style="color: var(--text-2); margin-top: 8px;">
+        耗时：0 秒
+    </div>
+    <div style="color: var(--text-2); margin-top: 12px; font-size: 12px;">
+        页面会自动刷新，请勿关闭。
+    </div>
+</section>
+{% endif %}
+
+<div id="result-panels" style="{% if is_running %}display:none;{% endif %}">
+
+{% if task.status == 'failed' %}
+<section class="chart-panel" style="border-left: 3px solid var(--red);">
+    <div class="panel-title"><span style="color: var(--red);">任务失败</span></div>
+    <pre class="error-pre">{{ task.error }}</pre>
+</section>
+{% endif %}
+
+{% if task.status == 'success' %}
+<section class="cards">
+    <div class="card">
+        <div class="label">年化收益</div>
+        <div class="value {% if metrics_fmt.AnnReturn.startswith('-') %}neg{% else %}pos{% endif %}">
+            {{ metrics_fmt.AnnReturn }}
+        </div>
+    </div>
+    <div class="card">
+        <div class="label">Sharpe</div>
+        <div class="value">{{ metrics_fmt.Sharpe }}</div>
+    </div>
+    <div class="card">
+        <div class="label">最大回撤</div>
+        <div class="value neg">{{ metrics_fmt.MaxDD }}</div>
+    </div>
+    <div class="card">
+        <div class="label">Calmar</div>
+        <div class="value">{{ metrics_fmt.Calmar }}</div>
+    </div>
+    <div class="card">
+        <div class="label">年化波动</div>
+        <div class="value">{{ metrics_fmt.AnnVol }}</div>
+    </div>
+    <div class="card">
+        <div class="label">胜率</div>
+        <div class="value">{{ metrics_fmt.WinRate }}</div>
+    </div>
+</section>
+
+{% if nav_fig_json %}
+<section class="chart-panel">
+    <div class="panel-title"><span>策略净值曲线（Top 组）</span></div>
+    <div class="plot" style="width:100%; height:440px;"
+         data-plotly-json='{{ nav_fig_json|safe }}'></div>
+</section>
+{% endif %}
+
+{% if task.diagnostics and task.diagnostics.latest_holding_tickers %}
+<section class="chart-panel">
+    <div class="panel-title">
+        <span>最新 Top 组持仓</span>
+        <span class="mono" style="color: var(--text-2); font-size: 12px;">
+            {{ task.diagnostics.latest_holding_date }}
+        </span>
+    </div>
+    <div class="holdings-grid">
+        {% for t in task.diagnostics.latest_holding_tickers %}
+        <a class="holding-chip mono" href="/stock/{{ t }}?universe={{ task.universe }}">{{ t }}</a>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+
+{% endif %}
+
+<section class="chart-panel">
+    <div class="panel-title"><span>成分因子（策略快照）</span></div>
+    <table class="data compact">
+        <thead>
+            <tr>
+                <th>因子 ID</th>
+                <th>中文名</th>
+                <th>分类</th>
+                <th style="text-align:right;">权重</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for c in components_rows %}
+            <tr>
+                <td class="mono">{{ c.factor_id }}</td>
+                <td>{{ c.display_name }}</td>
+                <td><span class="factor-cat-badge">{{ c.category }}</span></td>
+                <td class="mono" style="text-align:right;">{{ "%.4f"|format(c.weight) }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+
+{% if task.status == 'success' and task.diagnostics %}
+<section class="chart-panel">
+    <div class="panel-title"><span>执行诊断</span></div>
+    <div class="diag-grid">
+        <div><span>合成矩阵</span><span class="mono">{{ task.diagnostics.composite_shape[0] }} 日 × {{ task.diagnostics.composite_shape[1] }} 只</span></div>
+        <div><span>合成起止</span><span class="mono">{{ task.diagnostics.composite_date_start }} → {{ task.diagnostics.composite_date_end }}</span></div>
+        <div><span>有效分组</span><span class="mono">Q1..Q{{ task.diagnostics.effective_n_groups }}（Top=Q{{ task.diagnostics.effective_top_group }}）</span></div>
+        <div><span>交易日数</span><span class="mono">{{ task.diagnostics.n_trading_days }}</span></div>
+        <div><span>总耗时</span><span class="mono">{{ task.duration_sec }} 秒</span></div>
+    </div>
+</section>
+{% endif %}
+
+</div>
+
+{% if is_running %}
+<script>
+window.__TASK_ID__ = "{{ task.id }}";
+</script>
+<script src="/static/js/backtest_detail.js?v={{ asset_ver }}"></script>
+{% endif %}
+{% endblock %}

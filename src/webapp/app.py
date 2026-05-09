@@ -39,8 +39,20 @@ def create_app() -> FastAPI:
 
     # 注册路由 + 注入模板全局变量
     from src.webapp.routes import router, templates
+    from src.webapp.routes_v2 import router_v2, templates as templates_v2
     templates.env.globals["asset_ver"] = ASSET_VER
+    templates_v2.env.globals["asset_ver"] = ASSET_VER
     app.include_router(router)
+    app.include_router(router_v2)
+
+    # 启动恢复：把上次进程残留的 running 任务标为 failed
+    try:
+        from src.backtest.store import startup_recovery
+        fixed = startup_recovery()
+        if fixed:
+            log.warning("startup_recovery: %d stale backtest tasks marked as failed.", fixed)
+    except Exception as e:  # noqa: BLE001
+        log.error("startup_recovery failed: %s", e)
 
     log.info("FastAPI app created. Title=%s asset_ver=%s", CONFIG.webapp.title, ASSET_VER)
     return app

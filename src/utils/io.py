@@ -4,6 +4,8 @@ Parquet / JSON IO 工具，带目录自动创建与缓存有效期校验。
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Union
@@ -51,6 +53,32 @@ def save_json(obj: Any, path: PathLike, indent: int = 2) -> Path:
     return p
 
 
+def atomic_save_json(obj: Any, path: PathLike, indent: int = 2) -> Path:
+    """
+    原子写入 JSON：先写临时文件再 rename，避免读端读到半成品。
+
+    场景：回测任务状态 task.json 可能被 runner 线程写、HTTP 轮询线程同时读。
+    Windows 下 os.replace 是原子的；POSIX 下也是 rename 语义。
+    """
+    p = Path(path)
+    ensure_dir(p)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=".tmp_", suffix=".json", dir=str(p.parent)
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(obj, f, ensure_ascii=False, indent=indent, default=str)
+        os.replace(tmp_name, p)
+    except Exception:
+        # 失败时清理临时文件
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+    return p
+
+
 def load_json(path: PathLike) -> Any:
     with Path(path).open("r", encoding="utf-8") as f:
         return json.load(f)
@@ -62,5 +90,6 @@ __all__ = [
     "write_parquet",
     "read_parquet",
     "save_json",
+    "atomic_save_json",
     "load_json",
 ]

@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1 class="page-title">
+    因子库
+    <span class="badge">共 {{ total }} 个因子</span>
+</h1>
+<div class="page-sub">
+    纯定义视图。历史表现请到 <a href="/backtests">回测</a> 创建任务查看。
+</div>
+
+{% for cat_name, cat_factors in categories.items() %}
+<section class="chart-panel" style="padding: 20px 24px;">
+    <div class="panel-title" style="margin-bottom: 12px;">
+        <span>{{ cat_name }} · {{ cat_factors|length }} 个因子</span>
+    </div>
+
+    <div class="factor-grid">
+        {% for f in cat_factors %}
+        <div class="factor-card">
+            <div class="factor-card-head">
+                <span class="factor-id mono">{{ f.id }}</span>
+                <span class="factor-dir
+                    {% if f.direction > 0 %}pos{% elif f.direction < 0 %}neg{% else %}neu{% endif %}">
+                    {% if f.direction > 0 %}+ 方向
+                    {% elif f.direction < 0 %}− 方向
+                    {% else %}方向自适应{% endif %}
+                </span>
+            </div>
+            <div class="factor-name">{{ f.display_name }}</div>
+            {% if f.formula %}
+            <div class="factor-formula mono">{{ f.formula }}</div>
+            {% endif %}
+            <div class="factor-desc">{{ f.description }}</div>
+            {% if f.risk_note %}
+            <div class="factor-risk">⚠ {{ f.risk_note }}</div>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endfor %}
+
+<section class="chart-panel" style="padding: 16px 20px;">
+    <div class="panel-title"><span>如何使用</span></div>
+    <ol style="color: var(--text-2); line-height: 2; padding-left: 22px;">
+        <li>在 <a href="/strategies/new">新建策略</a> 页面选择若干因子并设定权重，得到一个可回测的"配方"</li>
+        <li>到 <a href="/backtests/new">新建回测</a> 页面：选策略 + 选股票池 + 选日期范围 → 异步执行</li>
+        <li>回测结束后可在详情页查看净值曲线、核心指标、Top 组持仓清单</li>
+    </ol>
+</section>
+{% endblock %}

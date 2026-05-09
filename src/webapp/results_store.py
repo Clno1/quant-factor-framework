@@ -84,6 +84,38 @@ def save_factor_artifacts(
     return d
 
 
+def save_factor_values(
+    name: str,
+    values: pd.DataFrame,
+    *,
+    universe: str = DEFAULT_UNIVERSE,
+) -> Path:
+    """
+    单独落盘因子原始值矩阵 date×ticker。策略回测（composer）会按 universe 读取这份数据。
+
+    注意：
+      - 这里落的是"预处理前"的 raw 因子值还是"预处理后"的 clean 值，由调用方决定。
+        当前 pipeline 调用时传入 `clean`（MAD 去极值 + 横截面 Z-score 后），
+        策略合成会再做一次 Z-score 加权，逻辑幂等。
+    """
+    d = factor_dir(name, universe=universe)
+    path = d / "factor_values.parquet"
+    write_parquet(values, path)
+    return path
+
+
+def load_factor_values(
+    name: str, universe: str = DEFAULT_UNIVERSE,
+) -> pd.DataFrame | None:
+    """读取因子值矩阵。文件不存在返回 None，由调用方决定报错方式。"""
+    d = _universe_root(universe) / name
+    p = d / "factor_values.parquet"
+    if p.exists():
+        return read_parquet(p)
+    # 老产物路径无此文件，直接返回 None（提示用户重跑 pipeline）
+    return None
+
+
 # ---------------------------------------------------------------
 # 读取
 # ---------------------------------------------------------------
@@ -150,4 +182,5 @@ __all__ = [
     "DEFAULT_UNIVERSE",
     "save_factor_artifacts", "list_factors", "load_factor",
     "factor_dir", "list_universes",
+    "save_factor_values", "load_factor_values",
 ]

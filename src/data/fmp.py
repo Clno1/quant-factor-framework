@@ -83,12 +83,31 @@ def _get(path: str, params: dict[str, Any] | None = None) -> Any:
                 log.warning("FMP rate limited (429). Sleeping %.0fs ...", wait)
                 time.sleep(wait)
                 continue
+            # 4xx（除 429）不重试：通常是 ticker 不存在 / 参数错误
+            if 400 <= r.status_code < 500 and r.status_code != 429:
+                raise requests.HTTPError(
+                    f"{r.status_code} {r.reason} for {path}",
+                    response=r,
+                )
             r.raise_for_status()
             data = r.json()
             # FMP 偶发返回 {"Error Message": "..."} 而不是 list/dict
             if isinstance(data, dict) and "Error Message" in data:
                 raise RuntimeError(f"FMP error: {data['Error Message']}")
             return data
+        except requests.HTTPError as e:
+            # 4xx 直接透传，不重试
+            if e.response is not None and 400 <= e.response.status_code < 500 \
+                    and e.response.status_code != 429:
+                raise
+            last_exc = e
+            if attempt < retry:
+                wait = 1.5 * (2 ** attempt)
+                log.warning(
+                    "FMP %s attempt %d/%d failed: %s. Sleep %.1fs ...",
+                    path, attempt + 1, retry + 1, e, wait,
+                )
+                time.sleep(wait)
         except Exception as e:  # noqa: BLE001
             last_exc = e
             if attempt < retry:
@@ -244,9 +263,116 @@ def batch_historical_ohlcv(
     return out
 
 
+# ============================================================
+# Ticker 搜索与校验（给 Watchlist 前端用）
+# ============================================================
+
+def search_symbol(query: str, limit: int = 20) -> list[dict[str, str]]:
+    """
+    模糊搜索 ticker / 公司名。
+
+    FMP stable 端点把搜索拆成了两个：
+      - /search-symbol?query=xxx → 按 ticker（前缀）搜
+      - /search-name?query=xxx   → 按公司名搜
+
+    这里同时调两个，合并去重，让用户输入 "apple" / "AAPL" 都能出结果。
+    只保留美股主板交易所，避免海外 / OTC 噪声。
+
+    返回：[{ticker, name, exchange, currency}, ...]
+    """
+    q = (query or "").strip()
+    if not q:
+        return []
+
+    results: list[dict] = []
+    for path in ("/search-symbol", "/search-name"):
+        try:
+            data = _get(path, {"query": q, "limit": int(limit)})
+            if isinstance(data, list):
+                results.extend(d for d in data if isinstance(d, dict))
+        except Exception as e:
+            log.warning("FMP %s failed for query=%r: %s", path, q, e)
+
+    seen: set[str] = set()
+    out: list[dict[str, str]] = []
+    allow_exch = {"NASDAQ", "NYSE", "AMEX", "NYSEARCA", "BATS"}
+    for item in results:
+        sym = str(item.get("symbol") or "").strip().upper()
+        if not sym or sym in seen:
+            continue
+        exch = str(
+            item.get("exchangeShortName") or item.get("exchange") or ""
+        ).strip()
+        if exch and exch not in allow_exch:
+            continue
+        seen.add(sym)
+        out.append({
+            "ticker": sym,
+            "name": str(item.get("name") or "").strip(),
+            "exchange": exch,
+            "currency": str(item.get("currency") or "USD").strip(),
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
+def verify_ticker(ticker: str) -> dict[str, str] | None:
+    """
+    校验 ticker 是否存在并返回基础信息（公司名等）。
+
+    - 使用 FMP stable /profile?symbol=xxx
+    - 若 profile 查不到，回退 /quote?symbol=xxx
+    - 存在返回 {ticker, name, exchange, currency}
+    - 不存在返回 None
+    """
+    t = (ticker or "").strip().upper().replace(".", "-")
+    if not t:
+        return None
+
+    row: dict | None = None
+    try:
+        data = _get("/profile", {"symbol": t})
+        if isinstance(data, list) and data:
+            row = data[0]
+        elif isinstance(data, dict) and data:
+            row = data
+    except requests.HTTPError:
+        # 4xx：通常就是 ticker 不存在，静默尝试 quote 兜底
+        pass
+    except Exception as e:
+        log.warning("verify_ticker(%s) /profile failed: %s", t, e)
+
+    if not row:
+        try:
+            data = _get("/quote", {"symbol": t})
+            if isinstance(data, list) and data:
+                row = data[0]
+            elif isinstance(data, dict) and data:
+                row = data
+        except Exception:
+            return None
+
+    if not isinstance(row, dict):
+        return None
+    sym = str(row.get("symbol") or "").strip().upper()
+    if not sym:
+        return None
+    return {
+        "ticker": sym,
+        "name": str(row.get("companyName") or row.get("name") or "").strip(),
+        "exchange": str(
+            row.get("exchangeShortName") or row.get("exchange") or ""
+        ).strip(),
+        "currency": str(row.get("currency") or "USD").strip(),
+    }
+
+
 __all__ = [
     "get_api_key",
     "get_sp500_constituents",
     "get_historical_ohlcv",
     "batch_historical_ohlcv",
+    "search_symbol",
+    "verify_ticker",
 ]

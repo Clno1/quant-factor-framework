@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1 class="page-title">新建策略</h1>
+<div class="page-sub">
+    勾选因子 → 设置权重 → 提交。权重允许任意数字（含负值），后端会按 |w|/Σ|w| 归一化。
+</div>
+
+<div class="strategy-new-layout">
+
+    <!-- 左栏：因子多选 -->
+    <section class="chart-panel strategy-factor-pane">
+        <div class="panel-title">
+            <span>选择因子</span>
+            <span class="mono" style="color: var(--text-2); font-size: 12px;">
+                已选 <span id="selected-count">0</span>
+            </span>
+        </div>
+
+        <div class="factor-list">
+            {% for f in factors %}
+            <label class="factor-row" data-fid="{{ f.id }}">
+                <input type="checkbox" class="factor-check" value="{{ f.id }}"
+                       data-name="{{ f.display_name }}"
+                       data-category="{{ f.category }}">
+                <div class="factor-row-main">
+                    <div class="factor-row-line1">
+                        <span class="factor-id mono">{{ f.id }}</span>
+                        <span class="factor-row-name">{{ f.display_name }}</span>
+                        <span class="factor-cat-badge">{{ f.category }}</span>
+                    </div>
+                    <div class="factor-row-line2">{{ f.description }}</div>
+                </div>
+            </label>
+            {% endfor %}
+        </div>
+    </section>
+
+    <!-- 右栏：已选 + 权重 + 元信息 -->
+    <section class="chart-panel strategy-form-pane">
+        <div class="panel-title"><span>策略信息</span></div>
+
+        <div class="form-field">
+            <label class="form-label">策略名称 <span class="req">*</span></label>
+            <input id="strategy-name" class="form-input" type="text" maxlength="100"
+                   placeholder="例如：动量混合策略">
+        </div>
+        <div class="form-field">
+            <label class="form-label">描述</label>
+            <textarea id="strategy-desc" class="form-input" rows="2" maxlength="500"
+                      placeholder="一句话描述这个策略的用途"></textarea>
+        </div>
+
+        <div class="weights-header">
+            <span class="weights-title">权重配置</span>
+            <div class="weights-actions">
+                <button class="btn small" onclick="equalWeights()">一键等权</button>
+                <button class="btn small" onclick="normalizeWeights()">归一化</button>
+            </div>
+        </div>
+
+        <div id="weights-table" class="weights-table">
+            <div class="weights-empty">请在左侧勾选至少 1 个因子</div>
+        </div>
+
+        <div class="weights-sum-row">
+            <span>当前权重和：</span>
+            <span id="weight-sum" class="mono">0</span>
+            <span style="color: var(--text-2); margin-left: 8px;">
+                （提交前会自动 |w|/Σ|w| 归一化）
+            </span>
+        </div>
+
+        <div class="form-actions">
+            <a class="btn" href="/strategies">取消</a>
+            <button class="btn primary" id="submit-btn" onclick="submitStrategy()">提交创建</button>
+        </div>
+        <div id="submit-msg" class="submit-msg"></div>
+    </section>
+
+</div>
+
+<script src="/static/js/strategy_form.js?v={{ asset_ver }}"></script>
+{% endblock %}

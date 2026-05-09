@@ -20,23 +20,17 @@
                 <span>多因子量化</span>
             </a>
             <div class="nav-links">
+                <a href="/factors"
+                   {% if request.url.path.startswith('/factors') %} class="active"{% endif %}>因子库</a>
+                <a href="/strategies"
+                   {% if request.url.path.startswith('/strategies') %} class="active"{% endif %}>策略库</a>
+                <a href="/watchlists"
+                   {% if request.url.path.startswith('/watchlists') %} class="active"{% endif %}>Watchlist</a>
+                <a href="/backtests"
+                   {% if request.url.path.startswith('/backtests') %} class="active"{% endif %}>回测</a>
                 <a href="/{% if universe %}?universe={{ universe }}{% endif %}"
-                   {% if request.url.path == '/' %} class="active"{% endif %}>策略概览</a>
-                <a href="/backtest{% if universe %}?universe={{ universe }}{% endif %}"
-                   {% if request.url.path.startswith('/backtest') %} class="active"{% endif %}>回测</a>
-                <a href="/docs">接口文档</a>
+                   {% if request.url.path == '/' or request.url.path.startswith('/factor/') or request.url.path.startswith('/backtest/') or request.url.path == '/backtest' %} class="active"{% endif %}>因子回测概览</a>
             </div>
-            <form action="/stock" method="get" class="stock-search">
-                <span class="search-icon">
-                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                        <circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.6"/>
-                        <path d="M11 11l3 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
-                    </svg>
-                </span>
-                <input type="text" name="ticker" placeholder="搜索股票（如 INTC）"
-                       autocomplete="off" spellcheck="false"
-                       oninput="this.value=this.value.toUpperCase()">
-            </form>
         </div>
     </nav>
 

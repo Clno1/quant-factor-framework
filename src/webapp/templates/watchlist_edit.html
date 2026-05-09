@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1 class="page-title">
+    {% if mode == 'new' %}新建股票组{% else %}编辑股票组{% endif %}
+</h1>
+<div class="page-sub">
+    两种添加方式：上传 CSV/TXT 文件，或搜索单只股票逐个添加。权重可选，后续可随时编辑。
+</div>
+
+<div class="strategy-new-layout">
+
+    <!-- 左栏：添加方式 -->
+    <section class="chart-panel strategy-factor-pane">
+        <div class="panel-title">
+            <span>添加股票</span>
+        </div>
+
+        <div class="form-field">
+            <label class="form-label">方式 1：上传文件</label>
+            <div id="file-drop" class="file-drop">
+                <input type="file" id="file-input" accept=".csv,.txt" style="display:none;">
+                <div class="file-drop-inner">
+                    <div class="file-drop-icon">⬆</div>
+                    <div>点击选择或拖放 .csv / .txt 文件到此处</div>
+                    <div class="form-hint" style="margin-top: 6px;">
+                        支持格式：每行一个 ticker；或 ticker,weight 两列（带/不带表头都可）。
+                    </div>
+                </div>
+            </div>
+            <div id="upload-msg" class="submit-msg"></div>
+        </div>
+
+        <div class="form-field">
+            <label class="form-label">方式 2：搜索添加</label>
+            <div class="symbol-search-wrap">
+                <input id="symbol-search" class="form-input" type="text" autocomplete="off"
+                       placeholder="输入 ticker 或公司名，如 AAPL / apple">
+                <div id="symbol-suggest" class="symbol-suggest"></div>
+            </div>
+            <div class="form-hint">
+                搜索结果来自 FMP，只包含美股主板（NASDAQ/NYSE/AMEX）。
+            </div>
+        </div>
+
+        <div class="form-field">
+            <label class="form-label">手动添加（跳过搜索）</label>
+            <div style="display:flex; gap:8px;">
+                <input id="manual-ticker" class="form-input" type="text" placeholder="TICKER"
+                       style="flex:1; text-transform: uppercase;">
+                <button class="btn" onclick="manualAdd()">校验并添加</button>
+            </div>
+            <div class="form-hint">
+                输入任意 ticker（含非 SP500 股票），系统会实时调 FMP 校验存在性。
+            </div>
+        </div>
+    </section>
+
+    <!-- 右栏：元信息 + 当前列表 -->
+    <section class="chart-panel strategy-form-pane">
+        <div class="panel-title"><span>股票组信息</span></div>
+
+        <div class="form-field">
+            <label class="form-label">名称 <span class="req">*</span></label>
+            <input id="wl-name" class="form-input" type="text" maxlength="100"
+                   placeholder="例如：CPU 组" value="{{ (watchlist.name if watchlist else '') }}">
+        </div>
+        <div class="form-field">
+            <label class="form-label">描述</label>
+            <textarea id="wl-desc" class="form-input" rows="2" maxlength="500"
+                      placeholder="一句话描述">{{ (watchlist.description if watchlist else '') }}</textarea>
+        </div>
+
+        <div class="weights-header">
+            <span class="weights-title">
+                当前股票 <span class="mono" style="color:var(--text-2); font-size:12px;">
+                    （<span id="items-count">0</span> 只）
+                </span>
+            </span>
+            <div class="weights-actions">
+                <button class="btn small" onclick="equalWeights()">一键等权</button>
+                <button class="btn small" onclick="normalizeWeights()">归一化</button>
+                <button class="btn small danger" onclick="clearAll()">清空</button>
+            </div>
+        </div>
+
+        <div id="items-table" class="weights-table">
+            <div class="weights-empty">请从左侧上传文件或搜索添加</div>
+        </div>
+
+        <div class="weights-sum-row">
+            <span>权重和：</span>
+            <span id="weight-sum" class="mono">0%</span>
+            <span style="color: var(--text-2); margin-left: 8px;">
+                （权重会在提交时按「当前勾选」保留；可先一键等权）
+            </span>
+        </div>
+
+        <div class="form-actions">
+            <a class="btn" href="/watchlists">取消</a>
+            <button class="btn primary" id="submit-btn" onclick="submitWatchlist()">
+                {% if mode == 'new' %}提交创建{% else %}保存修改{% endif %}
+            </button>
+        </div>
+        <div id="submit-msg" class="submit-msg"></div>
+    </section>
+
+</div>
+
+<script>
+    window.__WL_MODE__ = "{{ mode }}";
+    window.__WL_ID__ = {% if watchlist %}"{{ watchlist.id }}"{% else %}null{% endif %};
+    window.__WL_INIT__ = {% if watchlist %}{{ watchlist|tojson }}{% else %}null{% endif %};
+</script>
+<script src="/static/js/watchlist_edit.js?v={{ asset_ver }}"></script>
+{% endblock %}

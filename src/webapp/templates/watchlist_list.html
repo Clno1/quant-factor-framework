@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1 class="page-title">
+    股票组（Watchlist）
+    <span class="badge">{{ watchlists|length }} 个</span>
+</h1>
+<div class="page-sub">
+    Watchlist = 一组股票 + 权重。既可用于回测（忽略权重作股票池），也将用于未来模拟盘（按权重下单）。
+</div>
+
+<div class="toolbar-row">
+    <a class="btn primary" href="/watchlists/new">+ 新建股票组</a>
+</div>
+
+{% if watchlists %}
+<section class="table-panel">
+    <div class="table-wrap">
+        <table class="data">
+            <thead>
+                <tr>
+                    <th style="width:30%;">名称</th>
+                    <th style="width:110px;">股票数</th>
+                    <th>更新时间</th>
+                    <th style="width:260px;"></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for it in watchlists %}
+                <tr data-wid="{{ it.id }}">
+                    <td><a href="/watchlists/{{ it.id }}"><strong>{{ it.name }}</strong></a></td>
+                    <td>
+                        {{ it.item_count }}
+                        {% if it.item_count < 5 %}
+                        <span class="factor-cat-badge" style="background: rgba(255,179,0,0.14); color: var(--amber); border-color: rgba(255,179,0,0.28); margin-left: 6px;">⚠ 偏少</span>
+                        {% endif %}
+                    </td>
+                    <td class="mono" style="color: var(--text-2);">{{ it.updated_at or '—' }}</td>
+                    <td>
+                        <a class="btn small" href="/watchlists/{{ it.id }}">编辑</a>
+                        <a class="btn small" href="/backtests/new?watchlist_id={{ it.id }}">去回测</a>
+                        <button class="btn small danger" onclick="deleteWatchlist('{{ it.id }}', '{{ it.name|replace("'", "\\'") }}')">删除</button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% else %}
+<div class="empty">
+    <p>还没有股票组。</p>
+    <p><a href="/watchlists/new">点击新建</a>——支持上传 CSV/TXT 文件，或通过搜索逐个添加股票。</p>
+</div>
+{% endif %}
+
+<script>
+async function deleteWatchlist(wid, name) {
+    if (!confirm('确定要删除股票组「' + name + '」？\n此操作不可恢复。历史回测结果仍可查看（快照已冻结）。')) return;
+    try {
+        const r = await fetch('/api/watchlists/' + wid, { method: 'DELETE' });
+        if (!r.ok) { alert('删除失败: ' + r.status); return; }
+        const row = document.querySelector('tr[data-wid="' + wid + '"]');
+        if (row) row.remove();
+    } catch (e) { alert('删除失败: ' + e); }
+}
+</script>
+{% endblock %}

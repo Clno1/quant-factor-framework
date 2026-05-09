@@ -1,0 +1,80 @@
+# ============================================================
+# 因子库元信息（人工维护，随 git 提交）
+#
+# 字段说明：
+#   id            : 因子唯一 ID，必须与 src/factors/*.py 中 @register 的 name 一致
+#   display_name  : 中文显示名（UI 展示）
+#   category      : 因子分类（动量类/波动类/反转类/换手类/...）
+#   formula       : LaTeX-ish 或伪代码形式的公式
+#   description   : 文字描述（用途、理论背景、注意事项）
+#   direction     : +1 / -1 / 0（0 表示由 IC 自动判定，仅作参考，真实方向仍从代码读）
+#   risk_note     : （可选）使用时的注意事项
+#
+# 启动时 src.factors.library 会做一致性校验：
+#   - yaml 里有 id 但代码未注册 -> 抛错
+#   - 代码注册了但 yaml 缺失   -> 警告，使用代码 fallback 元信息
+# ============================================================
+
+factors:
+  # ---------- 动量类 ----------
+  - id: MOM_1M
+    display_name: 1个月动量
+    category: 动量类
+    formula: "P_{t} / P_{t-21} - 1"
+    direction: +1
+    description: "近 21 个交易日（约 1 个月）的累计收益，捕捉短期趋势。不跳过近端，适合高频再平衡策略。"
+    risk_note: "短期动量与短期反转存在反向效应，建议与 REVERSAL 互斥使用。"
+
+  - id: MOM_3M
+    display_name: 3个月动量
+    category: 动量类
+    formula: "P_{t-21} / P_{t-84} - 1"
+    direction: +1
+    description: "跳过最近 1 个月、取之前 3 个月的累计收益。规避短期反转，保留中期趋势。"
+
+  - id: MOM_6M
+    display_name: 6个月动量
+    category: 动量类
+    formula: "P_{t-21} / P_{t-147} - 1"
+    direction: +1
+    description: "经典 Jegadeesh-Titman (1993) 中期动量，跳过 1 个月避免近端反转效应。"
+
+  - id: MOM_12M
+    display_name: 12个月动量
+    category: 动量类
+    formula: "P_{t-21} / P_{t-273} - 1"
+    direction: +1
+    description: "长期动量（跳 1 月、回看 12 月），学术界与业界最经典的动量定义。"
+
+  # ---------- 波动类 ----------
+  - id: VOL_20D
+    display_name: 20日波动率
+    category: 波动类
+    formula: "std(r_{t-19..t})"
+    direction: 0
+    description: "20 个交易日日收益率的样本标准差，反映短期波动水平。经验上低波动股票长期收益更优（Low-Vol Anomaly），实际方向由 IC 判定。"
+
+  - id: VOL_60D
+    display_name: 60日波动率
+    category: 波动类
+    formula: "std(r_{t-59..t})"
+    direction: 0
+    description: "60 个交易日日收益率的样本标准差，代表中期波动水平。比 20D 更平滑，受单日噪声影响小。"
+
+  # ---------- 反转类 ----------
+  - id: REVERSAL
+    display_name: 5日短期反转
+    category: 反转类
+    formula: "∏(1 + r_{t-4..t}) - 1"
+    direction: -1
+    description: "过去 5 日累计收益。经验上短期涨多的股票未来倾向回调（Jegadeesh 1990），方向为负。"
+    risk_note: "与短期动量 MOM_1M 语义重叠但方向相反，组合时需谨慎。"
+
+  # ---------- 换手类 ----------
+  - id: TURNOVER
+    display_name: 20日相对换手率
+    category: 换手类
+    formula: "V_{t} / mean(V_{t-19..t})"
+    direction: -1
+    description: "当日成交量相对过去 20 日均量的倍数，代理投机热度。经验上高换手股票未来收益更低（投机情绪指标），方向为负。"
+    risk_note: "严格换手率需流通股本，此处用相对量作近似。"
