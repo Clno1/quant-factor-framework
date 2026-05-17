@@ -35,6 +35,7 @@ def _wide_files_for(universe: str) -> dict[str, Path]:
     base = _PROCESSED_BASE / universe
     return {
         "close":     base / "close.parquet",
+        "open":      base / "open.parquet",
         "adj_close": base / "adj_close.parquet",
         "volume":    base / "volume.parquet",
         "returns":   base / "returns.parquet",
@@ -102,16 +103,20 @@ def build_wide_tables(
     data = load_or_download(tickers)
 
     close_map: dict[str, pd.Series] = {}
+    open_map: dict[str, pd.Series] = {}
     adj_map: dict[str, pd.Series] = {}
     vol_map: dict[str, pd.Series] = {}
     for t, df in data.items():
         if df is None or df.empty:
             continue
         close_map[t] = df["close"]
+        if "open" in df.columns:
+            open_map[t] = df["open"]
         adj_map[t] = df["adj_close"]
         vol_map[t] = df["volume"]
 
     close_df = _pivot_one(close_map)
+    open_df = _pivot_one(open_map)
     adj_df = _pivot_one(adj_map)
     vol_df = _pivot_one(vol_map)
     returns_df = adj_df.pct_change()
@@ -121,6 +126,7 @@ def build_wide_tables(
     sector_df = sector_series.rename("sector").to_frame()
 
     write_parquet(close_df,   files["close"])
+    write_parquet(open_df,    files["open"])
     write_parquet(adj_df,     files["adj_close"])
     write_parquet(vol_df,     files["volume"])
     write_parquet(returns_df, files["returns"])
@@ -134,6 +140,7 @@ def build_wide_tables(
 
     return {
         "close": close_df,
+        "open": open_df,
         "adj_close": adj_df,
         "volume": vol_df,
         "returns": returns_df,
@@ -141,16 +148,28 @@ def build_wide_tables(
     }
 
 
-def load_wide_tables(universe: str = "SP500") -> dict[str, pd.DataFrame]:
-    """仅从缓存读取（不触发网络）。若缓存不存在，抛 FileNotFoundError。"""
+def load_wide_tables(
+    universe: str = "SP500",
+    *,
+    require_open: bool = False,
+) -> dict[str, pd.DataFrame]:
+    """
+    仅从缓存读取（不触发网络）。
+
+    require_open=True 时强制要求 open.parquet 存在，供 next_open 成交模型使用。
+    close 模式可读取旧缓存，但返回结果中不会包含缺失的 open。
+    """
     files = _wide_files_for(universe)
-    missing = [k for k, p in files.items() if not p.exists()]
+    required_keys = set(files)
+    if not require_open:
+        required_keys.discard("open")
+    missing = [k for k, p in files.items() if k in required_keys and not p.exists()]
     if missing:
         raise FileNotFoundError(
             f"[{universe}] Processed wide tables missing: {missing}. "
             "Run build_wide_tables() first."
         )
-    return {k: read_parquet(p) for k, p in files.items()}
+    return {k: read_parquet(p) for k, p in files.items() if p.exists()}
 
 
 __all__ = ["build_wide_tables", "load_wide_tables"]

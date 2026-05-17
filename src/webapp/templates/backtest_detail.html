@@ -17,6 +17,15 @@
     · 日期：<span class="mono">{{ task.date_range.resolved_start }} → {{ task.date_range.resolved_end }}</span>
     · 分组：{{ task.n_groups }}（Top = Q{{ task.top_group }}）
     · 调仓：{{ task.rebalance_days }} 日
+    {% if task.diagnostics and task.diagnostics.execution_used %}
+    {% set _e = task.diagnostics.execution_used %}
+    · 成交：<span class="mono">{{ _e.timing }}</span>
+    · 滑点 {{ _e.slippage_bps }}bps · 手续费 {{ _e.commission_bps }}bps
+    {% elif task.execution %}
+    · 成交：<span class="mono">{{ task.execution.timing or 'default' }}</span>
+    {% else %}
+    · <span style="color: var(--text-2);">成交模型：legacy（旧任务，按 close-to-close 无摩擦）</span>
+    {% endif %}
 </div>
 
 {% if is_running %}
@@ -132,6 +141,14 @@
         <div><span>有效分组</span><span class="mono">Q1..Q{{ task.diagnostics.effective_n_groups }}（Top=Q{{ task.diagnostics.effective_top_group }}）</span></div>
         <div><span>交易日数</span><span class="mono">{{ task.diagnostics.n_trading_days }}</span></div>
         <div><span>总耗时</span><span class="mono">{{ task.duration_sec }} 秒</span></div>
+        {% if task.diagnostics.execution_used %}
+        {% set _e = task.diagnostics.execution_used %}
+        <div><span>成交时机</span><span class="mono">{{ _e.timing }}</span></div>
+        <div><span>滑点 / 手续费</span><span class="mono">{{ _e.slippage_bps }} / {{ _e.commission_bps }} bps</span></div>
+        {% if task.diagnostics.cost_bps_per_year is not none %}
+        <div><span>年化摩擦成本</span><span class="mono">≈ {{ '%.0f'|format(task.diagnostics.cost_bps_per_year) }} bps</span></div>
+        {% endif %}
+        {% endif %}
     </div>
 </section>
 {% endif %}

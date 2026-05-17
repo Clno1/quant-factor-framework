@@ -10,6 +10,8 @@ universe:
   custom_tickers: []
   sp500_url: "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
   cache_days: 7
+  point_in_time:
+    membership_dir: "data/pit_universes"   # 可放 SP500.parquet/csv，至少包含 date,ticker
 
 # 多股票池配置（新版本，pipeline 会循环跑每一个）
 universes:
@@ -67,9 +69,17 @@ backtest:
   n_groups: 5                      # 分组数（Quintile = 5）
   rebalance_days: 5                # 调仓周期（交易日）
   weight_method: "equal"           # 等权
-  transaction_cost: 0.0005         # 单边交易成本（5bp），MVP 先不启用
+  transaction_cost: 0.0005         # （已废弃，由 execution.commission_bps 替代）
   risk_free_rate: 0.0              # 年化无风险利率（计算 Sharpe 用）
   trading_days_per_year: 252
+  require_point_in_time_universe: false    # true 时没有 PIT 成分股快照则拒绝回测
+
+  # 成交模型（v3 新增）：让回测尽量接近实盘可达上限
+  execution:
+    timing: "next_open"            # next_open（推荐，T+1 开盘成交）/ close（旧行为，T 日收盘成交）
+    slippage_bps: 5                # 单边滑点（万分位 ×10），双边吃 5+5=10 bps
+    commission_bps: 2              # 单边手续费（万分位 ×10），双边吃 2+2=4 bps
+    min_open_coverage: 0.95        # next_open 下 open 价格矩阵最低非空覆盖率
 
 # 当前启用因子（与研报 8 因子对齐）
 factors:

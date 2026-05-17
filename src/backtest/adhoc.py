@@ -31,6 +31,7 @@ log = get_logger(__name__)
 class AdhocResult:
     composite: pd.DataFrame                 # date × ticker（zscore 加权合成）
     returns: pd.DataFrame                   # date × ticker 日收益（喂给 quintile_backtest）
+    open_prices: pd.DataFrame               # date × ticker 复权开盘价（execution=next_open 用）
     components: list[StrategyComponent]
     normalized_weights: dict[str, float]
     date_range: tuple[str, str]
@@ -59,12 +60,15 @@ def _build_wide_inmem(
     data = load_or_download(tickers, start=start, end=end)
 
     adj_map: dict[str, pd.Series] = {}
+    open_map: dict[str, pd.Series] = {}
     vol_map: dict[str, pd.Series] = {}
     for t in tickers:
         df = data.get(t)
         if df is None or df.empty or "adj_close" not in df.columns:
             continue
         adj_map[t] = df["adj_close"]
+        if "open" in df.columns:
+            open_map[t] = df["open"]
         if "volume" in df.columns:
             vol_map[t] = df["volume"]
 
@@ -78,6 +82,17 @@ def _build_wide_inmem(
     adj_df = pd.concat(adj_map, axis=1).sort_index()
     adj_df.columns.name = "ticker"
     adj_df.index.name = "date"
+
+    open_df = (
+        pd.concat(open_map, axis=1).sort_index()
+        if open_map else pd.DataFrame(index=adj_df.index, columns=adj_df.columns)
+    )
+    if not open_df.empty:
+        open_df.columns.name = "ticker"
+        open_df.index.name = "date"
+        # 对齐到 adj_df 的列
+        open_df = open_df.reindex(columns=adj_df.columns)
+
     vol_df = (
         pd.concat(vol_map, axis=1).sort_index()
         if vol_map else pd.DataFrame(index=adj_df.index)
@@ -90,6 +105,7 @@ def _build_wide_inmem(
     wide = {
         "adj_close": adj_df,
         "close": adj_df,       # 部分因子 compute_from_wide 会找 close，用 adj 兜底
+        "open": open_df,
         "volume": vol_df,
         "returns": returns_df,
         "sector": pd.DataFrame(index=adj_df.columns),  # 空 sector；preprocess 会跳过
@@ -195,10 +211,18 @@ def adhoc_compose(
     # 4) 返回 returns（裁剪到同日期范围和 ticker 集合）
     returns_df = wide["returns"].loc[composite.index.min():composite.index.max(),
                                      composite.columns]
+    open_df_out = wide.get("open")
+    if open_df_out is None or open_df_out.empty:
+        open_df_out = pd.DataFrame(index=composite.index, columns=composite.columns)
+    else:
+        open_df_out = open_df_out.reindex(
+            index=returns_df.index, columns=composite.columns,
+        )
 
     return AdhocResult(
         composite=composite,
         returns=returns_df,
+        open_prices=open_df_out,
         components=list(components),
         normalized_weights=norm,
         date_range=(

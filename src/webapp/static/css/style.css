@@ -1175,3 +1175,46 @@ textarea.form-input {
     border-color: rgba(255, 179, 0, 0.5);
 }
 
+
+/* 高级选项折叠 */
+.form-advanced {
+    margin: 8px 0 4px;
+    padding: 0;
+    background: rgba(14, 17, 23, 0.4);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+}
+.form-advanced > summary {
+    padding: 10px 14px;
+    cursor: pointer;
+    user-select: none;
+    color: var(--text-1);
+    font-size: 13px;
+    font-weight: 500;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: background .15s;
+}
+.form-advanced > summary::before {
+    content: "B6";
+    color: var(--accent-2);
+    font-size: 9px;
+    transition: transform .2s;
+    margin-right: 4px;
+}
+.form-advanced[open] > summary::before {
+    transform: rotate(90deg);
+}
+.form-advanced > summary:hover {
+    background: rgba(66, 165, 245, 0.06);
+}
+.form-advanced[open] > summary {
+    border-bottom: 1px solid var(--border);
+    background: rgba(66, 165, 245, 0.04);
+}
+.form-advanced > summary::-webkit-details-marker { display: none; }
+.form-advanced-body {
+    padding: 14px 16px 4px;
+}

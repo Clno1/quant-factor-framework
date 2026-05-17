@@ -10,6 +10,9 @@
       nav.parquet                            策略净值曲线
       metrics.json                           性能指标
       holdings.parquet                       每个调仓日的 Top 组持仓
+      holdings_detail.parquet                Top 组逐票目标权重
+      trades.parquet                         Top 组逐票交易权重与成本
+      costs.parquet                          Top 组每次调仓聚合成本
       log.txt                                任务独立日志
 
 所有 task.json 写入走原子 rename。
@@ -157,6 +160,7 @@ def create_task(
     top_group: int,
     name: str | None = None,
     watchlist_snapshot: dict[str, Any] | None = None,
+    execution: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     创建一个 pending 的回测任务，返回 task dict（已写盘）。
@@ -186,6 +190,7 @@ def create_task(
         "n_groups": n_groups,
         "rebalance_days": rebalance_days,
         "top_group": top_group,
+        "execution": execution,                    # None 表示用 CONFIG 全局默认
         "status": STATUS_PENDING,
         "created_at": now,
         "started_at": None,
@@ -252,6 +257,9 @@ def load_task_artifacts(task_id: str) -> dict[str, Any]:
     p_returns = d / "returns.parquet"
     p_nav = d / "nav.parquet"
     p_holdings = d / "holdings.parquet"
+    p_holdings_detail = d / "holdings_detail.parquet"
+    p_trades = d / "trades.parquet"
+    p_costs = d / "costs.parquet"
     p_metrics = d / "metrics.json"
     if p_returns.exists():
         out["returns"] = read_parquet(p_returns)
@@ -259,6 +267,12 @@ def load_task_artifacts(task_id: str) -> dict[str, Any]:
         out["nav"] = read_parquet(p_nav)
     if p_holdings.exists():
         out["holdings"] = read_parquet(p_holdings)
+    if p_holdings_detail.exists():
+        out["holdings_detail"] = read_parquet(p_holdings_detail)
+    if p_trades.exists():
+        out["trades"] = read_parquet(p_trades)
+    if p_costs.exists():
+        out["costs"] = read_parquet(p_costs)
     if p_metrics.exists():
         out["metrics"] = load_json(p_metrics)
     return out

@@ -87,6 +87,47 @@
                placeholder="默认：{策略名} @ {股票池}">
     </div>
 
+    <details class="form-advanced">
+        <summary>高级选项 · 成交模型</summary>
+        <div class="form-advanced-body">
+            <div class="form-hint" style="margin-bottom: 12px;">
+                让回测尽量接近实盘可达上限。<b>next_open</b>（推荐）= T 日决策，T+1 开盘价成交；
+                <b>close</b> = T 日收盘价立刻成交（理论上限，未来函数性偏差）。
+                滑点 + 手续费每次调仓按"换手率 × (slippage+commission) × 2"扣除。
+            </div>
+            <div class="form-row">
+                <div class="form-field">
+                    <label class="form-label">成交时机</label>
+                    <select id="exec-timing" class="form-input">
+                        <option value="next_open" {% if default_exec.timing == 'next_open' %}selected{% endif %}>
+                            next_open · T+1 开盘价（推荐）
+                        </option>
+                        <option value="close" {% if default_exec.timing == 'close' %}selected{% endif %}>
+                            close · T 日收盘价（理论上限）
+                        </option>
+                    </select>
+                </div>
+                <div></div>
+            </div>
+            <div class="form-row">
+                <div class="form-field">
+                    <label class="form-label">滑点（单边 bps）</label>
+                    <input id="exec-slippage" class="form-input mono" type="number"
+                           min="0" max="1000" step="0.5"
+                           value="{{ default_exec.slippage_bps }}">
+                    <div class="form-hint">5 bps ≈ 万分之 5；SP500 大盘股典型 2~10 bps</div>
+                </div>
+                <div class="form-field">
+                    <label class="form-label">手续费（单边 bps）</label>
+                    <input id="exec-commission" class="form-input mono" type="number"
+                           min="0" max="1000" step="0.5"
+                           value="{{ default_exec.commission_bps }}">
+                    <div class="form-hint">2 bps 覆盖典型零佣 + SEC + 极小价差</div>
+                </div>
+            </div>
+        </div>
+    </details>
+
     <div class="form-actions">
         <a class="btn" href="/backtests">取消</a>
         <button class="btn primary" id="submit-btn" onclick="submitBacktest()">开始回测</button>
@@ -106,15 +147,24 @@ async function submitBacktest() {
     const end = document.getElementById('date-end').value.trim();
     const name = document.getElementById('task-name').value.trim();
 
+    const timing = document.getElementById('exec-timing').value;
+    const slippage_bps = parseFloat(document.getElementById('exec-slippage').value);
+    const commission_bps = parseFloat(document.getElementById('exec-commission').value);
+
     if (!strategy_id) { msg.textContent = '请选择策略'; msg.className = 'submit-msg err'; return; }
     if (!universe)    { msg.textContent = '请选择股票池'; msg.className = 'submit-msg err'; return; }
+
+    const payload = {
+        strategy_id, universe, start, end, name,
+        execution: { timing, slippage_bps, commission_bps },
+    };
 
     btn.disabled = true; btn.textContent = '提交中...';
     try {
         const r = await fetch('/api/backtests', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ strategy_id, universe, start, end, name }),
+            body: JSON.stringify(payload),
         });
         const data = await r.json();
         if (!r.ok) {

@@ -309,6 +309,11 @@ def backtests_new_page(
     watchlists = list_watchlists()
     default_start = str(CONFIG.date_range.start)
     default_end = str(CONFIG.date_range.end)
+    default_exec = {
+        "timing": str(getattr(CONFIG.backtest.execution, "timing", "next_open")),
+        "slippage_bps": float(getattr(CONFIG.backtest.execution, "slippage_bps", 5)),
+        "commission_bps": float(getattr(CONFIG.backtest.execution, "commission_bps", 2)),
+    }
     return templates.TemplateResponse(request, "backtest_new.html", {
         "title": "新建回测",
         "strategies": strategies,
@@ -318,6 +323,7 @@ def backtests_new_page(
         "preselect_watchlist_id": watchlist_id,
         "default_start": default_start,
         "default_end": default_end,
+        "default_exec": default_exec,
     })
 
 
@@ -481,6 +487,50 @@ def api_create_backtest(payload: dict = Body(...)):
     n_groups = int(CONFIG.backtest.n_groups)
     rebalance_days = int(CONFIG.backtest.rebalance_days)
 
+    # 解析 execution（用户在新建回测页可覆盖默认值）
+    execution: dict | None = None
+    raw_exec = payload.get("execution") or {}
+    if raw_exec:
+        timing = str(raw_exec.get("timing") or "").lower().strip()
+        if timing and timing not in ("close", "next_open"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"execution.timing 非法（必须是 close / next_open）：{timing}",
+            )
+        try:
+            slip = (
+                float(raw_exec["slippage_bps"])
+                if "slippage_bps" in raw_exec and raw_exec["slippage_bps"] is not None
+                else None
+            )
+            comm = (
+                float(raw_exec["commission_bps"])
+                if "commission_bps" in raw_exec and raw_exec["commission_bps"] is not None
+                else None
+            )
+        except (TypeError, ValueError) as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"execution 数字解析失败：{e}",
+            )
+        if slip is not None and (slip < 0 or slip > 1000):
+            raise HTTPException(
+                status_code=400, detail=f"slippage_bps 超出合理范围 [0, 1000]: {slip}",
+            )
+        if comm is not None and (comm < 0 or comm > 1000):
+            raise HTTPException(
+                status_code=400, detail=f"commission_bps 超出合理范围 [0, 1000]: {comm}",
+            )
+        execution = {
+            "timing": timing or None,
+            "slippage_bps": slip,
+            "commission_bps": comm,
+        }
+        # 把 None 字段去掉，让 runner 用 CONFIG 默认兜底
+        execution = {k: v for k, v in execution.items() if v is not None}
+        if not execution:
+            execution = None
+
     task = bt_store.create_task(
         strategy=strategy,
         universe=universe_for_task,
@@ -491,6 +541,7 @@ def api_create_backtest(payload: dict = Body(...)):
         top_group=n_groups,   # 固定取 Top = 最高分组（Q{n_groups}）
         name=name,
         watchlist_snapshot=watchlist_snapshot,
+        execution=execution,
     )
     get_runner().submit(task["id"])
     return JSONResponse(_sanitize(task), status_code=201)

@@ -150,6 +150,22 @@ outputs/backtests/<UUID>/
 
 **合成算法**：`Σ wᵢ · Zscore(因子ᵢ)` → 五分位回测 → 取 Top 组（Q_n）作为策略持仓与收益。
 
+**成交模型（v3 新增）**：让回测尽量贴近实盘可达上限。
+
+| 模式 | 决策时刻 | 成交价 | 持有期收益 |
+|---|---|---|---|
+| `close`（理论上限）| T 日收盘 | T 日收盘价 | close-to-close |
+| `next_open`（推荐，默认）| T 日收盘 | **T+1 日开盘价** | open-to-open |
+
+**摩擦成本**：调仓日按"换手率 × (slippage + commission) × 2"扣除。  
+- 默认：滑点 5 bps + 手续费 2 bps，单边 7 bps；**双边 14 bps**。
+- 在新建回测页的"高级选项"里可临时覆盖。
+- 详情页诊断模块会展示当前任务用的成交参数和年化摩擦成本（bps/年）。
+
+**典型 A/B 差距**（同策略 + 同股票池跑两次）：从 `close+0/0` 到 `next_open+5/2bps`，  
+Sharpe 通常下降 0.1~0.3，年化收益下降 2~6%（含 ~150-200 bps 摩擦 + ~4% T+1 滞后）。  
+这部分差距才是"实盘和回测之间的真实 gap"。
+
 **异步**：`ThreadPoolExecutor(max_workers=2)`，前端 1 秒轮询 `/api/backtests/{id}/status`。服务重启时遗留 running 任务会被 startup_recovery 标记为 failed。
 
 ### Watchlist（自定义股票组）
@@ -169,9 +185,9 @@ outputs/backtests/<UUID>/
 | `SP500` / `MAG7` | 读预算好的 `factor_values.parquet` | ms 级 | 否（必须先跑 pipeline）|
 | `watchlist:<uuid>` | `src/backtest/adhoc.py` 即时拉价格 + 现算因子 | 秒级 | 是 |
 
-### 重要：升级到 v2 需重跑 pipeline
+### 重要：升级到 v2/v3 需重跑 pipeline
 
-回测合成依赖每个因子的 `factor_values.parquet`（每日因子值矩阵），这是 v2 才落盘的产物。**请用以下命令重建一次**：
+回测合成依赖每个因子的 `factor_values.parquet`（v2）和股票池的 `open.parquet`（v3，next_open 模式用）。**请用以下命令重建一次**：
 
 ```bash
 # 全量重建（SP500 + MAG7）
@@ -181,7 +197,7 @@ python scripts/run_mvp.py --update
 python scripts/run_mvp.py --update --only-universe MAG7
 ```
 
-> Watchlist 不需要预跑 pipeline——回测任务运行时自动按需下载 + 现算（按 ticker 缓存在 `data/cache/`）。
+> **重要**：v3（成交模型）新增了 `open.parquet` 宽表。如果 SP500/MAG7 还没用 v3 重跑过，预设池跑 next_open 模式时会**自动降级回 close 模式**并在日志里告警。Watchlist 路径不受影响（adhoc 实时拉的数据已包含 open）。
 
 ---
 

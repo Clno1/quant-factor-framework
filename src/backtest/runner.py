@@ -26,12 +26,57 @@ from src.backtest.metrics import performance_summary
 from src.backtest.quintile import quintile_backtest
 from src.backtest import store as bt_store
 from src.config import CONFIG
-from src.data import load_wide_tables
+from src.data import apply_point_in_time_mask, load_wide_tables
 from src.strategies.definition import StrategyComponent, StrategyDefinition
 from src.utils.io import atomic_save_json, save_json, write_parquet
 from src.utils.logger import get_logger
 
 log = get_logger(__name__)
+
+
+def _resolve_execution_config(task_exec: dict | None) -> dict[str, Any]:
+    """Resolve task-level execution overrides against global defaults."""
+    task_exec = task_exec or {}
+    return {
+        "timing": str(
+            task_exec.get("timing")
+            or getattr(CONFIG.backtest.execution, "timing", "close")
+        ).lower(),
+        "slippage_bps": float(
+            task_exec.get("slippage_bps") if task_exec.get("slippage_bps") is not None
+            else getattr(CONFIG.backtest.execution, "slippage_bps", 0.0)
+        ),
+        "commission_bps": float(
+            task_exec.get("commission_bps") if task_exec.get("commission_bps") is not None
+            else getattr(CONFIG.backtest.execution, "commission_bps", 0.0)
+        ),
+    }
+
+
+def _validate_open_coverage(
+    *,
+    task_id: str,
+    universe: str,
+    open_prices: pd.DataFrame | None,
+    composite: pd.DataFrame,
+) -> float:
+    """Require enough open prices for next_open execution."""
+    if open_prices is None or open_prices.empty:
+        raise FileNotFoundError(
+            f"[task={task_id}] universe={universe} requires open prices for next_open."
+        )
+    aligned = open_prices.reindex(index=composite.index, columns=composite.columns)
+    coverage = float(aligned.notna().mean().mean()) if aligned.size else 0.0
+    min_coverage = float(
+        getattr(CONFIG.backtest.execution, "min_open_coverage", 0.95)
+    )
+    if coverage < min_coverage:
+        raise ValueError(
+            f"[task={task_id}] universe={universe} open price coverage is "
+            f"{coverage:.2%}, below required {min_coverage:.2%}. "
+            "Rebuild raw OHLCV/open.parquet before running next_open backtests."
+        )
+    return coverage
 
 
 # ---------------------------------------------------------------
@@ -158,6 +203,8 @@ def _run_task(task_id: str) -> None:
     n_groups = int(task.get("n_groups") or CONFIG.backtest.n_groups)
     rebalance_days = int(task.get("rebalance_days") or CONFIG.backtest.rebalance_days)
     top_group = int(task.get("top_group") or n_groups)
+    exec_cfg = _resolve_execution_config(task.get("execution") or {})
+    require_open = exec_cfg["timing"] == "next_open"
 
     # 3) 合成因子（根据 universe 类型走不同路径）
     is_watchlist = isinstance(universe, str) and universe.startswith("watchlist:")
@@ -180,6 +227,16 @@ def _run_task(task_id: str) -> None:
         )
         composite = adhoc_result.composite
         returns = adhoc_result.returns
+        open_prices = adhoc_result.open_prices
+        open_coverage = (
+            _validate_open_coverage(
+                task_id=task_id,
+                universe=universe,
+                open_prices=open_prices,
+                composite=composite,
+            )
+            if require_open else None
+        )
         compose_normalized_weights = adhoc_result.normalized_weights
         compose_date_range = adhoc_result.date_range
         extra_diag = {
@@ -188,6 +245,7 @@ def _run_task(task_id: str) -> None:
             "tickers_requested": len(wl_tickers),
             "tickers_used": len(adhoc_result.tickers_used),
             "tickers_missing": adhoc_result.tickers_missing,
+            "open_coverage": open_coverage,
         }
     else:
         log.info("[task=%s] composing factor on %s (%s ~ %s)",
@@ -199,12 +257,40 @@ def _run_task(task_id: str) -> None:
             start=r_start, end=r_end,
         )
         composite = comp_result.composite
-        # 4) 加载对应 universe 的 returns 宽表
-        wide = load_wide_tables(universe=universe)
+        pit_required = bool(getattr(CONFIG.backtest, "require_point_in_time_universe", False))
+        composite, pit_diag = apply_point_in_time_mask(
+            composite,
+            universe=universe,
+            required=pit_required,
+        )
+        # 4) 加载对应 universe 的 returns + open 宽表
+        wide = load_wide_tables(universe=universe, require_open=require_open)
         returns = wide["returns"]
+        open_prices = wide.get("open")
+        if require_open and (open_prices is None or open_prices.empty):
+            raise FileNotFoundError(
+                f"[task={task_id}] universe={universe} requires open.parquet for "
+                "execution.timing=next_open. Run "
+                f"`python scripts/run_mvp.py --update --only-universe {universe}`."
+            )
+        open_coverage = (
+            _validate_open_coverage(
+                task_id=task_id,
+                universe=universe,
+                open_prices=open_prices,
+                composite=composite,
+            )
+            if require_open else None
+        )
         compose_normalized_weights = comp_result.normalized_weights
-        compose_date_range = comp_result.date_range
-        extra_diag = {}
+        compose_date_range = (
+            composite.index.min().strftime("%Y-%m-%d"),
+            composite.index.max().strftime("%Y-%m-%d"),
+        )
+        extra_diag = {
+            "point_in_time_universe": pit_diag,
+            "open_coverage": open_coverage,
+        }
 
     # 5) 五分位回测（小池自适应降 n_groups）
     n_tickers = composite.shape[1]
@@ -215,14 +301,18 @@ def _run_task(task_id: str) -> None:
                  task_id, n_groups, effective_n_groups)
     effective_top = min(top_group, effective_n_groups)
 
-    log.info("[task=%s] running quintile backtest: n_groups=%d, rebalance=%dd, top=Q%d",
-             task_id, effective_n_groups, rebalance_days, effective_top)
+    log.info("[task=%s] running quintile backtest: n_groups=%d, rebalance=%dd, top=Q%d, "
+             "execution=%s slippage=%.1fbps commission=%.1fbps",
+             task_id, effective_n_groups, rebalance_days, effective_top,
+             exec_cfg["timing"], exec_cfg["slippage_bps"], exec_cfg["commission_bps"])
 
     result = quintile_backtest(
         composite, returns,
         factor_direction=+1,   # 合成后默认正向（权重已处理方向）
         n_groups=effective_n_groups,
         rebalance_days=rebalance_days,
+        open_df=open_prices,
+        execution=exec_cfg,
     )
 
     top_col = f"Q{effective_top}"
@@ -235,16 +325,26 @@ def _run_task(task_id: str) -> None:
         raise RuntimeError("Top 组收益为空，可能因子全 NaN 或分组全空")
     top_nav: pd.Series = (1.0 + top_returns.fillna(0.0)).cumprod()
 
-    # 6) 当前最新调仓日的 Top 组持仓（holdings）
-    assign = result.group_assignment
+    # 6) Top 组逐票持仓 / 交易 / 成本明细
+    holdings_detail = result.holdings_detail
+    trades_detail = result.trades_detail
+    costs_detail = result.costs_detail
+    top_holdings_detail = holdings_detail.loc[
+        holdings_detail["group"] == top_col
+    ].copy() if not holdings_detail.empty else pd.DataFrame()
+    top_trades_detail = trades_detail.loc[
+        trades_detail["group"] == top_col
+    ].copy() if not trades_detail.empty else pd.DataFrame()
+    top_costs_detail = costs_detail.loc[
+        costs_detail["group"] == top_col
+    ].copy() if not costs_detail.empty else pd.DataFrame()
+
     holdings_rows: list[dict[str, Any]] = []
-    for dt, row in assign.iterrows():
-        mask = row.values == effective_top
-        tickers = [c for c, m in zip(assign.columns, mask) if m]
-        if tickers:
+    if not top_holdings_detail.empty:
+        for dt, sub in top_holdings_detail.groupby("date", sort=True):
             holdings_rows.append({
-                "date": pd.Timestamp(dt).strftime("%Y-%m-%d"),
-                "tickers": tickers,
+                "date": dt,
+                "tickers": sub["ticker"].tolist(),
             })
     holdings_df = pd.DataFrame(holdings_rows)
 
@@ -259,6 +359,12 @@ def _run_task(task_id: str) -> None:
     if not holdings_df.empty:
         # tickers 列是 list，parquet 支持（转成 object）
         write_parquet(holdings_df, d / "holdings.parquet")
+    if not top_holdings_detail.empty:
+        write_parquet(top_holdings_detail, d / "holdings_detail.parquet")
+    if not top_trades_detail.empty:
+        write_parquet(top_trades_detail, d / "trades.parquet")
+    if not top_costs_detail.empty:
+        write_parquet(top_costs_detail, d / "costs.parquet")
     save_json(metrics, d / "metrics.json")
 
     # 9) 终态
@@ -274,6 +380,17 @@ def _run_task(task_id: str) -> None:
         "n_trading_days": int(top_returns.shape[0]),
         "latest_holding_date": holdings_rows[-1]["date"] if holdings_rows else None,
         "latest_holding_tickers": holdings_rows[-1]["tickers"] if holdings_rows else [],
+        "n_trade_rows": int(top_trades_detail.shape[0]),
+        "total_traded_weight": (
+            float(top_trades_detail["trade_abs_weight"].sum())
+            if not top_trades_detail.empty else 0.0
+        ),
+        "total_cost": (
+            float(top_costs_detail["cost"].sum())
+            if not top_costs_detail.empty else 0.0
+        ),
+        "execution_used": result.config.get("execution") or exec_cfg,
+        "cost_bps_per_year": result.execution_cost_bps_per_year.get(top_col),
     }
     diagnostics.update(extra_diag)
     patch = {
