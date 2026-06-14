@@ -1,18 +1,82 @@
-"""
-中性化（Industry / Market-Cap）。
-
-MVP 声明接口但不实现——后续可用 statsmodels 做截面 OLS：
-    factor_t = Σ β_i * Industry_i + γ * log(mcap) + ε
-    取残差 ε 作为中性化后的因子值。
-"""
+"""Cross-sectional factor neutralization."""
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
+
+from src.config import CONFIG
+from src.utils.logger import get_logger
+
+log = get_logger(__name__)
+
+
+def _sector_series(sector_map: pd.Series | pd.DataFrame | None) -> pd.Series | None:
+    if sector_map is None:
+        return None
+    if isinstance(sector_map, pd.DataFrame):
+        if sector_map.empty:
+            return None
+        if "sector" in sector_map.columns:
+            s = sector_map["sector"]
+        else:
+            s = sector_map.iloc[:, 0]
+    else:
+        s = sector_map
+    s = s.dropna().astype(str)
+    return s if not s.empty else None
+
+
+def _neutralize_row(
+    factor_row: pd.Series,
+    sector: pd.Series | None,
+    mcap_row: pd.Series | None,
+    *,
+    use_industry: bool,
+    use_mcap: bool,
+    min_obs: int,
+) -> pd.Series:
+    y = factor_row.astype("float64")
+    valid = y.notna()
+    parts: list[pd.DataFrame | pd.Series] = []
+
+    if use_industry and sector is not None:
+        sec = sector.reindex(y.index)
+        valid &= sec.notna()
+        dummies = pd.get_dummies(sec, dtype="float64")
+        if dummies.shape[1] > 1:
+            parts.append(dummies.iloc[:, 1:])
+
+    if use_mcap and mcap_row is not None:
+        mcap = mcap_row.reindex(y.index).astype("float64")
+        mcap = mcap.where(mcap > 0)
+        valid &= mcap.notna()
+        parts.append(np.log(mcap).rename("log_mcap"))
+
+    if not parts:
+        return y
+
+    X = pd.concat(parts, axis=1).loc[valid]
+    yy = y.loc[valid]
+    if len(yy) < max(min_obs, X.shape[1] + 2):
+        return y
+
+    X = pd.concat(
+        [pd.Series(1.0, index=X.index, name="const"), X.astype("float64")],
+        axis=1,
+    )
+    try:
+        beta, *_ = np.linalg.lstsq(X.to_numpy(), yy.to_numpy(), rcond=None)
+    except np.linalg.LinAlgError:
+        return y
+    resid = yy - X.to_numpy().dot(beta)
+    out = pd.Series(np.nan, index=y.index, dtype="float64")
+    out.loc[valid] = resid
+    return out
 
 
 def neutralize_industry(
     factor_df: pd.DataFrame,
-    sector_map: pd.Series | None = None,
+    sector_map: pd.Series | pd.DataFrame | None = None,
     mcap_df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """
@@ -26,10 +90,42 @@ def neutralize_industry(
 
     Returns
     -------
-    中性化后的因子宽表（MVP 先透传，不做实际回归）。
+    中性化后的因子宽表。
     """
-    # TODO: 实现截面 OLS 残差（行业哑变量 + log 市值）
-    return factor_df.copy()
+    if factor_df.empty:
+        return factor_df.copy()
+
+    use_industry = bool(getattr(CONFIG.preprocessing, "neutralize_industry", False))
+    use_mcap = bool(getattr(CONFIG.preprocessing, "neutralize_mcap", False))
+    if not use_industry and not use_mcap:
+        return factor_df.copy()
+
+    sector = _sector_series(sector_map) if use_industry else None
+    if use_industry and sector is None:
+        log.warning("Industry neutralization requested but sector_map is missing.")
+
+    has_mcap = mcap_df is not None and not mcap_df.empty
+    if use_mcap and not has_mcap:
+        log.warning("Market-cap neutralization requested but mcap_df is missing.")
+
+    if (use_industry and sector is None) and (use_mcap and not has_mcap):
+        return factor_df.copy()
+
+    min_obs = int(getattr(CONFIG.preprocessing, "neutralize_min_obs", 30))
+    rows = []
+    for dt, row in factor_df.iterrows():
+        mcap_row = mcap_df.loc[dt] if has_mcap and dt in mcap_df.index else None
+        rows.append(
+            _neutralize_row(
+                row,
+                sector,
+                mcap_row,
+                use_industry=use_industry and sector is not None,
+                use_mcap=use_mcap and has_mcap,
+                min_obs=min_obs,
+            )
+        )
+    return pd.DataFrame(rows, index=factor_df.index, columns=factor_df.columns)
 
 
 __all__ = ["neutralize_industry"]

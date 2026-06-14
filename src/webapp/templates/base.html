@@ -13,34 +13,62 @@
     <link rel="stylesheet" href="/static/css/style.css?v={{ asset_ver }}">
 </head>
 <body>
-    <nav class="navbar">
-        <div class="nav-inner">
-            <a href="/" class="brand">
+    <div class="app-shell">
+        <aside class="sidebar" aria-label="主导航">
+            <a href="/" class="brand side-brand">
                 <span class="brand-badge">Q</span>
-                <span>多因子量化</span>
+                <span>
+                    <strong>多因子量化</strong>
+                    <small>Research Console</small>
+                </span>
             </a>
-            <div class="nav-links">
-                <a href="/factors"
-                   {% if request.url.path.startswith('/factors') %} class="active"{% endif %}>因子库</a>
-                <a href="/strategies"
-                   {% if request.url.path.startswith('/strategies') %} class="active"{% endif %}>策略库</a>
+
+            <nav class="side-nav">
+                <details class="side-group" open>
+                    <summary class="side-group-title">因子</summary>
+                    <div class="side-subnav">
+                        <a href="/{% if universe %}?universe={{ universe }}{% endif %}"
+                           class="side-link {% if request.url.path == '/' or request.url.path.startswith('/factor/') or request.url.path == '/backtest' or request.url.path.startswith('/backtest/') %}active{% endif %}">
+                            <span>因子回测概览</span>
+                        </a>
+                        <a href="/factors"
+                           class="side-link {% if request.url.path.startswith('/factors') %}active{% endif %}">
+                            <span>因子库</span>
+                        </a>
+                    </div>
+                </details>
+
+                <details class="side-group" open>
+                    <summary class="side-group-title">回测</summary>
+                    <div class="side-subnav">
+                        <a href="/strategies"
+                           class="side-link {% if request.url.path.startswith('/strategies') %}active{% endif %}">
+                            <span>策略库</span>
+                        </a>
+                        <a href="/backtests"
+                           class="side-link {% if request.url.path.startswith('/backtests') %}active{% endif %}">
+                            <span>回测任务</span>
+                        </a>
+                    </div>
+                </details>
+
                 <a href="/watchlists"
-                   {% if request.url.path.startswith('/watchlists') %} class="active"{% endif %}>Watchlist</a>
-                <a href="/backtests"
-                   {% if request.url.path.startswith('/backtests') %} class="active"{% endif %}>回测</a>
-                <a href="/{% if universe %}?universe={{ universe }}{% endif %}"
-                   {% if request.url.path == '/' or request.url.path.startswith('/factor/') or request.url.path.startswith('/backtest/') or request.url.path == '/backtest' %} class="active"{% endif %}>因子回测概览</a>
-            </div>
+                   class="side-group-link {% if request.url.path.startswith('/watchlists') %}active{% endif %}">
+                    <span>股票池</span>
+                </a>
+            </nav>
+        </aside>
+
+        <div class="app-main">
+            <main class="container">
+                {% block content %}{% endblock %}
+            </main>
+
+            <footer class="site-footer">
+                <span>多因子量化研究 · 深色仪表盘</span>
+            </footer>
         </div>
-    </nav>
-
-    <main class="container">
-        {% block content %}{% endblock %}
-    </main>
-
-    <footer class="site-footer">
-        <span>多因子量化研究 · 深色仪表盘</span>
-    </footer>
+    </div>
 
     <script src="/static/js/app.js?v={{ asset_ver }}"></script>
 </body>

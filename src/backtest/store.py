@@ -8,6 +8,8 @@
       task.json                              任务元信息 + 状态（pending/running/success/failed）+ strategy_snapshot
       returns.parquet                        Top 组日收益
       nav.parquet                            策略净值曲线
+      benchmark_returns.parquet              股票池等权基准收益
+      excess_returns.parquet                 策略相对基准超额收益
       metrics.json                           性能指标
       holdings.parquet                       每个调仓日的 Top 组持仓
       holdings_detail.parquet                Top 组逐票目标权重
@@ -158,6 +160,7 @@ def create_task(
     n_groups: int,
     rebalance_days: int,
     top_group: int,
+    rebalance_mode: str | None = None,
     name: str | None = None,
     watchlist_snapshot: dict[str, Any] | None = None,
     execution: dict[str, Any] | None = None,
@@ -188,6 +191,7 @@ def create_task(
             "resolved_end": resolved_end,
         },
         "n_groups": n_groups,
+        "rebalance_mode": rebalance_mode,
         "rebalance_days": rebalance_days,
         "top_group": top_group,
         "execution": execution,                    # None 表示用 CONFIG 全局默认
@@ -257,6 +261,8 @@ def load_task_artifacts(task_id: str) -> dict[str, Any]:
     p_returns = d / "returns.parquet"
     p_nav = d / "nav.parquet"
     p_holdings = d / "holdings.parquet"
+    p_benchmark = d / "benchmark_returns.parquet"
+    p_excess = d / "excess_returns.parquet"
     p_holdings_detail = d / "holdings_detail.parquet"
     p_trades = d / "trades.parquet"
     p_costs = d / "costs.parquet"
@@ -267,6 +273,10 @@ def load_task_artifacts(task_id: str) -> dict[str, Any]:
         out["nav"] = read_parquet(p_nav)
     if p_holdings.exists():
         out["holdings"] = read_parquet(p_holdings)
+    if p_benchmark.exists():
+        out["benchmark_returns"] = read_parquet(p_benchmark)
+    if p_excess.exists():
+        out["excess_returns"] = read_parquet(p_excess)
     if p_holdings_detail.exists():
         out["holdings_detail"] = read_parquet(p_holdings_detail)
     if p_trades.exists():

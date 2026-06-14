@@ -73,8 +73,12 @@ def build_wide_tables(
     end_iso = parse_date_str(CONFIG.date_range.end)
     end_date = pd.Timestamp(end_iso).date()
 
+    optional_market_cap = base_dir / "market_cap.parquet"
+
     if not force and all(is_cache_fresh(p, cache_days) for p in files.values()):
         cached = {k: read_parquet(p) for k, p in files.items()}
+        if optional_market_cap.exists():
+            cached["market_cap"] = read_parquet(optional_market_cap)
         adj = cached.get("adj_close", pd.DataFrame())
         if not adj.empty and adj.shape[1] > 0:
             last_date = pd.Timestamp(adj.index.max()).date()
@@ -138,7 +142,7 @@ def build_wide_tables(
         close_df.index.min(), close_df.index.max(), close_df.shape[1],
     )
 
-    return {
+    out = {
         "close": close_df,
         "open": open_df,
         "adj_close": adj_df,
@@ -146,6 +150,9 @@ def build_wide_tables(
         "returns": returns_df,
         "sector": sector_df,
     }
+    if optional_market_cap.exists():
+        out["market_cap"] = read_parquet(optional_market_cap)
+    return out
 
 
 def load_wide_tables(
@@ -169,7 +176,11 @@ def load_wide_tables(
             f"[{universe}] Processed wide tables missing: {missing}. "
             "Run build_wide_tables() first."
         )
-    return {k: read_parquet(p) for k, p in files.items() if p.exists()}
+    out = {k: read_parquet(p) for k, p in files.items() if p.exists()}
+    optional_market_cap = _PROCESSED_BASE / universe / "market_cap.parquet"
+    if optional_market_cap.exists():
+        out["market_cap"] = read_parquet(optional_market_cap)
+    return out
 
 
 __all__ = ["build_wide_tables", "load_wide_tables"]

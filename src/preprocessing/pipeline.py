@@ -16,7 +16,7 @@ log = get_logger(__name__)
 
 def preprocess_factor(
     factor_df: pd.DataFrame,
-    sector_map: pd.Series | None = None,
+    sector_map: pd.Series | pd.DataFrame | None = None,
     mcap_df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """
@@ -41,8 +41,10 @@ def preprocess_factor(
         log.debug("Z-score standardize (cross-sectional)")
         out = zscore_cs(out)
 
-    if bool(cfg.neutralize_industry):
-        log.debug("Industry neutralize (placeholder)")
+    if bool(cfg.neutralize_industry) or bool(getattr(cfg, "neutralize_mcap", False)):
+        log.debug("Neutralize factor (industry=%s, mcap=%s)",
+                  bool(cfg.neutralize_industry),
+                  bool(getattr(cfg, "neutralize_mcap", False)))
         out = neutralize_industry(out, sector_map=sector_map, mcap_df=mcap_df)
 
     return out

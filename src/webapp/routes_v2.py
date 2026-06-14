@@ -346,6 +346,14 @@ def backtest_detail_page(request: Request, tid: str):
                 mode="lines", name="策略净值",
                 line=dict(color="#42A5F5", width=2),
             ))
+            bench_df = arts.get("benchmark_returns")
+            if bench_df is not None and not bench_df.empty:
+                bench_nav = (1.0 + bench_df.iloc[:, 0].fillna(0)).cumprod()
+                fig.add_trace(go.Scatter(
+                    x=bench_nav.index, y=bench_nav.values,
+                    mode="lines", name="等权基准",
+                    line=dict(color="#9CA3AF", width=1.5),
+                ))
             fig.add_hline(y=1.0, line_dash="dot", line_color="#888")
             fig.update_layout(
                 title=dict(text="策略净值曲线（Top 组）",
@@ -382,6 +390,11 @@ def backtest_detail_page(request: Request, tid: str):
         "MaxDD":     _format_pct(metrics_raw.get("MaxDD")),
         "Calmar":    _format_num(metrics_raw.get("Calmar")),
         "WinRate":   _format_pct(metrics_raw.get("WinRate")),
+        "BenchmarkAnnReturn": _format_pct(metrics_raw.get("BenchmarkAnnReturn")),
+        "ExcessAnnReturn": _format_pct(metrics_raw.get("ExcessAnnReturn")),
+        "TrackingError": _format_pct(metrics_raw.get("TrackingError")),
+        "InformationRatio": _format_num(metrics_raw.get("InformationRatio")),
+        "Beta": _format_num(metrics_raw.get("Beta")),
         "N_days":    metrics_raw.get("N_days", "—"),
     }
 
@@ -486,6 +499,7 @@ def api_create_backtest(payload: dict = Body(...)):
 
     n_groups = int(CONFIG.backtest.n_groups)
     rebalance_days = int(CONFIG.backtest.rebalance_days)
+    rebalance_mode = str(getattr(CONFIG.backtest, "rebalance_mode", "every_n_days"))
 
     # 解析 execution（用户在新建回测页可覆盖默认值）
     execution: dict | None = None
@@ -537,6 +551,7 @@ def api_create_backtest(payload: dict = Body(...)):
         start=start, end=end,
         resolved_start=resolved_start, resolved_end=resolved_end,
         n_groups=n_groups,
+        rebalance_mode=rebalance_mode,
         rebalance_days=rebalance_days,
         top_group=n_groups,   # 固定取 Top = 最高分组（Q{n_groups}）
         name=name,

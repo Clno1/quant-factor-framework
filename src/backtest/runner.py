@@ -22,7 +22,7 @@ import pandas as pd
 
 from src.backtest.adhoc import adhoc_compose
 from src.backtest.composer import compose_factor
-from src.backtest.metrics import performance_summary
+from src.backtest.metrics import performance_summary, relative_performance_summary
 from src.backtest.quintile import quintile_backtest
 from src.backtest import store as bt_store
 from src.config import CONFIG
@@ -202,6 +202,10 @@ def _run_task(task_id: str) -> None:
     r_end = date_range.get("resolved_end")
     n_groups = int(task.get("n_groups") or CONFIG.backtest.n_groups)
     rebalance_days = int(task.get("rebalance_days") or CONFIG.backtest.rebalance_days)
+    rebalance_mode = str(
+        task.get("rebalance_mode")
+        or getattr(CONFIG.backtest, "rebalance_mode", "every_n_days")
+    )
     top_group = int(task.get("top_group") or n_groups)
     exec_cfg = _resolve_execution_config(task.get("execution") or {})
     require_open = exec_cfg["timing"] == "next_open"
@@ -228,6 +232,8 @@ def _run_task(task_id: str) -> None:
         composite = adhoc_result.composite
         returns = adhoc_result.returns
         open_prices = adhoc_result.open_prices
+        prices = adhoc_result.prices
+        volumes = adhoc_result.volumes
         open_coverage = (
             _validate_open_coverage(
                 task_id=task_id,
@@ -267,6 +273,8 @@ def _run_task(task_id: str) -> None:
         wide = load_wide_tables(universe=universe, require_open=require_open)
         returns = wide["returns"]
         open_prices = wide.get("open")
+        prices = wide.get("adj_close")
+        volumes = wide.get("volume")
         if require_open and (open_prices is None or open_prices.empty):
             raise FileNotFoundError(
                 f"[task={task_id}] universe={universe} requires open.parquet for "
@@ -311,7 +319,10 @@ def _run_task(task_id: str) -> None:
         factor_direction=+1,   # 合成后默认正向（权重已处理方向）
         n_groups=effective_n_groups,
         rebalance_days=rebalance_days,
+        rebalance_mode=rebalance_mode,
         open_df=open_prices,
+        price_df=prices,
+        volume_df=volumes,
         execution=exec_cfg,
     )
 
@@ -350,12 +361,17 @@ def _run_task(task_id: str) -> None:
 
     # 7) 指标
     metrics = performance_summary(top_returns)
+    metrics.update(relative_performance_summary(top_returns, result.benchmark_returns))
     log.info("[task=%s] metrics: %s", task_id, metrics)
 
     # 8) 落盘产物
     d = bt_store.task_dir(task_id)
     write_parquet(top_returns.to_frame("returns"), d / "returns.parquet")
     write_parquet(top_nav.to_frame("nav"), d / "nav.parquet")
+    if not result.benchmark_returns.empty:
+        write_parquet(result.benchmark_returns.to_frame("returns"), d / "benchmark_returns.parquet")
+    if not result.excess_returns.empty:
+        write_parquet(result.excess_returns.to_frame("returns"), d / "excess_returns.parquet")
     if not holdings_df.empty:
         # tickers 列是 list，parquet 支持（转成 object）
         write_parquet(holdings_df, d / "holdings.parquet")
@@ -376,6 +392,7 @@ def _run_task(task_id: str) -> None:
         "normalized_weights": compose_normalized_weights,
         "effective_n_groups": effective_n_groups,
         "effective_top_group": effective_top,
+        "rebalance_mode": rebalance_mode,
         "n_tickers": n_tickers,
         "n_trading_days": int(top_returns.shape[0]),
         "latest_holding_date": holdings_rows[-1]["date"] if holdings_rows else None,

@@ -28,6 +28,18 @@
         </div>
     </section>
 
+    <section class="chart-panel">
+        <div class="panel-title"><span>因子数据质量</span></div>
+        <div class="diag-grid">
+            <div><span>最近有效日期</span><span class="mono">{{ factor_quality.latest_date }}</span></div>
+            <div><span>最新有效股票数</span><span class="mono">{{ factor_quality.latest_valid }}</span></div>
+            <div><span>最新缺失率</span><span class="mono">{{ factor_quality.latest_missing }}</span></div>
+            <div><span>中位有效股票数</span><span class="mono">{{ factor_quality.median_valid }}</span></div>
+            <div><span>平均截面标准差</span><span class="mono">{{ factor_quality.avg_cross_section_std }}</span></div>
+            <div><span>最近 P5 / P95</span><span class="mono">{{ factor_quality.latest_p5 }} / {{ factor_quality.latest_p95 }}</span></div>
+        </div>
+    </section>
+
     <section class="table-panel">
         <div class="table-title">IC 汇总指标</div>
         <div class="table-wrap">
@@ -59,17 +71,65 @@
     </section>
 
     <section class="chart-panel">
-        <div class="panel-title"><span>IC 时序</span></div>
+        <div class="panel-title"><span>IC 预测力 · 时序与累计</span></div>
         <div class="plot" style="width:100%;height:450px;"
              data-plotly-json='{{ ic_fig_json|safe }}'></div>
     </section>
 
     <section class="chart-panel">
+        <div class="panel-title"><span>IC 预测力 · 分布</span></div>
+        <div class="plot" style="width:100%;height:360px;"
+             data-plotly-json='{{ ic_dist_fig_json|safe }}'></div>
+    </section>
+
+    <section class="chart-panel">
+        <div class="panel-title"><span>IC 预测力 · 滚动稳定性</span></div>
+        <div class="plot" style="width:100%;height:390px;"
+             data-plotly-json='{{ ic_rolling_fig_json|safe }}'></div>
+    </section>
+
+    <section class="chart-panel">
+        <div class="panel-title"><span>IC 预测力 · 月度热力图</span></div>
+        <div class="plot" style="width:100%;height:360px;"
+             data-plotly-json='{{ ic_heatmap_fig_json|safe }}'></div>
+    </section>
+
+    <section class="chart-panel">
         <div class="panel-title">
-            <span>五分位累计净值</span>
-            <a class="mono" href="/backtest/{{ name }}">查看完整回测 →</a>
+            <span>分层回测 · 五分位累计净值</span>
+            <a class="mono" href="/backtest/{{ name }}?universe={{ universe }}">查看完整回测 →</a>
         </div>
         <div class="plot" style="width:100%;height:460px;"
              data-plotly-json='{{ nav_fig_json|safe }}'></div>
+    </section>
+
+    <section class="chart-panel">
+        <div class="panel-title"><span>分层回测 · 分组收益与 Sharpe</span></div>
+        <div class="plot" style="width:100%;height:390px;"
+             data-plotly-json='{{ group_diag_fig_json|safe }}'></div>
+    </section>
+
+    <section class="chart-panel">
+        <div class="panel-title"><span>分层回测 · 单调性</span></div>
+        <div class="plot" style="width:100%;height:360px;"
+             data-plotly-json='{{ monotonicity_fig_json|safe }}'></div>
+    </section>
+
+    <section class="chart-panel">
+        <div class="panel-title"><span>分层回测 · 多空收益分布</span></div>
+        <div class="plot" style="width:100%;height:340px;"
+             data-plotly-json='{{ return_dist_fig_json|safe }}'></div>
+    </section>
+
+    <section class="chart-panel">
+        <div class="panel-title"><span>因子数据质量 · 覆盖率</span></div>
+        <div class="plot" style="width:100%;height:380px;"
+             data-plotly-json='{{ coverage_fig_json|safe }}'></div>
+    </section>
+
+    <section class="chart-panel">
+        <div class="panel-title"><span>因子数据质量 · 最近一期分布</span></div>
+        <div class="plot" style="width:100%;height:380px;"
+             data-plotly-json='{{ latest_dist_fig_json|safe }}'></div>
     </section>
 {% endblock %}

@@ -29,7 +29,8 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from src.backtest.metrics import performance_summary
+from src.backtest.metrics import performance_summary, relative_performance_summary
+from src.backtest.rebalance import get_rebalance_dates
 from src.config import CONFIG
 from src.utils.logger import get_logger
 
@@ -49,6 +50,9 @@ class QuintileResult:
     holdings_detail: pd.DataFrame = field(default_factory=pd.DataFrame)
     trades_detail: pd.DataFrame = field(default_factory=pd.DataFrame)
     costs_detail: pd.DataFrame = field(default_factory=pd.DataFrame)
+    benchmark_returns: pd.Series = field(default_factory=pd.Series)
+    benchmark_nav: pd.Series = field(default_factory=pd.Series)
+    excess_returns: pd.Series = field(default_factory=pd.Series)
     config: dict = field(default_factory=dict)
     execution_cost_bps_per_year: dict = field(default_factory=dict)  # 各组年化摩擦成本 bps
 
@@ -102,8 +106,8 @@ def _resolve_execution(execution: dict | None) -> dict:
 def _build_execution_details(
     assign_df: pd.DataFrame,
     return_index: pd.Index,
+    rebal_dates: pd.DatetimeIndex,
     n_groups: int,
-    rebalance_days: int,
     *,
     slippage_bps: float,
     commission_bps: float,
@@ -115,7 +119,6 @@ def _build_execution_details(
     trade_weight is signed: positive means buy, negative means sell.
     cost is charged on abs(trade_weight) using one-side bps cost.
     """
-    rebal_dates = assign_df.index[::rebalance_days]
     group_names = [f"Q{g}" for g in range(1, n_groups + 1)]
     single_side_cost_rate = (float(slippage_bps) + float(commission_bps)) / 10000.0
 
@@ -208,19 +211,27 @@ def _assign_groups_on_rebalance(
     factor_df: pd.DataFrame,
     rebalance_days: int,
     n_groups: int,
+    *,
+    rebalance_mode: str = "every_n_days",
+    tradable_mask: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """
     仅在调仓日做 qcut 分组；非调仓日 forward-fill 沿用上一次分组。
     输出：date x ticker，值 ∈ {1..n_groups} 或 NaN。
     """
-    dates = factor_df.index
-    rebal_mask = np.zeros(len(dates), dtype=bool)
-    rebal_mask[::rebalance_days] = True
-    rebal_dates = dates[rebal_mask]
+    dates = pd.DatetimeIndex(factor_df.index)
+    rebal_dates = get_rebalance_dates(
+        dates, mode=rebalance_mode, step_days=rebalance_days
+    )
 
     assign = pd.DataFrame(np.nan, index=dates, columns=factor_df.columns)
     for dt in rebal_dates:
-        row = factor_df.loc[dt].dropna()
+        row = factor_df.loc[dt]
+        if tradable_mask is not None:
+            if dt not in tradable_mask.index:
+                continue
+            row = row.where(tradable_mask.loc[dt].reindex(row.index).fillna(False))
+        row = row.dropna()
         if len(row) < n_groups:
             continue
         try:
@@ -235,9 +246,12 @@ def _assign_groups_on_rebalance(
     return assign
 
 
-def _compute_turnover(assign_df: pd.DataFrame, n_groups: int, rebalance_days: int) -> pd.DataFrame:
+def _compute_turnover(
+    assign_df: pd.DataFrame,
+    n_groups: int,
+    rebal_dates: pd.DatetimeIndex,
+) -> pd.DataFrame:
     """计算每组每次调仓的双向换手率（对称差集 / 两期持仓合计）。展示用。"""
-    rebal_dates = assign_df.index[::rebalance_days]
     rows = []
     prev_holdings: dict[int, set] = {g: set() for g in range(1, n_groups + 1)}
     for dt in rebal_dates:
@@ -257,6 +271,75 @@ def _compute_turnover(assign_df: pd.DataFrame, n_groups: int, rebalance_days: in
     return pd.DataFrame(rows).set_index("date")
 
 
+def _cfg_get(obj: object, key: str, default):
+    try:
+        return getattr(obj, key)
+    except Exception:  # noqa: BLE001
+        return default
+
+
+def build_tradable_mask(
+    *,
+    index: pd.Index,
+    columns: pd.Index,
+    returns_df: pd.DataFrame,
+    price_df: pd.DataFrame | None = None,
+    open_df: pd.DataFrame | None = None,
+    volume_df: pd.DataFrame | None = None,
+    timing: str = "close",
+) -> pd.DataFrame:
+    """
+    Build a decision-date tradability mask.
+
+    Rules use only information known on the decision date, except optional
+    next-open availability, which prevents impossible fills in historical data.
+    """
+    cfg = _cfg_get(CONFIG.backtest, "tradability", {})
+    enabled = bool(_cfg_get(cfg, "enabled", True))
+    mask = pd.DataFrame(True, index=index, columns=columns)
+    if not enabled:
+        return mask
+
+    idx = pd.DatetimeIndex(index)
+    cols = pd.Index(columns)
+
+    px = None
+    if price_df is not None and not price_df.empty:
+        px = price_df.reindex(index=idx, columns=cols)
+        min_price = float(_cfg_get(cfg, "min_price", 0.0) or 0.0)
+        mask &= px.notna()
+        if min_price > 0:
+            mask &= px >= min_price
+
+    vol = None
+    if volume_df is not None and not volume_df.empty:
+        vol = volume_df.reindex(index=idx, columns=cols)
+        mask &= vol.notna() & (vol > 0)
+        min_dv = float(_cfg_get(cfg, "min_dollar_volume", 0.0) or 0.0)
+        dv_window = int(_cfg_get(cfg, "dollar_volume_window", 20) or 20)
+        if min_dv > 0 and px is not None:
+            dollar_volume = (px * vol).rolling(
+                dv_window, min_periods=max(1, int(dv_window * 0.6))
+            ).mean()
+            mask &= dollar_volume >= min_dv
+
+    lookback = int(_cfg_get(cfg, "min_valid_return_lookback", 20) or 0)
+    min_ratio = float(_cfg_get(cfg, "min_valid_return_ratio", 0.0) or 0.0)
+    if lookback > 0 and min_ratio > 0:
+        r = returns_df.reindex(index=idx, columns=cols)
+        min_obs = max(1, int(np.ceil(lookback * min_ratio)))
+        valid_count = r.notna().rolling(lookback, min_periods=1).sum()
+        mask &= valid_count >= min_obs
+
+    if timing == "next_open" and open_df is not None and not open_df.empty:
+        require_next = bool(_cfg_get(cfg, "require_next_open", True))
+        o = open_df.reindex(index=idx, columns=cols)
+        if require_next:
+            mask &= o.shift(-1).notna() & (o.shift(-1) > 0)
+
+    return mask.fillna(False)
+
+
 def quintile_backtest(
     factor_df: pd.DataFrame,
     returns_df: pd.DataFrame,
@@ -265,6 +348,11 @@ def quintile_backtest(
     factor_direction: int = 0,
     *,
     open_df: pd.DataFrame | None = None,
+    price_df: pd.DataFrame | None = None,
+    volume_df: pd.DataFrame | None = None,
+    tradable_mask: pd.DataFrame | None = None,
+    benchmark_returns: pd.Series | None = None,
+    rebalance_mode: str | None = None,
     execution: dict | None = None,
 ) -> QuintileResult:
     """
@@ -285,6 +373,10 @@ def quintile_backtest(
     """
     n_groups = int(n_groups or CONFIG.backtest.n_groups)
     rebalance_days = int(rebalance_days or CONFIG.backtest.rebalance_days)
+    rebalance_mode = str(
+        rebalance_mode
+        or getattr(CONFIG.backtest, "rebalance_mode", "every_n_days")
+    ).lower()
     exec_cfg = _resolve_execution(execution)
 
     # 选择持有期收益矩阵
@@ -321,9 +413,41 @@ def quintile_backtest(
     f = factor_df.loc[common_dates, common_cols].copy()
     r = held_returns.loc[common_dates, common_cols].copy()
 
+    if tradable_mask is None:
+        tradable_mask = build_tradable_mask(
+            index=common_dates,
+            columns=common_cols,
+            returns_df=returns_df,
+            price_df=price_df,
+            open_df=open_df,
+            volume_df=volume_df,
+            timing=exec_cfg["timing"],
+        )
+    else:
+        tradable_mask = tradable_mask.reindex(
+            index=common_dates, columns=common_cols, fill_value=False
+        )
+    benchmark_base = (
+        benchmark_returns.reindex(common_dates)
+        if benchmark_returns is not None
+        else r.where(tradable_mask.shift(1).fillna(False)).mean(axis=1)
+    )
+    benchmark_base.name = "Benchmark"
+
     # 分组：以 t 日因子分组，持仓从 t+1 日生效 —— 故对 assign 做 shift(1)
-    assign = _assign_groups_on_rebalance(f, rebalance_days=rebalance_days, n_groups=n_groups)
+    assign = _assign_groups_on_rebalance(
+        f,
+        rebalance_days=rebalance_days,
+        n_groups=n_groups,
+        rebalance_mode=rebalance_mode,
+        tradable_mask=tradable_mask,
+    )
     assign_held = assign.shift(1)
+    rebal_dates = get_rebalance_dates(
+        pd.DatetimeIndex(f.index),
+        mode=rebalance_mode,
+        step_days=rebalance_days,
+    )
 
     # 各组日收益（等权，毛收益）
     group_cols = [f"Q{g}" for g in range(1, n_groups + 1)]
@@ -338,8 +462,8 @@ def quintile_backtest(
     holdings_detail, trades_detail, costs_detail = _build_execution_details(
         assign,
         gross_ret.index,
+        rebal_dates,
         n_groups=n_groups,
-        rebalance_days=rebalance_days,
         slippage_bps=exec_cfg["slippage_bps"],
         commission_bps=exec_cfg["commission_bps"],
     )
@@ -368,19 +492,28 @@ def quintile_backtest(
         direction = int(np.sign(factor_direction)) or 1
     ls = raw_ls * direction
     ls.name = "LongShort"
+    top_returns = group_ret[top].rename(top)
+    benchmark_aligned = benchmark_base.reindex(group_ret.index).dropna()
+    excess = (top_returns - benchmark_base).rename("Excess")
 
     # 净值
     group_nav = (1.0 + group_ret.fillna(0)).cumprod()
     ls_nav = (1.0 + ls.fillna(0)).cumprod()
     ls_nav.name = "LongShort"
+    benchmark_nav = (1.0 + benchmark_base.reindex(group_ret.index).fillna(0)).cumprod()
+    benchmark_nav.name = "Benchmark"
 
     # 展示用换手率（双向）
-    turnover = _compute_turnover(assign, n_groups=n_groups, rebalance_days=rebalance_days)
+    turnover = _compute_turnover(assign, n_groups=n_groups, rebal_dates=rebal_dates)
 
     # 每组 + Long-Short 绩效
     metrics_rows = {}
     for col in group_cols:
         metrics_rows[col] = performance_summary(group_ret[col])
+        if col == top:
+            metrics_rows[col].update(
+                relative_performance_summary(group_ret[col], benchmark_base)
+            )
     metrics_rows["LongShort"] = performance_summary(ls)
     metrics_df = pd.DataFrame(metrics_rows).T
 
@@ -393,10 +526,10 @@ def quintile_backtest(
         metrics_df["AvgTurnover"] = metrics_df.index.map(avg_to.to_dict())
 
     log.info(
-        "Quintile backtest done: n_groups=%d, rebalance=%dd, direction=%+d, "
+        "Quintile backtest done: n_groups=%d, rebalance=%s/%dd, direction=%+d, "
         "timing=%s, slippage=%.1fbps, commission=%.1fbps, "
         "LongShort AnnReturn=%.4f, Sharpe=%.3f, MaxDD=%.4f",
-        n_groups, rebalance_days, direction,
+        n_groups, rebalance_mode, rebalance_days, direction,
         exec_cfg["timing"], exec_cfg["slippage_bps"], exec_cfg["commission_bps"],
         metrics_df.loc["LongShort", "AnnReturn"],
         metrics_df.loc["LongShort", "Sharpe"],
@@ -417,9 +550,13 @@ def quintile_backtest(
         config={
             "n_groups": n_groups,
             "rebalance_days": rebalance_days,
+            "rebalance_mode": rebalance_mode,
             "direction": direction,
             "execution": exec_cfg,
         },
+        benchmark_returns=benchmark_aligned,
+        benchmark_nav=benchmark_nav,
+        excess_returns=excess.dropna(),
         execution_cost_bps_per_year=cost_bps_per_year,
     )
 

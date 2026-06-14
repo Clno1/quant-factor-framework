@@ -32,6 +32,8 @@ class AdhocResult:
     composite: pd.DataFrame                 # date × ticker（zscore 加权合成）
     returns: pd.DataFrame                   # date × ticker 日收益（喂给 quintile_backtest）
     open_prices: pd.DataFrame               # date × ticker 复权开盘价（execution=next_open 用）
+    prices: pd.DataFrame                    # date × ticker 复权收盘价（可交易过滤用）
+    volumes: pd.DataFrame                   # date × ticker 成交量（可交易过滤用）
     components: list[StrategyComponent]
     normalized_weights: dict[str, float]
     date_range: tuple[str, str]
@@ -223,6 +225,8 @@ def adhoc_compose(
         composite=composite,
         returns=returns_df,
         open_prices=open_df_out,
+        prices=wide["adj_close"].reindex(index=returns_df.index, columns=composite.columns),
+        volumes=wide["volume"].reindex(index=returns_df.index, columns=composite.columns),
         components=list(components),
         normalized_weights=norm,
         date_range=(

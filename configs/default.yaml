@@ -56,7 +56,8 @@ preprocessing:
   winsorize_n: 3                   # MAD 倍数
   standardize: true                # 是否做 Z-score 标准化
   neutralize_industry: false       # MVP 暂不启用，接口已预留
-  neutralize_mcap: false
+  neutralize_mcap: false           # 需要 data/processed/<UNIVERSE>/market_cap.parquet
+  neutralize_min_obs: 30
 
 # 单因子 IC 分析
 ic_analysis:
@@ -67,6 +68,7 @@ ic_analysis:
 # 五分位回测
 backtest:
   n_groups: 5                      # 分组数（Quintile = 5）
+  rebalance_mode: "month_end"      # every_n_days / month_end / week_end
   rebalance_days: 5                # 调仓周期（交易日）
   weight_method: "equal"           # 等权
   transaction_cost: 0.0005         # （已废弃，由 execution.commission_bps 替代）
@@ -80,6 +82,16 @@ backtest:
     slippage_bps: 5                # 单边滑点（万分位 ×10），双边吃 5+5=10 bps
     commission_bps: 2              # 单边手续费（万分位 ×10），双边吃 2+2=4 bps
     min_open_coverage: 0.95        # next_open 下 open 价格矩阵最低非空覆盖率
+
+  # 调仓日可交易过滤。规则在 T 日决策时应用；next_open 模式额外要求 T+1 开盘价可用。
+  tradability:
+    enabled: true
+    min_price: 1.0
+    min_dollar_volume: 1000000     # 过去 dollar_volume_window 日均成交额下限；0 表示关闭
+    dollar_volume_window: 20
+    min_valid_return_lookback: 20
+    min_valid_return_ratio: 0.67
+    require_next_open: true
 
 # 当前启用因子（与研报 8 因子对齐）
 factors:

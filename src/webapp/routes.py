@@ -32,15 +32,24 @@ from src.config import CONFIG
 from src.visualization import (
     fig_to_json,
     plot_drawdown_plotly,
+    plot_factor_coverage_plotly,
+    plot_factor_latest_distribution_plotly,
     plot_group_bar_plotly,
+    plot_group_diagnostics_plotly,
+    plot_group_monotonicity_plotly,
+    plot_ic_distribution_plotly,
+    plot_ic_monthly_heatmap_plotly,
+    plot_ic_rolling_plotly,
     plot_ic_series_plotly,
     plot_quintile_nav_plotly,
+    plot_return_distribution_plotly,
 )
 from src.webapp.results_store import (
     DEFAULT_UNIVERSE,
     list_factors,
     list_universes,
     load_factor,
+    load_factor_values,
 )
 
 _HERE = Path(__file__).resolve().parent
@@ -136,6 +145,42 @@ def _group_metrics_table(metrics_df: pd.DataFrame) -> list[dict]:
     return rows
 
 
+def _factor_quality_summary(factor_df: pd.DataFrame | None) -> dict:
+    empty = {
+        "latest_date": "—",
+        "latest_valid": "—",
+        "latest_missing": "—",
+        "median_valid": "—",
+        "avg_cross_section_std": "—",
+        "latest_p5": "—",
+        "latest_p95": "—",
+    }
+    if factor_df is None or factor_df.empty:
+        return empty
+
+    f = factor_df.apply(pd.to_numeric, errors="coerce").replace([math.inf, -math.inf], float("nan"))
+    total = max(len(f.columns), 1)
+    active = f.dropna(how="all")
+    if active.empty:
+        return empty
+
+    latest_date = active.index.max()
+    latest = pd.to_numeric(active.loc[latest_date], errors="coerce").dropna()
+    valid_count = f.notna().sum(axis=1)
+    cross_section_std = f.std(axis=1, ddof=1).replace([math.inf, -math.inf], float("nan")).dropna()
+
+    latest_valid = int(latest.shape[0])
+    return {
+        "latest_date": pd.Timestamp(latest_date).strftime("%Y-%m-%d"),
+        "latest_valid": f"{latest_valid:,}",
+        "latest_missing": _format_pct(1.0 - latest_valid / total),
+        "median_valid": f"{int(valid_count.median()):,}" if not valid_count.empty else "—",
+        "avg_cross_section_std": _format_num(float(cross_section_std.mean())) if not cross_section_std.empty else "—",
+        "latest_p5": _format_num(float(latest.quantile(0.05))) if not latest.empty else "—",
+        "latest_p95": _format_num(float(latest.quantile(0.95))) if not latest.empty else "—",
+    }
+
+
 # ----------------------------- 页面 -----------------------------
 
 @router.get("/", response_class=HTMLResponse)
@@ -206,9 +251,34 @@ def factor_detail(
         )
 
     ic_fig = plot_ic_series_plotly(data["ic"], title=f"[{universe}] {name} · IC 时序")
+    ic_dist_fig = plot_ic_distribution_plotly(data["ic"], title=f"[{universe}] {name} · IC 分布")
+    ic_rolling_fig = plot_ic_rolling_plotly(data["ic"], title=f"[{universe}] {name} · 滚动 IC 稳定性")
+    ic_heatmap_fig = plot_ic_monthly_heatmap_plotly(data["ic"], title=f"[{universe}] {name} · 月度 IC 热力图")
     nav_fig = plot_quintile_nav_plotly(
         data["group_nav"], data["ls_nav"],
         title=f"[{universe}] {name} · 五分位累计净值",
+    )
+    group_diag_fig = plot_group_diagnostics_plotly(
+        data["group_metrics"],
+        title=f"[{universe}] {name} · 分组收益与 Sharpe",
+    )
+    monotonicity_fig = plot_group_monotonicity_plotly(
+        data["group_metrics"],
+        column="AnnReturn",
+        title=f"[{universe}] {name} · 分组单调性",
+    )
+    return_dist_fig = plot_return_distribution_plotly(
+        data["ls_returns"],
+        title=f"[{universe}] {name} · 多空日收益分布",
+    )
+    factor_values = load_factor_values(name, universe=universe)
+    coverage_fig = plot_factor_coverage_plotly(
+        factor_values if factor_values is not None else pd.DataFrame(),
+        title=f"[{universe}] {name} · 因子覆盖率与缺失率",
+    )
+    latest_dist_fig = plot_factor_latest_distribution_plotly(
+        factor_values if factor_values is not None else pd.DataFrame(),
+        title=f"[{universe}] {name} · 最近一期因子分布",
     )
 
     return templates.TemplateResponse(request, "factor.html", {
@@ -227,8 +297,17 @@ def factor_detail(
             "t_stat":            _format_num(data["ic_summary"].get("t_stat")),
             "N":                 data["ic_summary"].get("N", 0),
         },
+        "factor_quality": _factor_quality_summary(factor_values),
         "ic_fig_json": fig_to_json(ic_fig),
+        "ic_dist_fig_json": fig_to_json(ic_dist_fig),
+        "ic_rolling_fig_json": fig_to_json(ic_rolling_fig),
+        "ic_heatmap_fig_json": fig_to_json(ic_heatmap_fig),
         "nav_fig_json": fig_to_json(nav_fig),
+        "group_diag_fig_json": fig_to_json(group_diag_fig),
+        "monotonicity_fig_json": fig_to_json(monotonicity_fig),
+        "return_dist_fig_json": fig_to_json(return_dist_fig),
+        "coverage_fig_json": fig_to_json(coverage_fig),
+        "latest_dist_fig_json": fig_to_json(latest_dist_fig),
     })
 
 

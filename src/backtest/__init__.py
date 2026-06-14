@@ -7,6 +7,7 @@ from src.backtest.metrics import (
     max_drawdown,
 )
 from src.backtest.quintile import QuintileResult, quintile_backtest
+from src.backtest.double_sort import DoubleSortResult, double_sort_backtest
 from src.backtest.composer import (
     CompositionResult,
     FactorDataMissingError,
@@ -20,6 +21,8 @@ from src.backtest.adhoc import (
 __all__ = [
     "QuintileResult",
     "quintile_backtest",
+    "DoubleSortResult",
+    "double_sort_backtest",
     "performance_summary",
     "annualized_return",
     "annualized_volatility",

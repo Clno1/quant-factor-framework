@@ -87,6 +87,59 @@ def performance_summary(daily_ret: pd.Series) -> dict:
     }
 
 
+def tracking_error(excess_ret: pd.Series) -> float:
+    r = excess_ret.dropna()
+    if r.empty:
+        return np.nan
+    return float(r.std(ddof=1) * np.sqrt(_periods_per_year()))
+
+
+def information_ratio(excess_ret: pd.Series) -> float:
+    r = excess_ret.dropna()
+    if r.empty:
+        return np.nan
+    te = tracking_error(r)
+    if te == 0 or pd.isna(te):
+        return np.nan
+    return float(annualized_return(r) / te)
+
+
+def beta_to_benchmark(strategy_ret: pd.Series, benchmark_ret: pd.Series) -> float:
+    pair = pd.concat([strategy_ret, benchmark_ret], axis=1, keys=["s", "b"]).dropna()
+    if pair.empty:
+        return np.nan
+    var_b = pair["b"].var(ddof=1)
+    if var_b == 0 or pd.isna(var_b):
+        return np.nan
+    return float(pair["s"].cov(pair["b"]) / var_b)
+
+
+def relative_performance_summary(
+    strategy_ret: pd.Series,
+    benchmark_ret: pd.Series,
+) -> dict:
+    """Benchmark-relative metrics for daily strategy and benchmark returns."""
+    pair = pd.concat(
+        [strategy_ret, benchmark_ret], axis=1, keys=["strategy", "benchmark"]
+    ).dropna()
+    if pair.empty:
+        return {
+            "BenchmarkAnnReturn": np.nan,
+            "ExcessAnnReturn": np.nan,
+            "TrackingError": np.nan,
+            "InformationRatio": np.nan,
+            "Beta": np.nan,
+        }
+    excess = pair["strategy"] - pair["benchmark"]
+    return {
+        "BenchmarkAnnReturn": annualized_return(pair["benchmark"]),
+        "ExcessAnnReturn": annualized_return(excess),
+        "TrackingError": tracking_error(excess),
+        "InformationRatio": information_ratio(excess),
+        "Beta": beta_to_benchmark(pair["strategy"], pair["benchmark"]),
+    }
+
+
 __all__ = [
     "annualized_return",
     "annualized_volatility",
@@ -95,4 +148,8 @@ __all__ = [
     "calmar_ratio",
     "win_rate",
     "performance_summary",
+    "tracking_error",
+    "information_ratio",
+    "beta_to_benchmark",
+    "relative_performance_summary",
 ]

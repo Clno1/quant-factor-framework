@@ -7,6 +7,14 @@
 
 ---
 
+## 项目全流程图
+
+![Quant 项目全流程图](quant_project_flowchart.svg)
+
+本地 PNG 预览版：[quant_project_flowchart.svg.png](quant_project_flowchart.svg.png)
+
+---
+
 ## 特性
 
 - 🎯 **股票池**：S&P 500 成分股（FMP 直拉，含 GICS sector）
@@ -148,7 +156,13 @@ outputs/backtests/<UUID>/
   └─ log.txt          # 任务执行日志
 ```
 
-**合成算法**：`Σ wᵢ · Zscore(因子ᵢ)` → 五分位回测 → 取 Top 组（Q_n）作为策略持仓与收益。
+**合成算法**：`Σ wᵢ · Zscore(因子ᵢ)` → 分组回测 → 取 Top 组（Q_n）作为策略持仓与收益。默认按月末调仓，可在配置中切换为固定 N 日或周末调仓。
+
+**研究正确性增强**：
+- 调仓日先应用可交易过滤：价格、成交量、成交额、有效收益样本数，以及 `next_open` 下的开盘价可用性。
+- 详情页同时展示股票池等权基准、超额收益、跟踪误差、信息比率和 Beta。
+- 支持行业/市值中性化；市值中性化需要提供 `data/processed/<UNIVERSE>/market_cap.parquet`。
+- 新增独立双重排序模块，可在存在市值矩阵时输出 size-controlled robustness diagnostic。
 
 **成交模型（v3 新增）**：让回测尽量贴近实盘可达上限。
 

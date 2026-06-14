@@ -55,25 +55,32 @@ a:hover { color: var(--text-0); }
 
 .mono { font-family: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace; }
 
-/* ------------------ 导航 ------------------ */
-.navbar {
+/* ------------------ 左侧大导航 ------------------ */
+.app-shell {
+    min-height: 100vh;
+    display: grid;
+    grid-template-columns: 260px minmax(0, 1fr);
+}
+
+.sidebar {
     position: sticky;
     top: 0;
-    z-index: 50;
-    background: linear-gradient(180deg, rgba(14,17,23,0.95), rgba(14,17,23,0.78));
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    border-bottom: 1px solid var(--border);
+    height: 100vh;
+    z-index: 60;
+    padding: 26px 16px;
+    background:
+        linear-gradient(180deg, rgba(26, 31, 46, 0.96), rgba(10, 13, 22, 0.96)),
+        rgba(14, 17, 23, 0.94);
+    border-right: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 12px 0 34px rgba(0, 0, 0, 0.24);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
 }
-.nav-inner {
-    max-width: 1280px;
-    margin: 0 auto;
-    padding: 14px 24px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
+
+.app-main {
+    min-width: 0;
 }
+
 .brand {
     display: flex;
     align-items: center;
@@ -83,6 +90,27 @@ a:hover { color: var(--text-0); }
     color: var(--text-0);
     letter-spacing: .5px;
 }
+
+.side-brand {
+    align-items: flex-start;
+    margin: 0 8px 28px;
+}
+
+.side-brand strong {
+    display: block;
+    font-size: 17px;
+    line-height: 1.2;
+}
+
+.side-brand small {
+    display: block;
+    margin-top: 4px;
+    color: var(--text-2);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0;
+}
+
 .brand-badge {
     width: 28px; height: 28px; border-radius: 8px;
     background: linear-gradient(135deg, var(--accent-2), var(--accent-3));
@@ -90,21 +118,112 @@ a:hover { color: var(--text-0); }
     font-size: 13px; font-weight: 700;
     box-shadow: 0 4px 14px rgba(30, 136, 229, 0.35);
 }
-.nav-links { display: flex; gap: 18px; align-items: center; }
-.nav-links a {
-    color: var(--text-2); font-weight: 500; padding: 6px 2px;
-    border-bottom: 2px solid transparent;
+
+.side-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
 }
-.nav-links a.active, .nav-links a:hover {
+
+.side-group {
+    border-radius: 8px;
+}
+
+.side-group[open] {
+    background: rgba(255, 255, 255, 0.025);
+}
+
+.side-group-title,
+.side-group-link {
+    min-height: 46px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 14px;
+    color: var(--text-2);
+    font-weight: 700;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    cursor: pointer;
+    user-select: none;
+    transition: color .15s ease, background .15s ease, border-color .15s ease, transform .15s ease;
+}
+
+.side-group-title::-webkit-details-marker {
+    display: none;
+}
+
+.side-group-title::marker {
+    content: "";
+}
+
+.side-group-title::after {
+    content: "⌄";
+    color: var(--text-2);
+    font-size: 13px;
+    transform: rotate(-90deg);
+    transition: transform .15s ease, color .15s ease;
+}
+
+.side-group[open] > .side-group-title::after {
+    transform: rotate(0deg);
+    color: var(--text-1);
+}
+
+.side-group-title:hover,
+.side-group-link:hover {
     color: var(--text-0);
-    border-bottom-color: var(--accent-2);
+    background: rgba(66, 165, 245, 0.10);
+    border-color: rgba(66, 165, 245, 0.14);
+}
+
+.side-group-link.active {
+    color: #fff;
+    background: linear-gradient(135deg, #2557FF 0%, #3B7CFF 100%);
+    border-color: rgba(255, 255, 255, 0.16);
+    box-shadow: 0 10px 24px rgba(30, 88, 255, 0.28);
+}
+
+.side-subnav {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 6px 0 8px 12px;
+    margin-left: 14px;
+    border-left: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.side-link {
+    min-height: 38px;
+    display: flex;
+    align-items: center;
+    padding: 8px 12px;
+    color: var(--text-2);
+    font-size: 13px;
+    font-weight: 600;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    transition: color .15s ease, background .15s ease, border-color .15s ease;
+}
+
+.side-link:hover {
+    color: var(--text-0);
+    background: rgba(66, 165, 245, 0.10);
+    border-color: rgba(66, 165, 245, 0.14);
+}
+
+.side-link.active {
+    color: #fff;
+    background: linear-gradient(135deg, #2557FF 0%, #3B7CFF 100%);
+    border-color: rgba(255, 255, 255, 0.16);
+    box-shadow: 0 10px 24px rgba(30, 88, 255, 0.28);
 }
 
 /* ------------------ 容器 / 主体 ------------------ */
 .container {
     max-width: 1280px;
     margin: 0 auto;
-    padding: 28px 24px 64px;
+    padding: 32px 28px 64px;
 }
 h1.page-title {
     font-size: 24px; font-weight: 600;
@@ -409,12 +528,70 @@ footer.site-footer {
 
 /* ------------------ 响应式 ------------------ */
 @media (max-width: 1024px) {
+    .app-shell {
+        display: block;
+    }
+    .sidebar {
+        position: sticky;
+        top: 0;
+        height: auto;
+        padding: 14px 14px 12px;
+        border-right: 0;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        box-shadow: 0 10px 26px rgba(0, 0, 0, 0.22);
+    }
+    .side-brand {
+        margin: 0 2px 12px;
+    }
+    .side-nav {
+        flex-direction: row;
+        align-items: flex-start;
+        overflow-x: auto;
+        padding-bottom: 2px;
+        scrollbar-width: none;
+    }
+    .side-nav::-webkit-scrollbar {
+        display: none;
+    }
+    .side-group,
+    .side-group-link {
+        flex: 0 0 auto;
+        min-width: 160px;
+    }
+    .side-group-title,
+    .side-group-link {
+        min-height: 42px;
+        white-space: nowrap;
+    }
+    .side-subnav {
+        margin-left: 0;
+        padding-left: 0;
+        border-left: 0;
+    }
+    .side-link {
+        white-space: nowrap;
+    }
     .cards { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 640px) {
-    .nav-inner { padding: 12px 16px; }
-    .nav-links { gap: 12px; }
-    .nav-links a { font-size: 13px; }
+    .sidebar { padding: 12px 10px 10px; }
+    .brand-badge { width: 26px; height: 26px; border-radius: 7px; }
+    .side-brand strong { font-size: 15px; }
+    .side-brand small { display: none; }
+    .side-group,
+    .side-group-link {
+        min-width: 148px;
+    }
+    .side-group-title,
+    .side-group-link {
+        padding: 9px 10px;
+        font-size: 13px;
+    }
+    .side-link {
+        min-height: 34px;
+        padding: 7px 9px;
+        font-size: 12px;
+    }
     .container { padding: 16px 14px 40px; }
     h1.page-title { font-size: 20px; }
     .cards { grid-template-columns: 1fr; gap: 10px; }

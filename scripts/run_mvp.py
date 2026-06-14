@@ -33,7 +33,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.analysis import compute_ic, ic_summary  # noqa: E402
-from src.backtest import quintile_backtest  # noqa: E402
+from src.backtest import double_sort_backtest, quintile_backtest  # noqa: E402
 from src.config import CONFIG  # noqa: E402
 from src.data import build_wide_tables, get_universe  # noqa: E402
 from src.factors import FACTOR_REGISTRY, get_factor  # noqa: E402
@@ -141,7 +141,11 @@ def run_pipeline_for_universe(
         log.info("Raw factor shape=%s, non-NaN coverage=%.2f%%",
                  raw.shape, 100 * raw.notna().mean().mean())
 
-        clean = preprocess_factor(raw, sector_map=wide.get("sector"))
+        clean = preprocess_factor(
+            raw,
+            sector_map=wide.get("sector"),
+            mcap_df=wide.get("market_cap"),
+        )
         log.info("Preprocessed shape=%s", clean.shape)
 
         # 落盘因子原始值矩阵（用于策略合成 composer 读取）
@@ -162,7 +166,32 @@ def run_pipeline_for_universe(
             clean, returns,
             factor_direction=factor.direction,
             n_groups=n_groups,
+            rebalance_mode=str(getattr(CONFIG.backtest, "rebalance_mode", "every_n_days")),
+            open_df=wide.get("open"),
+            price_df=wide.get("adj_close"),
+            volume_df=wide.get("volume"),
         )
+
+        # If point-in-time market cap is available, persist a size-controlled
+        # independent double-sort diagnostic for robustness checks.
+        mcap = wide.get("market_cap")
+        if mcap is not None and not mcap.empty:
+            ds = double_sort_backtest(
+                clean,
+                mcap,
+                returns,
+                rebalance_mode=str(getattr(CONFIG.backtest, "rebalance_mode", "every_n_days")),
+                open_df=wide.get("open"),
+                price_df=wide.get("adj_close"),
+                volume_df=wide.get("volume"),
+            )
+            fdir = factor_dir(fname, universe=universe)
+            ds.factor_returns.to_frame("returns").to_parquet(
+                fdir / "double_sort_returns.parquet"
+            )
+            ds.factor_nav.to_frame("nav").to_parquet(
+                fdir / "double_sort_nav.parquet"
+            )
 
         # 静态图（保留英文标题，避免 matplotlib 中文字体问题）
         fdir = factor_dir(fname, universe=universe)
