@@ -38,6 +38,17 @@ from src.backtest.runner import get_runner
 from src.config import CONFIG
 from src.factors import assert_valid_factor_ids, get_factor_catalog, list_factor_ids
 from src.factors.library import FactorLibraryError
+from src.papertrading import (
+    PaperTradingValidationError,
+    create_account as create_paper_account,
+    delete_account as delete_paper_account,
+    list_accounts as list_paper_accounts,
+    load_account as load_paper_account,
+    load_account_artifacts,
+    run_account_once,
+)
+from src.papertrading.definition import create_account_payload
+from src.papertrading.target import generate_target_weights
 from src.strategies import (
     StrategyComponent,
     StrategyDefinition,
@@ -92,6 +103,15 @@ def _format_num(x, digits: int = 3) -> str:
     return f"{x:.{digits}f}"
 
 
+def _format_money(x, digits: int = 2) -> str:
+    if x is None or (isinstance(x, float) and (math.isnan(x) or math.isinf(x))):
+        return "—"
+    try:
+        return f"${float(x):,.{digits}f}"
+    except (TypeError, ValueError):
+        return "—"
+
+
 def _enabled_universes() -> list[str]:
     """配置 + 已有产物的并集。"""
     try:
@@ -122,6 +142,116 @@ def _factor_catalog_payload() -> list[dict]:
             "inputs": e.inputs,
         })
     return rows
+
+
+def _strategy_component_rows(strategy: StrategyDefinition) -> list[dict[str, Any]]:
+    catalog = get_factor_catalog()
+    rows: list[dict[str, Any]] = []
+    for c in strategy.components:
+        entry = catalog.get(c.factor_id)
+        rows.append({
+            "factor_id": c.factor_id,
+            "display_name": entry.display_name if entry else c.factor_id,
+            "category": entry.category if entry else "—",
+            "weight": c.weight,
+        })
+    return rows
+
+
+def _default_universe() -> str:
+    enabled = _enabled_universes()
+    try:
+        configured = str(CONFIG.universes.default).upper()
+        if configured in enabled:
+            return configured
+    except Exception:  # noqa: BLE001
+        pass
+    return enabled[0] if enabled else "SP500"
+
+
+def _normalize_ranking_universe(raw: str | None) -> str:
+    value = str(raw or "").strip()
+    if not value:
+        return _default_universe()
+    if value.lower().startswith("watchlist:"):
+        return f"watchlist:{value.split(':', 1)[1].strip()}"
+    return value.upper()
+
+
+def _resolve_watchlist_snapshot(universe: str) -> tuple[dict[str, Any] | None, str]:
+    if not universe.lower().startswith("watchlist:"):
+        return None, universe
+    wid = universe.split(":", 1)[1].strip()
+    from src.watchlists import load_watchlist
+    wl = load_watchlist(wid)
+    if wl is None:
+        raise HTTPException(status_code=404, detail=f"股票池不存在: {wid}")
+    wl.validate()
+    return wl.to_dict(), wl.name
+
+
+def _ranking_universe_options() -> tuple[list[str], list[dict[str, Any]]]:
+    from src.watchlists import list_watchlists
+    return _enabled_universes(), list_watchlists()
+
+
+def _build_strategy_ranking(
+    *,
+    strategy: StrategyDefinition,
+    universe: str,
+    asof: str | None,
+) -> dict[str, Any]:
+    watchlist_snapshot, universe_label = _resolve_watchlist_snapshot(universe)
+    if not universe.lower().startswith("watchlist:"):
+        enabled = _enabled_universes()
+        if universe not in enabled:
+            raise HTTPException(
+                status_code=400,
+                detail=f"未知股票池 {universe}，可选: {enabled}",
+            )
+
+    target = generate_target_weights(
+        strategy=strategy,
+        universe=universe,
+        watchlist_snapshot=watchlist_snapshot,
+        asof=asof or None,
+        n_groups=int(CONFIG.backtest.n_groups),
+        top_group=int(CONFIG.backtest.n_groups),
+    )
+    df = target.target_weights.copy()
+    if df.empty:
+        rows: list[dict[str, Any]] = []
+    else:
+        df = df.dropna(subset=["score"]).copy()
+        df = df.sort_values("score", ascending=False).reset_index(drop=True)
+        df.insert(0, "rank", range(1, len(df) + 1))
+        df["is_target"] = df["target_weight"].fillna(0) > 0
+        df["score"] = df["score"].astype(float)
+        df["decision_price"] = pd.to_numeric(df["decision_price"], errors="coerce")
+        df["target_weight"] = pd.to_numeric(df["target_weight"], errors="coerce").fillna(0.0)
+        rows = _sanitize(df.to_dict(orient="records"))
+
+    target_count = sum(1 for r in rows if r.get("is_target"))
+    stock_link_universe = None if universe.lower().startswith("watchlist:") else universe
+    return {
+        "strategy": strategy.to_dict(),
+        "universe": universe,
+        "universe_label": universe_label,
+        "stock_link_universe": stock_link_universe,
+        "asof": asof or "",
+        "decision_date": target.decision_date,
+        "rows": rows,
+        "row_count": len(rows),
+        "target_count": target_count,
+        "effective_n_groups": target.effective_n_groups,
+        "top_group": target.top_group,
+        "normalized_weights": target.normalized_weights,
+        "tickers_used": len(target.tickers_used),
+        "tickers_missing": target.tickers_missing,
+        "warnings": target.warnings,
+        "score_max": max((float(r["score"]) for r in rows if r.get("score") is not None), default=None),
+        "score_min": min((float(r["score"]) for r in rows if r.get("score") is not None), default=None),
+    }
 
 
 # ---------------------------------------------------------------
@@ -184,16 +314,7 @@ def strategy_detail_page(request: Request, sid: str):
     s = load_strategy(sid)
     if s is None:
         raise HTTPException(status_code=404, detail=f"Strategy not found: {sid}")
-    catalog = get_factor_catalog()
-    components = []
-    for c in s.components:
-        entry = catalog.get(c.factor_id)
-        components.append({
-            "factor_id": c.factor_id,
-            "display_name": entry.display_name if entry else c.factor_id,
-            "category": entry.category if entry else "—",
-            "weight": c.weight,
-        })
+    components = _strategy_component_rows(s)
     total_abs = sum(abs(c.weight) for c in s.components) or 1.0
     weights_norm = [{"factor_id": c.factor_id, "weight": c.weight / total_abs}
                     for c in s.components]
@@ -227,6 +348,45 @@ def strategy_detail_page(request: Request, sid: str):
     })
 
 
+@router_v2.get("/strategies/{sid}/ranking", response_class=HTMLResponse)
+def strategy_ranking_page(
+    request: Request,
+    sid: str,
+    universe: str | None = Query(None),
+    asof: str | None = Query(None),
+):
+    strategy = load_strategy(sid)
+    if strategy is None:
+        raise HTTPException(status_code=404, detail=f"Strategy not found: {sid}")
+    selected_universe = _normalize_ranking_universe(universe)
+    presets, watchlists = _ranking_universe_options()
+    ranking: dict[str, Any] | None = None
+    error = ""
+    try:
+        ranking = _build_strategy_ranking(
+            strategy=strategy,
+            universe=selected_universe,
+            asof=(asof or "").strip() or None,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        error = str(e)
+
+    return templates.TemplateResponse(request, "strategy_ranking.html", {
+        "title": f"策略排行 · {strategy.name}",
+        "strategy": strategy.to_dict(),
+        "components": _strategy_component_rows(strategy),
+        "ranking": ranking,
+        "error": error,
+        "selected_universe": selected_universe,
+        "selected_asof": (asof or "").strip(),
+        "preset_universes": presets,
+        "watchlists": watchlists,
+        "universes": _enabled_universes(),
+    })
+
+
 # ---------- API：策略 ----------
 
 @router_v2.get("/api/strategies")
@@ -240,6 +400,29 @@ def api_get_strategy(sid: str):
     if s is None:
         raise HTTPException(status_code=404, detail="Strategy not found")
     return JSONResponse(_sanitize(s.to_dict()))
+
+
+@router_v2.get("/api/strategies/{sid}/ranking")
+def api_get_strategy_ranking(
+    sid: str,
+    universe: str | None = Query(None),
+    asof: str | None = Query(None),
+):
+    strategy = load_strategy(sid)
+    if strategy is None:
+        raise HTTPException(status_code=404, detail="Strategy not found")
+    selected_universe = _normalize_ranking_universe(universe)
+    try:
+        ranking = _build_strategy_ranking(
+            strategy=strategy,
+            universe=selected_universe,
+            asof=(asof or "").strip() or None,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(e))
+    return JSONResponse(_sanitize(ranking))
 
 
 @router_v2.post("/api/strategies")
@@ -311,6 +494,8 @@ def backtests_new_page(
     default_end = str(CONFIG.date_range.end)
     default_exec = {
         "timing": str(getattr(CONFIG.backtest.execution, "timing", "next_open")),
+        "fee_model": str(getattr(CONFIG.backtest.execution, "fee_model", "ibkr_us_pro_fixed")),
+        "slippage_model": str(getattr(CONFIG.backtest.execution, "slippage_model", "volume_share")),
         "slippage_bps": float(getattr(CONFIG.backtest.execution, "slippage_bps", 5)),
         "commission_bps": float(getattr(CONFIG.backtest.execution, "commission_bps", 2)),
     }
@@ -535,8 +720,24 @@ def api_create_backtest(payload: dict = Body(...)):
             raise HTTPException(
                 status_code=400, detail=f"commission_bps 超出合理范围 [0, 1000]: {comm}",
             )
+        fee_model = str(raw_exec.get("fee_model") or "").lower().strip()
+        slippage_model = str(raw_exec.get("slippage_model") or "").lower().strip()
+        if fee_model and fee_model not in {
+            "simple_bps", "ibkr_us_pro_fixed", "ibkr_us_pro_tiered", "ibkr_us_lite",
+        }:
+            raise HTTPException(
+                status_code=400, detail=f"fee_model 非法：{fee_model}",
+            )
+        if slippage_model and slippage_model not in {
+            "none", "constant_bps", "simple_bps", "volume_share",
+        }:
+            raise HTTPException(
+                status_code=400, detail=f"slippage_model 非法：{slippage_model}",
+            )
         execution = {
             "timing": timing or None,
+            "fee_model": fee_model or None,
+            "slippage_model": slippage_model or None,
             "slippage_bps": slip,
             "commission_bps": comm,
         }
@@ -568,6 +769,222 @@ def api_delete_backtest(tid: str):
     if not ok:
         raise HTTPException(status_code=404, detail="Backtest not found")
     return JSONResponse({"deleted": tid})
+
+
+# ===============================================================
+# 模拟盘 Tab（内部 FMP 驱动模拟）
+# ===============================================================
+
+def _format_paper_account_summary(a: dict[str, Any]) -> dict[str, Any]:
+    initial = a.get("initial_cash")
+    equity = a.get("last_equity")
+    pnl = None
+    ret = None
+    try:
+        if initial is not None and equity is not None and float(initial) > 0:
+            pnl = float(equity) - float(initial)
+            ret = float(equity) / float(initial) - 1.0
+    except (TypeError, ValueError):
+        pass
+    return {
+        **a,
+        "cash_fmt": _format_money(a.get("cash")),
+        "initial_cash_fmt": _format_money(initial),
+        "last_equity_fmt": _format_money(equity),
+        "pnl": pnl,
+        "pnl_fmt": _format_money(pnl),
+        "return_fmt": _format_pct(ret),
+    }
+
+
+def _records_for_table(df: pd.DataFrame, limit: int = 50) -> list[dict[str, Any]]:
+    if df is None or df.empty:
+        return []
+    view = df.copy()
+    return _sanitize(view.tail(limit).iloc[::-1].to_dict(orient="records"))
+
+
+@router_v2.get("/paper", response_class=HTMLResponse)
+def paper_accounts_page(request: Request):
+    items = [_format_paper_account_summary(a) for a in list_paper_accounts()]
+    return templates.TemplateResponse(request, "paper_list.html", {
+        "title": "模拟盘",
+        "items": items,
+        "universes": _enabled_universes(),
+    })
+
+
+@router_v2.get("/paper/new", response_class=HTMLResponse)
+def paper_new_page(
+    request: Request,
+    strategy_id: str | None = Query(None),
+    watchlist_id: str | None = Query(None),
+):
+    from src.watchlists import list_watchlists
+    default_exec = {
+        "timing": "next_open",
+        "fee_model": str(getattr(CONFIG.backtest.execution, "fee_model", "ibkr_us_pro_fixed")),
+        "slippage_model": str(getattr(CONFIG.backtest.execution, "slippage_model", "volume_share")),
+        "slippage_bps": float(getattr(CONFIG.backtest.execution, "slippage_bps", 5)),
+        "commission_bps": float(getattr(CONFIG.backtest.execution, "commission_bps", 2)),
+        "min_order_value": 25.0,
+    }
+    return templates.TemplateResponse(request, "paper_new.html", {
+        "title": "新建模拟盘",
+        "strategies": list_strategies(),
+        "universes": _enabled_universes(),
+        "watchlists": list_watchlists(),
+        "preselect_strategy_id": strategy_id,
+        "preselect_watchlist_id": watchlist_id,
+        "default_initial_cash": 100000,
+        "default_exec": default_exec,
+        "default_n_groups": int(CONFIG.backtest.n_groups),
+        "default_top_group": int(CONFIG.backtest.n_groups),
+        "default_rebalance_mode": str(getattr(CONFIG.backtest, "rebalance_mode", "month_end")),
+    })
+
+
+@router_v2.get("/paper/{aid}", response_class=HTMLResponse)
+def paper_detail_page(request: Request, aid: str):
+    account = load_paper_account(aid)
+    if account is None:
+        raise HTTPException(status_code=404, detail="Paper account not found")
+    arts = load_account_artifacts(aid)
+    positions = arts.get("positions", pd.DataFrame())
+    orders = arts.get("orders", pd.DataFrame())
+    fills = arts.get("fills", pd.DataFrame())
+    targets = arts.get("target_weights", pd.DataFrame())
+    runs = arts.get("runs", pd.DataFrame())
+    equity_curve = arts.get("equity_curve", pd.DataFrame())
+
+    equity_fig_json = None
+    if equity_curve is not None and not equity_curve.empty and "equity" in equity_curve.columns:
+        curve = equity_curve.copy()
+        curve["date"] = pd.to_datetime(curve["date"])
+        curve = curve.sort_values("date")
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=curve["date"], y=curve["equity"],
+            mode="lines+markers", name="账户权益",
+            line=dict(color="#42A5F5", width=2),
+        ))
+        fig.update_layout(
+            title=dict(text="模拟盘权益曲线", font=dict(color=_PLOT_TEXT, size=15)),
+            paper_bgcolor=_PLOT_BG, plot_bgcolor=_PLOT_PANEL,
+            font=dict(color=_PLOT_TEXT),
+            margin=dict(l=40, r=40, t=60, b=40),
+            height=380, hovermode="x unified",
+        )
+        fig.update_xaxes(gridcolor=_PLOT_GRID)
+        fig.update_yaxes(gridcolor=_PLOT_GRID, title_text="权益（USD）")
+        equity_fig_json = fig_to_json(fig)
+
+    summary = _format_paper_account_summary(account)
+    open_orders = []
+    if orders is not None and not orders.empty and "status" in orders.columns:
+        open_orders = _records_for_table(
+            orders[orders["status"].astype(str) == "pending"],
+            limit=50,
+        )
+    return templates.TemplateResponse(request, "paper_detail.html", {
+        "title": f"模拟盘 · {account.get('name') or aid[:8]}",
+        "account": account,
+        "summary": summary,
+        "positions": _records_for_table(positions, limit=100),
+        "open_orders": open_orders,
+        "orders": _records_for_table(orders, limit=80),
+        "fills": _records_for_table(fills, limit=80),
+        "targets": _records_for_table(targets, limit=50),
+        "runs": _records_for_table(runs, limit=20),
+        "equity_fig_json": equity_fig_json,
+        "universes": _enabled_universes(),
+    })
+
+
+@router_v2.get("/api/paper/accounts")
+def api_list_paper_accounts():
+    return JSONResponse(_sanitize({"accounts": list_paper_accounts()}))
+
+
+@router_v2.get("/api/paper/accounts/{aid}")
+def api_get_paper_account(aid: str):
+    account = load_paper_account(aid)
+    if account is None:
+        raise HTTPException(status_code=404, detail="Paper account not found")
+    return JSONResponse(_sanitize(account))
+
+
+@router_v2.post("/api/paper/accounts")
+def api_create_paper_account(payload: dict = Body(...)):
+    strategy_id = str(payload.get("strategy_id") or "").strip()
+    universe_raw = str(payload.get("universe") or "").strip()
+    name = str(payload.get("name") or "").strip()
+    if not strategy_id:
+        raise HTTPException(status_code=400, detail="strategy_id 必填")
+    if not universe_raw:
+        raise HTTPException(status_code=400, detail="universe 必填")
+    strategy = load_strategy(strategy_id)
+    if strategy is None:
+        raise HTTPException(status_code=404, detail=f"策略不存在: {strategy_id}")
+
+    watchlist_snapshot: dict[str, Any] | None = None
+    if universe_raw.lower().startswith("watchlist:"):
+        wid = universe_raw.split(":", 1)[1].strip()
+        from src.watchlists import load_watchlist
+        wl = load_watchlist(wid)
+        if wl is None:
+            raise HTTPException(status_code=404, detail=f"股票池不存在: {wid}")
+        try:
+            wl.validate()
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"股票池非法: {e}")
+        watchlist_snapshot = wl.to_dict()
+        universe = f"watchlist:{wl.id}"
+    else:
+        universe = universe_raw.upper()
+        enabled = _enabled_universes()
+        if universe not in enabled:
+            raise HTTPException(status_code=400, detail=f"未知股票池 {universe}，可选: {enabled}")
+
+    try:
+        account = create_account_payload(
+            name=name or f"{strategy.name} 模拟盘",
+            strategy=strategy,
+            universe=universe,
+            watchlist_snapshot=watchlist_snapshot,
+            initial_cash=float(payload.get("initial_cash", 100000)),
+            n_groups=int(payload.get("n_groups") or CONFIG.backtest.n_groups),
+            top_group=int(payload.get("top_group") or CONFIG.backtest.n_groups),
+            rebalance_mode=str(payload.get("rebalance_mode") or getattr(CONFIG.backtest, "rebalance_mode", "month_end")),
+            execution=payload.get("execution") or {},
+        )
+        create_paper_account(account)
+    except (PaperTradingValidationError, FactorLibraryError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return JSONResponse(_sanitize(account), status_code=201)
+
+
+@router_v2.post("/api/paper/accounts/{aid}/run")
+def api_run_paper_account(aid: str, payload: dict | None = Body(None)):
+    asof = None
+    if payload:
+        raw_asof = payload.get("asof")
+        asof = str(raw_asof).strip() if raw_asof else None
+    try:
+        result = run_account_once(aid, asof=asof)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Paper account not found")
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(e))
+    return JSONResponse(_sanitize(result))
+
+
+@router_v2.delete("/api/paper/accounts/{aid}")
+def api_delete_paper_account(aid: str):
+    ok = delete_paper_account(aid)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Paper account not found")
+    return JSONResponse({"deleted": aid})
 
 
 # ===============================================================

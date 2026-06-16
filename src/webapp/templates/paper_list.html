@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1 class="page-title">
+    模拟盘
+    <span class="badge">{{ items|length }} 个账户</span>
+</h1>
+<div class="page-sub">
+    内部 FMP 驱动模拟：策略生成目标仓位，订单按 next_open 规则等待下一根开盘价成交。
+</div>
+
+<div class="toolbar-row">
+    <a class="btn primary" href="/paper/new">+ 新建模拟盘</a>
+</div>
+
+{% if items %}
+<section class="table-panel">
+    <div class="table-wrap">
+        <table class="data">
+            <thead>
+                <tr>
+                    <th style="width: 22%;">账户名</th>
+                    <th>策略</th>
+                    <th>股票池</th>
+                    <th style="width:90px;">状态</th>
+                    <th style="text-align:right;">权益</th>
+                    <th style="text-align:right;">现金</th>
+                    <th style="text-align:right;">累计盈亏</th>
+                    <th style="text-align:right;">收益率</th>
+                    <th style="width:120px;">决策日</th>
+                    <th style="width:180px;"></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for a in items %}
+                <tr data-aid="{{ a.id }}">
+                    <td><a href="/paper/{{ a.id }}"><strong>{{ a.name or a.id[:8] }}</strong></a></td>
+                    <td>{{ a.strategy_name or '—' }}</td>
+                    <td><span class="factor-cat-badge">{{ a.universe_label or a.universe }}</span></td>
+                    <td><span class="status-pill status-{{ a.status }}">{{ '运行中' if a.status == 'active' else '暂停' }}</span></td>
+                    <td class="mono" style="text-align:right;">{{ a.last_equity_fmt }}</td>
+                    <td class="mono" style="text-align:right;">{{ a.cash_fmt }}</td>
+                    <td class="mono {% if a.pnl is not none and a.pnl < 0 %}neg{% elif a.pnl is not none %}pos{% endif %}" style="text-align:right;">
+                        {{ a.pnl_fmt }}
+                    </td>
+                    <td class="{% if a.pnl is not none and a.pnl < 0 %}neg{% elif a.pnl is not none %}pos{% endif %}" style="text-align:right;">
+                        {{ a.return_fmt }}
+                    </td>
+                    <td class="mono" style="color: var(--text-2);">{{ a.last_decision_date or '—' }}</td>
+                    <td>
+                        <a class="btn small" href="/paper/{{ a.id }}">查看</a>
+                        <button class="btn small" onclick="runPaper('{{ a.id }}')">运行</button>
+                        <button class="btn small danger" onclick="deletePaper('{{ a.id }}', '{{ a.name or a.id[:8] }}')">删除</button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% else %}
+<div class="empty">
+    <p>还没有模拟盘账户。</p>
+    <p><a href="/paper/new">点击新建模拟盘</a>，选一个策略 + 股票池即可开始。</p>
+</div>
+{% endif %}
+
+<script>
+async function runPaper(aid) {
+    try {
+        const r = await fetch('/api/paper/accounts/' + aid + '/run', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({}),
+        });
+        const data = await r.json();
+        if (!r.ok) { alert(data.detail || ('运行失败: ' + r.status)); return; }
+        window.location.href = '/paper/' + aid;
+    } catch (e) { alert('运行失败：' + e); }
+}
+
+async function deletePaper(aid, name) {
+    if (!confirm('确定要删除模拟盘「' + name + '」？\n此操作不可恢复。')) return;
+    try {
+        const r = await fetch('/api/paper/accounts/' + aid, { method: 'DELETE' });
+        if (!r.ok) { alert('删除失败: ' + r.status); return; }
+        const row = document.querySelector('tr[data-aid="' + aid + '"]');
+        if (row) row.remove();
+    } catch (e) { alert('删除失败：' + e); }
+}
+</script>
+{% endblock %}

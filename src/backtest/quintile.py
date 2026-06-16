@@ -13,8 +13,8 @@
                               **不可实盘**：决策与成交同时刻。
   - timing="next_open"（推荐）：T 日打分 → T+1 开盘价成交 → 持有期日收益用 open-to-open。
                               **更接近实盘**：决策完到下一个交易日开盘才动手。
-  - 调仓日按逐票交易权重扣除摩擦成本：
-    sum(abs(target_weight - old_weight)) × (slippage_bps + commission_bps)。
+  - 调仓日按逐票交易权重估算成交数量，再由共享的 FeeModel / SlippageModel
+    计算成交价、滑点成本、券商佣金和监管费用，最后汇总扣到组收益。
 
 防前视偏差：
   - close 模式：调仓日 t 使用 factor_t，持仓从 t+1 开始生效（assign.shift(1)），
@@ -32,6 +32,7 @@ import pandas as pd
 from src.backtest.metrics import performance_summary, relative_performance_summary
 from src.backtest.rebalance import get_rebalance_dates
 from src.config import CONFIG
+from src.execution import calculate_execution, resolve_execution_config
 from src.utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -76,31 +77,26 @@ def _compute_open_to_open_returns(open_df: pd.DataFrame) -> pd.DataFrame:
 
 def _resolve_execution(execution: dict | None) -> dict:
     """规范化 execution 参数，缺失字段从 CONFIG 兜底。"""
-    cfg_default = {}
-    try:
-        cfg_default = {
-            "timing": str(CONFIG.backtest.execution.timing),
-            "slippage_bps": float(CONFIG.backtest.execution.slippage_bps),
-            "commission_bps": float(CONFIG.backtest.execution.commission_bps),
-        }
-    except Exception:  # noqa: BLE001
-        cfg_default = {
-            "timing": "close",
-            "slippage_bps": 0.0,
-            "commission_bps": 0.0,
-        }
-    if not execution:
-        return cfg_default
-    out = dict(cfg_default)
-    out.update({k: v for k, v in execution.items() if v is not None})
-    out["timing"] = str(out.get("timing") or "close").lower()
-    out["slippage_bps"] = float(out.get("slippage_bps") or 0.0)
-    out["commission_bps"] = float(out.get("commission_bps") or 0.0)
+    out = resolve_execution_config(execution or {})
     if out["timing"] not in ("close", "next_open"):
         raise ValueError(
             f"Unknown execution.timing={out['timing']!r}; expected 'close' or 'next_open'."
         )
     return out
+
+
+def _safe_lookup(df: pd.DataFrame | None, dt: pd.Timestamp, ticker: str) -> float | None:
+    if df is None or df.empty or ticker not in df.columns:
+        return None
+    try:
+        value = df.loc[dt, ticker]
+    except KeyError:
+        return None
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    return value if np.isfinite(value) and value > 0 else None
 
 
 def _build_execution_details(
@@ -109,18 +105,21 @@ def _build_execution_details(
     rebal_dates: pd.DatetimeIndex,
     n_groups: int,
     *,
-    slippage_bps: float,
-    commission_bps: float,
+    execution: dict,
+    execution_price_df: pd.DataFrame | None = None,
+    volume_df: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Build per-stock target weights, trades, and costs for every rebalance.
 
     target_weight is the fully invested equal-weight portfolio inside each group.
     trade_weight is signed: positive means buy, negative means sell.
-    cost is charged on abs(trade_weight) using one-side bps cost.
+    Costs are calculated by translating weight deltas into an approximate
+    dollar notional using execution.portfolio_value, then applying the shared
+    FeeModel and SlippageModel.
     """
     group_names = [f"Q{g}" for g in range(1, n_groups + 1)]
-    single_side_cost_rate = (float(slippage_bps) + float(commission_bps)) / 10000.0
+    portfolio_value = float(execution.get("portfolio_value", 100000.0) or 100000.0)
 
     prev_weights: dict[str, pd.Series] = {
         g: pd.Series(dtype="float64") for g in group_names
@@ -162,29 +161,56 @@ def _build_execution_details(
                     "target_weight": float(weight),
                 })
 
-            traded_abs = float(delta.abs().sum())
             if old_weights.empty or new_weights.empty:
-                turnover = traded_abs
+                turnover = float(delta.abs().sum())
             else:
-                turnover = traded_abs / 2.0
-            total_cost = traded_abs * single_side_cost_rate
-            cost_rows.append({
-                "date": pd.Timestamp(effective_date).strftime("%Y-%m-%d"),
-                "decision_date": pd.Timestamp(decision_date).strftime("%Y-%m-%d"),
-                "group": group_name,
-                "traded_weight": traded_abs,
-                "turnover": float(turnover),
-                "slippage_bps": float(slippage_bps),
-                "commission_bps": float(commission_bps),
-                "single_side_cost_rate": single_side_cost_rate,
-                "cost": float(total_cost),
-            })
+                turnover = float(delta.abs().sum()) / 2.0
 
+            group_trade_rows: list[dict] = []
             for ticker, trade_weight in delta.items():
                 if abs(float(trade_weight)) <= 1e-12:
                     continue
                 trade_abs = abs(float(trade_weight))
-                trades_rows.append({
+                side = "BUY" if trade_weight > 0 else "SELL"
+                raw_price = _safe_lookup(execution_price_df, pd.Timestamp(effective_date), str(ticker))
+                bar_volume = _safe_lookup(volume_df, pd.Timestamp(effective_date), str(ticker))
+                estimated_notional = trade_abs * portfolio_value
+                estimated_quantity = (
+                    estimated_notional / raw_price
+                    if raw_price is not None and raw_price > 0 else 0.0
+                )
+                if estimated_quantity > 0 and raw_price is not None:
+                    ex = calculate_execution(
+                        side=side,
+                        quantity=estimated_quantity,
+                        raw_price=raw_price,
+                        volume=bar_volume,
+                        execution=execution,
+                    )
+                    slippage_cost = float(ex["slippage_cost"])
+                    fee = float(ex["fee"])
+                    total_cost_cash = float(ex["total_cost"])
+                    cost_rate = total_cost_cash / portfolio_value if portfolio_value > 0 else 0.0
+                    fee_components = ex.get("fee_components") or {}
+                    fill_price = float(ex["fill_price"])
+                    slippage_bps_used = float(ex["slippage_bps"])
+                    participation_rate = float(ex["participation_rate"])
+                    impact_bps = float(ex["impact_bps"])
+                else:
+                    # Last-resort fallback keeps old behavior when price data is missing.
+                    fallback_bps = float(execution.get("slippage_bps", 0.0) or 0.0)
+                    fallback_fee_bps = float(execution.get("commission_bps", 0.0) or 0.0)
+                    slippage_cost = estimated_notional * fallback_bps / 10000.0
+                    fee = estimated_notional * fallback_fee_bps / 10000.0
+                    total_cost_cash = slippage_cost + fee
+                    cost_rate = total_cost_cash / portfolio_value if portfolio_value > 0 else 0.0
+                    fee_components = {"model": "fallback_simple_bps", "total_fee": fee}
+                    fill_price = np.nan
+                    slippage_bps_used = fallback_bps
+                    participation_rate = 0.0
+                    impact_bps = fallback_bps
+
+                trade_row = {
                     "date": pd.Timestamp(effective_date).strftime("%Y-%m-%d"),
                     "decision_date": pd.Timestamp(decision_date).strftime("%Y-%m-%d"),
                     "group": group_name,
@@ -193,11 +219,55 @@ def _build_execution_details(
                     "new_weight": float(new_aligned.loc[ticker]),
                     "trade_weight": float(trade_weight),
                     "trade_abs_weight": trade_abs,
-                    "side": "BUY" if trade_weight > 0 else "SELL",
-                    "slippage_bps": float(slippage_bps),
-                    "commission_bps": float(commission_bps),
-                    "cost": float(trade_abs * single_side_cost_rate),
-                })
+                    "side": side,
+                    "portfolio_value": portfolio_value,
+                    "estimated_notional": float(estimated_notional),
+                    "estimated_quantity": float(estimated_quantity),
+                    "raw_price": float(raw_price) if raw_price is not None else np.nan,
+                    "fill_price": float(fill_price),
+                    "bar_volume": float(bar_volume) if bar_volume is not None else np.nan,
+                    "participation_rate": participation_rate,
+                    "slippage_model": execution.get("slippage_model"),
+                    "slippage_bps": slippage_bps_used,
+                    "impact_bps": impact_bps,
+                    "slippage_cost": slippage_cost,
+                    "fee_model": execution.get("fee_model"),
+                    "broker_commission": float(fee_components.get("broker_commission", 0.0) or 0.0),
+                    "sec_fee": float(fee_components.get("sec_fee", 0.0) or 0.0),
+                    "finra_taf": float(fee_components.get("finra_taf", 0.0) or 0.0),
+                    "finra_cat": float(fee_components.get("finra_cat", 0.0) or 0.0),
+                    "clearing_fee": float(fee_components.get("clearing_fee", 0.0) or 0.0),
+                    "pass_through_fee": float(fee_components.get("pass_through_fee", 0.0) or 0.0),
+                    "exchange_fee": float(fee_components.get("exchange_fee", 0.0) or 0.0),
+                    "fee": fee,
+                    "total_cost_cash": total_cost_cash,
+                    "cost": float(cost_rate),
+                }
+                group_trade_rows.append(trade_row)
+                trades_rows.append(trade_row)
+
+            traded_abs = float(delta.abs().sum())
+            total_cost = float(sum(r["cost"] for r in group_trade_rows))
+            total_fee = float(sum(r["fee"] for r in group_trade_rows))
+            total_slippage = float(sum(r["slippage_cost"] for r in group_trade_rows))
+            cost_rows.append({
+                "date": pd.Timestamp(effective_date).strftime("%Y-%m-%d"),
+                "decision_date": pd.Timestamp(decision_date).strftime("%Y-%m-%d"),
+                "group": group_name,
+                "traded_weight": traded_abs,
+                "turnover": float(turnover),
+                "portfolio_value": portfolio_value,
+                "fee_model": execution.get("fee_model"),
+                "slippage_model": execution.get("slippage_model"),
+                "avg_slippage_bps": (
+                    float(np.mean([r["slippage_bps"] for r in group_trade_rows]))
+                    if group_trade_rows else 0.0
+                ),
+                "total_slippage_cost": total_slippage,
+                "total_fee": total_fee,
+                "total_cost_cash": total_slippage + total_fee,
+                "cost": float(total_cost),
+            })
 
             prev_weights[group_name] = new_weights
 
@@ -364,7 +434,7 @@ def quintile_backtest(
     returns_df: date x ticker 日收益率（close-to-close）
     n_groups, rebalance_days, factor_direction : 见原文档
     open_df : date x ticker 复权开盘价。当 execution.timing="next_open" 时**必须**提供。
-    execution : {timing, slippage_bps, commission_bps}。
+    execution : {timing, fee_model, slippage_model, slippage_bps, commission_bps}。
                 None 时从 CONFIG.backtest.execution 读默认（推荐 next_open）。
 
     Returns
@@ -461,11 +531,12 @@ def quintile_backtest(
     # 摩擦扣减：逐票目标权重变化 × 单边成本，再汇总到组级收益。
     holdings_detail, trades_detail, costs_detail = _build_execution_details(
         assign,
-        gross_ret.index,
+        common_dates,
         rebal_dates,
         n_groups=n_groups,
-        slippage_bps=exec_cfg["slippage_bps"],
-        commission_bps=exec_cfg["commission_bps"],
+        execution=exec_cfg,
+        execution_price_df=open_df if exec_cfg["timing"] == "next_open" else price_df,
+        volume_df=volume_df,
     )
     cost_df = pd.DataFrame(0.0, index=gross_ret.index, columns=group_cols)
     if not costs_detail.empty:
@@ -473,7 +544,7 @@ def quintile_backtest(
             dt = pd.Timestamp(row.date)
             group = str(row.group)
             if dt in cost_df.index and group in cost_df.columns:
-                cost_df.loc[dt, group] = float(row.cost)
+                cost_df.loc[dt, group] += float(row.cost)
 
     group_ret = gross_ret - cost_df
     # 给绩效汇总用：每组的年化总成本 bps（粗略）
@@ -527,10 +598,12 @@ def quintile_backtest(
 
     log.info(
         "Quintile backtest done: n_groups=%d, rebalance=%s/%dd, direction=%+d, "
-        "timing=%s, slippage=%.1fbps, commission=%.1fbps, "
+        "timing=%s, fee_model=%s, slippage_model=%s, "
+        "fallback_slippage=%.1fbps, simple_commission=%.1fbps, "
         "LongShort AnnReturn=%.4f, Sharpe=%.3f, MaxDD=%.4f",
         n_groups, rebalance_mode, rebalance_days, direction,
-        exec_cfg["timing"], exec_cfg["slippage_bps"], exec_cfg["commission_bps"],
+        exec_cfg["timing"], exec_cfg.get("fee_model"), exec_cfg.get("slippage_model"),
+        exec_cfg["slippage_bps"], exec_cfg["commission_bps"],
         metrics_df.loc["LongShort", "AnnReturn"],
         metrics_df.loc["LongShort", "Sharpe"],
         metrics_df.loc["LongShort", "MaxDD"],

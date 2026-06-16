@@ -20,7 +20,8 @@
     {% if task.diagnostics and task.diagnostics.execution_used %}
     {% set _e = task.diagnostics.execution_used %}
     · 成交：<span class="mono">{{ _e.timing }}</span>
-    · 滑点 {{ _e.slippage_bps }}bps · 手续费 {{ _e.commission_bps }}bps
+    · 费用：<span class="mono">{{ _e.fee_model or 'simple_bps' }}</span>
+    · 滑点：<span class="mono">{{ _e.slippage_model or 'constant_bps' }}</span>
     {% elif task.execution %}
     · 成交：<span class="mono">{{ task.execution.timing or 'default' }}</span>
     {% else %}
@@ -166,7 +167,9 @@
         {% if task.diagnostics.execution_used %}
         {% set _e = task.diagnostics.execution_used %}
         <div><span>成交时机</span><span class="mono">{{ _e.timing }}</span></div>
-        <div><span>滑点 / 手续费</span><span class="mono">{{ _e.slippage_bps }} / {{ _e.commission_bps }} bps</span></div>
+        <div><span>费用模型</span><span class="mono">{{ _e.fee_model or 'simple_bps' }}</span></div>
+        <div><span>滑点模型</span><span class="mono">{{ _e.slippage_model or 'constant_bps' }}</span></div>
+        <div><span>兜底 bps</span><span class="mono">滑点 {{ _e.slippage_bps }} / 简化手续费 {{ _e.commission_bps }}</span></div>
         {% if task.diagnostics.cost_bps_per_year is not none %}
         <div><span>年化摩擦成本</span><span class="mono">≈ {{ '%.0f'|format(task.diagnostics.cost_bps_per_year) }} bps</span></div>
         {% endif %}

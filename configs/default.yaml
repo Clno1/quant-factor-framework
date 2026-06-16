@@ -79,9 +79,47 @@ backtest:
   # 成交模型（v3 新增）：让回测尽量接近实盘可达上限
   execution:
     timing: "next_open"            # next_open（推荐，T+1 开盘成交）/ close（旧行为，T 日收盘成交）
-    slippage_bps: 5                # 单边滑点（万分位 ×10），双边吃 5+5=10 bps
-    commission_bps: 2              # 单边手续费（万分位 ×10），双边吃 2+2=4 bps
+    portfolio_value: 100000        # 回测用来把权重交易换算成估算股数/订单金额；模拟盘用账户现金
+    fee_model: "ibkr_us_pro_fixed" # simple_bps / ibkr_us_pro_fixed / ibkr_us_pro_tiered / ibkr_us_lite
+    slippage_model: "volume_share" # constant_bps / volume_share / none
+    slippage_bps: 5                # 兼容旧任务；constant_bps 或缺成交量时使用
+    commission_bps: 2              # 兼容旧任务；simple_bps 费率
     min_open_coverage: 0.95        # next_open 下 open 价格矩阵最低非空覆盖率
+    slippage:
+      fallback_bps: 5              # volume 缺失时使用
+      spread_bps: 2                # 近似半价差/开盘冲击基础成本
+      volume_limit: 0.025          # 参考 Zipline/QuantConnect，单根 bar 可成交量上限 2.5%
+      price_impact: 0.10           # impact = price_impact * min(qty/volume, volume_limit)^2
+    fees:
+      simple_bps: 2
+      ibkr_us_pro_fixed:
+        per_share: 0.005
+        min_per_order: 1.00
+        max_pct_trade_value: 0.01
+      ibkr_us_pro_tiered:
+        per_share: 0.0035
+        min_per_order: 0.35
+        max_pct_trade_value: 0.01
+      ibkr_us_lite:
+        per_share: 0.0
+        min_per_order: 0.0
+        max_pct_trade_value: 0.0
+      regulatory:
+        sec_sell_rate: 0.0000206
+        finra_taf_per_share: 0.000195
+        finra_taf_cap: 9.79
+        finra_cat_per_share: 0.000003
+      clearing:
+        nscc_dtc_per_share: 0.00020
+        nscc_dtc_cap_pct_trade_value: 0.005
+      pass_through:
+        nyse_rate_on_commission: 0.000175
+        finra_rate_on_commission: 0.00056
+      include_regulatory: true
+      include_cat: true
+      include_clearing: true
+      include_pass_through: true
+      exchange_fee_bps: 0.0        # 路由/交易所相关 maker-taker 先设 0，后续接真实路由后细分
 
   # 调仓日可交易过滤。规则在 T 日决策时应用；next_open 模式额外要求 T+1 开盘价可用。
   tradability:

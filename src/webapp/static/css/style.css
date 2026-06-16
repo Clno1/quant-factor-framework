@@ -1279,6 +1279,50 @@ textarea.form-input {
 
 .submit-msg.warn { color: var(--amber); }
 
+/* ==================== 策略股票排行 ==================== */
+.ranking-filter-panel {
+    margin-bottom: 20px;
+}
+
+.ranking-form-row {
+    align-items: end;
+}
+
+.ranking-submit-field {
+    flex: 0 0 160px;
+}
+
+.ranking-cards .card .value {
+    font-size: 20px;
+}
+
+.ranking-tools {
+    display: grid;
+    grid-template-columns: minmax(180px, 1fr) 160px 160px;
+    gap: 10px;
+    padding: 0 10px 12px;
+}
+
+.ranking-table-wrap {
+    max-height: 68vh;
+    overflow: auto;
+}
+
+.ranking-table .badge {
+    margin-left: 8px;
+    margin-right: 0;
+    vertical-align: middle;
+}
+
+@media (max-width: 760px) {
+    .ranking-tools {
+        grid-template-columns: 1fr;
+    }
+    .ranking-submit-field {
+        flex: 1 1 auto;
+    }
+}
+
 /* 搜索下拉 */
 .symbol-search-wrap {
     position: relative;
@@ -1394,4 +1438,64 @@ textarea.form-input {
 .form-advanced > summary::-webkit-details-marker { display: none; }
 .form-advanced-body {
     padding: 14px 16px 4px;
+}
+
+/* ============================================================
+   Paper Trading
+   ============================================================ */
+.paper-metrics {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 12px;
+    margin: 16px 0 20px;
+}
+.metric-card {
+    min-height: 86px;
+    padding: 14px 16px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: var(--shadow);
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 8px;
+}
+.metric-card span {
+    color: var(--text-2);
+    font-size: 12px;
+    font-weight: 600;
+}
+.metric-card strong {
+    color: var(--text-0);
+    font-size: 20px;
+    line-height: 1.15;
+}
+.metric-card strong.pos,
+.pos {
+    color: var(--green);
+}
+.metric-card strong.neg,
+.neg {
+    color: var(--red);
+}
+.status-active {
+    background: rgba(0, 200, 83, 0.14);
+    color: var(--green);
+    border-color: rgba(0, 200, 83, 0.28);
+}
+.status-paused {
+    background: rgba(154, 160, 166, 0.14);
+    color: var(--text-2);
+    border-color: rgba(154, 160, 166, 0.25);
+}
+.paper-details {
+    padding-top: 0;
+}
+.paper-details > summary.panel-title {
+    cursor: pointer;
+    list-style: none;
+}
+.paper-details > summary.panel-title::-webkit-details-marker {
+    display: none;
 }

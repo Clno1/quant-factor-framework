@@ -1,0 +1,244 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1 class="page-title">
+    {{ account.name }}
+    <span class="badge">{{ '运行中' if account.status == 'active' else '暂停' }}</span>
+</h1>
+<div class="page-sub">
+    {{ account.strategy_snapshot.name }} · {{ account.universe }}
+    {% set _e = account.execution or {} %}
+    · 成交：<span class="mono">{{ _e.timing or 'next_open' }}</span>
+    · 费用：<span class="mono">{{ _e.fee_model or 'simple_bps' }}</span>
+    · 滑点：<span class="mono">{{ _e.slippage_model or 'constant_bps' }}</span>
+    <span class="mono" style="color: var(--text-2); margin-left: 14px;">
+        创建于 {{ account.created_at }} · ID {{ account.id }}
+    </span>
+</div>
+
+<div class="toolbar-row">
+    <button class="btn primary" id="run-btn" onclick="runPaper('{{ account.id }}')">运行一次</button>
+    <a class="btn" href="/paper/new?strategy_id={{ account.strategy_id }}">新建同策略模拟盘</a>
+    <button class="btn danger" onclick="deletePaper('{{ account.id }}', '{{ account.name }}')">删除模拟盘</button>
+</div>
+
+{% if account.last_error %}
+<div class="empty" style="border-color: rgba(255,82,82,0.28);">
+    <p class="neg">上次运行失败：{{ account.last_error }}</p>
+</div>
+{% endif %}
+
+<section class="paper-metrics">
+    <div class="metric-card">
+        <span>账户权益</span>
+        <strong>{{ summary.last_equity_fmt }}</strong>
+    </div>
+    <div class="metric-card">
+        <span>现金</span>
+        <strong>{{ summary.cash_fmt }}</strong>
+    </div>
+    <div class="metric-card">
+        <span>累计盈亏</span>
+        <strong class="{% if summary.pnl is not none and summary.pnl < 0 %}neg{% elif summary.pnl is not none %}pos{% endif %}">
+            {{ summary.pnl_fmt }}
+        </strong>
+    </div>
+    <div class="metric-card">
+        <span>收益率</span>
+        <strong class="{% if summary.pnl is not none and summary.pnl < 0 %}neg{% elif summary.pnl is not none %}pos{% endif %}">
+            {{ summary.return_fmt }}
+        </strong>
+    </div>
+    <div class="metric-card">
+        <span>最近决策日</span>
+        <strong class="mono">{{ account.last_decision_date or '—' }}</strong>
+    </div>
+    <div class="metric-card">
+        <span>最近估值日</span>
+        <strong class="mono">{{ account.last_mark_date or '—' }}</strong>
+    </div>
+</section>
+
+{% if equity_fig_json %}
+<section class="chart-panel">
+    <div class="plot" style="width:100%;" data-plotly-json='{{ equity_fig_json|safe }}'></div>
+</section>
+{% endif %}
+
+<section class="chart-panel">
+    <div class="panel-title"><span>当前持仓</span></div>
+    {% if positions %}
+    <div class="table-wrap">
+        <table class="data compact">
+            <thead>
+                <tr>
+                    <th>股票</th>
+                    <th style="text-align:right;">数量</th>
+                    <th style="text-align:right;">成本价</th>
+                    <th style="text-align:right;">市价</th>
+                    <th style="text-align:right;">市值</th>
+                    <th style="text-align:right;">权重</th>
+                    <th style="text-align:right;">浮动盈亏</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for p in positions %}
+                <tr>
+                    <td class="mono">{{ p.ticker }}</td>
+                    <td class="mono" style="text-align:right;">{{ "%.0f"|format(p.quantity or 0) }}</td>
+                    <td class="mono" style="text-align:right;">{{ "%.2f"|format(p.avg_price or 0) }}</td>
+                    <td class="mono" style="text-align:right;">{{ "%.2f"|format(p.market_price or 0) }}</td>
+                    <td class="mono" style="text-align:right;">{{ "%.2f"|format(p.market_value or 0) }}</td>
+                    <td class="mono" style="text-align:right;">{{ "%.2f"|format((p.weight or 0) * 100) }}%</td>
+                    <td class="mono {% if p.unrealized_pnl is not none and p.unrealized_pnl < 0 %}neg{% elif p.unrealized_pnl is not none %}pos{% endif %}" style="text-align:right;">
+                        {{ "%.2f"|format(p.unrealized_pnl or 0) }}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty"><p>暂无持仓。首次运行通常只会生成等待 next_open 成交的订单。</p></div>
+    {% endif %}
+</section>
+
+<section class="chart-panel">
+    <div class="panel-title"><span>待成交订单</span></div>
+    {% if open_orders %}
+    <div class="table-wrap">
+        <table class="data compact">
+            <thead>
+                <tr>
+                    <th>决策日</th>
+                    <th>股票</th>
+                    <th>方向</th>
+                    <th style="text-align:right;">数量</th>
+                    <th style="text-align:right;">参考价</th>
+                    <th style="text-align:right;">估算金额</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for o in open_orders %}
+                <tr>
+                    <td class="mono">{{ o.decision_date }}</td>
+                    <td class="mono">{{ o.ticker }}</td>
+                    <td class="{{ 'pos' if o.side == 'BUY' else 'neg' }}">{{ o.side }}</td>
+                    <td class="mono" style="text-align:right;">{{ o.quantity }}</td>
+                    <td class="mono" style="text-align:right;">{{ "%.2f"|format(o.ref_price or 0) }}</td>
+                    <td class="mono" style="text-align:right;">{{ "%.2f"|format(o.estimated_notional or 0) }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty"><p>没有待成交订单。</p></div>
+    {% endif %}
+</section>
+
+<details class="chart-panel paper-details" open>
+    <summary class="panel-title"><span>最新目标仓位</span></summary>
+    {% if targets %}
+    <div class="table-wrap">
+        <table class="data compact">
+            <thead>
+                <tr>
+                    <th>决策日</th>
+                    <th>股票</th>
+                    <th style="text-align:right;">分数</th>
+                    <th style="text-align:right;">分组</th>
+                    <th style="text-align:right;">目标权重</th>
+                    <th style="text-align:right;">决策参考价</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for t in targets %}
+                <tr>
+                    <td class="mono">{{ t.decision_date }}</td>
+                    <td class="mono">{{ t.ticker }}</td>
+                    <td class="mono" style="text-align:right;">{{ "%.4f"|format(t.score or 0) }}</td>
+                    <td class="mono" style="text-align:right;">Q{{ t.group }}</td>
+                    <td class="mono" style="text-align:right;">{{ "%.2f"|format((t.target_weight or 0) * 100) }}%</td>
+                    <td class="mono" style="text-align:right;">{{ "%.2f"|format(t.decision_price or 0) }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty"><p>还没有目标仓位。</p></div>
+    {% endif %}
+</details>
+
+<details class="chart-panel paper-details">
+    <summary class="panel-title"><span>最近成交</span></summary>
+    {% if fills %}
+    <div class="table-wrap">
+        <table class="data compact">
+            <thead>
+                <tr>
+                    <th>成交日</th>
+                    <th>股票</th>
+                    <th>方向</th>
+                    <th style="text-align:right;">数量</th>
+                    <th style="text-align:right;">成交价</th>
+                    <th style="text-align:right;">金额</th>
+                    <th style="text-align:right;">滑点</th>
+                    <th style="text-align:right;">费用</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for f in fills %}
+                <tr>
+                    <td class="mono">{{ f.fill_date }}</td>
+                    <td class="mono">{{ f.ticker }}</td>
+                    <td class="{{ 'pos' if f.side == 'BUY' else 'neg' }}">{{ f.side }}</td>
+                    <td class="mono" style="text-align:right;">{{ f.quantity }}</td>
+                    <td class="mono" style="text-align:right;">{{ "%.2f"|format(f.fill_price or 0) }}</td>
+                    <td class="mono" style="text-align:right;">{{ "%.2f"|format(f.notional or 0) }}</td>
+                    <td class="mono" style="text-align:right;">{{ "%.2f"|format(f.slippage_bps or 0) }} bps</td>
+                    <td class="mono" style="text-align:right;">{{ "%.2f"|format(f.fee or 0) }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty"><p>还没有成交记录。</p></div>
+    {% endif %}
+</details>
+
+<script>
+async function runPaper(aid) {
+    const btn = document.getElementById('run-btn');
+    btn.disabled = true; btn.textContent = '运行中...';
+    try {
+        const r = await fetch('/api/paper/accounts/' + aid + '/run', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({}),
+        });
+        const data = await r.json();
+        if (!r.ok) {
+            alert(data.detail || ('运行失败: ' + r.status));
+            btn.disabled = false; btn.textContent = '运行一次';
+            return;
+        }
+        window.location.reload();
+    } catch (e) {
+        alert('运行失败：' + e);
+        btn.disabled = false; btn.textContent = '运行一次';
+    }
+}
+
+async function deletePaper(aid, name) {
+    if (!confirm('确定要删除模拟盘「' + name + '」？\n此操作不可恢复。')) return;
+    try {
+        const r = await fetch('/api/paper/accounts/' + aid, { method: 'DELETE' });
+        if (!r.ok) { alert('删除失败: ' + r.status); return; }
+        window.location.href = '/paper';
+    } catch (e) { alert('删除失败：' + e); }
+}
+</script>
+{% endblock %}

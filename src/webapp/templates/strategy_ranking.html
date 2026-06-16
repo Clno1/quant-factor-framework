@@ -1,0 +1,216 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1 class="page-title">
+    策略股票排行
+    <span class="badge">{{ strategy.name }}</span>
+    {% if ranking %}
+    <span class="badge green">{{ ranking.universe_label }}</span>
+    {% endif %}
+</h1>
+<div class="page-sub">
+    多因子按策略权重合成为综合分数，并在选定股票池内按分数从高到低排序。
+    <span class="mono" style="color: var(--text-2); margin-left: 14px;">
+        策略 ID {{ strategy.id }}
+    </span>
+</div>
+
+<div class="toolbar-row">
+    <a class="btn" href="/strategies/{{ strategy.id }}">返回策略详情</a>
+    <a class="btn primary" href="/backtests/new?strategy_id={{ strategy.id }}">用此策略新建回测</a>
+    <a class="btn" href="/paper/new?strategy_id={{ strategy.id }}">用此策略新建模拟盘</a>
+</div>
+
+<section class="form-panel ranking-filter-panel">
+    <form method="get" action="/strategies/{{ strategy.id }}/ranking">
+        <div class="form-row ranking-form-row">
+            <div class="form-field">
+                <label class="form-label">股票池</label>
+                <select class="form-input" name="universe">
+                    {% for u in preset_universes %}
+                    <option value="{{ u }}" {% if selected_universe == u %}selected{% endif %}>{{ u }}</option>
+                    {% endfor %}
+                    {% if watchlists %}
+                    {% for w in watchlists %}
+                    {% set w_value = 'watchlist:' ~ w.id %}
+                    <option value="{{ w_value }}" {% if selected_universe == w_value %}selected{% endif %}>
+                        {{ w.name }} · {{ w.item_count }} 只
+                    </option>
+                    {% endfor %}
+                    {% endif %}
+                </select>
+            </div>
+            <div class="form-field">
+                <label class="form-label">日期</label>
+                <input class="form-input mono" name="asof" type="text"
+                       value="{{ selected_asof }}"
+                       placeholder="today / yesterday / 2026-06-15">
+            </div>
+            <div class="form-field ranking-submit-field">
+                <label class="form-label">&nbsp;</label>
+                <button class="btn primary" type="submit">刷新排行</button>
+            </div>
+        </div>
+    </form>
+</section>
+
+{% if error %}
+<div class="empty" style="border-color: rgba(255,82,82,0.28);">
+    <p class="neg">排行生成失败：{{ error }}</p>
+</div>
+{% elif ranking %}
+<section class="cards ranking-cards">
+    <div class="card">
+        <div class="label">评分日期</div>
+        <div class="value mono">{{ ranking.decision_date }}</div>
+    </div>
+    <div class="card">
+        <div class="label">股票数</div>
+        <div class="value mono">{{ ranking.row_count }}</div>
+    </div>
+    <div class="card">
+        <div class="label">目标组</div>
+        <div class="value mono">Q{{ ranking.top_group }} / {{ ranking.effective_n_groups }}</div>
+    </div>
+    <div class="card">
+        <div class="label">入选数</div>
+        <div class="value mono">{{ ranking.target_count }}</div>
+    </div>
+</section>
+
+{% if ranking.warnings or ranking.tickers_missing %}
+<section class="chart-panel">
+    <div class="panel-title"><span>数据提示</span></div>
+    {% if ranking.warnings %}
+    {% for w in ranking.warnings %}
+    <p class="form-hint">{{ w }}</p>
+    {% endfor %}
+    {% endif %}
+    {% if ranking.tickers_missing %}
+    <p class="form-hint">
+        缺失股票：<span class="mono">{{ ranking.tickers_missing|join(', ') }}</span>
+    </p>
+    {% endif %}
+</section>
+{% endif %}
+
+<section class="chart-panel">
+    <div class="panel-title">
+        <span>策略权重</span>
+        <span class="mono" style="color: var(--text-2); font-size: 12px;">
+            {{ components|length }} 因子
+        </span>
+    </div>
+    <div class="table-wrap">
+        <table class="data compact">
+            <thead>
+                <tr>
+                    <th>因子</th>
+                    <th>中文名</th>
+                    <th>分类</th>
+                    <th style="text-align:right;">原始权重</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for c in components %}
+                <tr>
+                    <td class="mono">{{ c.factor_id }}</td>
+                    <td>{{ c.display_name }}</td>
+                    <td><span class="factor-cat-badge">{{ c.category }}</span></td>
+                    <td class="mono" style="text-align:right;">{{ "%.4f"|format(c.weight) }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<section class="chart-panel">
+    <div class="panel-title">
+        <span>综合分数排行</span>
+        <span class="mono" style="color: var(--text-2); font-size: 12px;">
+            <span id="ranking-visible-count">{{ ranking.row_count }}</span> / {{ ranking.row_count }}
+        </span>
+    </div>
+
+    <div class="ranking-tools">
+        <input id="ranking-search" class="form-input mono" type="search"
+               placeholder="搜索 ticker" oninput="filterRankingTable()">
+        <select id="ranking-group-filter" class="form-input mono" onchange="filterRankingTable()">
+            <option value="">全部分组</option>
+            {% for g in range(1, ranking.effective_n_groups + 1) %}
+            <option value="Q{{ g }}">Q{{ g }}</option>
+            {% endfor %}
+        </select>
+        <select id="ranking-target-filter" class="form-input mono" onchange="filterRankingTable()">
+            <option value="">全部股票</option>
+            <option value="target">仅目标组</option>
+        </select>
+    </div>
+
+    {% if ranking.rows %}
+    <div class="table-wrap ranking-table-wrap">
+        <table class="data compact ranking-table">
+            <thead>
+                <tr>
+                    <th>股票</th>
+                    <th style="text-align:right;">排名</th>
+                    <th style="text-align:right;">综合分数</th>
+                    <th style="text-align:right;">分组</th>
+                    <th style="text-align:right;">目标权重</th>
+                    <th style="text-align:right;">参考价</th>
+                </tr>
+            </thead>
+            <tbody id="ranking-table-body">
+                {% for r in ranking.rows %}
+                {% set group_label = 'Q' ~ r.group %}
+                <tr class="{% if r.is_target %}highlight{% endif %}"
+                    data-ticker="{{ r.ticker|lower }}"
+                    data-group="{{ group_label }}"
+                    data-target="{% if r.is_target %}1{% else %}0{% endif %}">
+                    <td class="mono">
+                        <a href="/stock/{{ r.ticker }}{% if ranking.stock_link_universe %}?universe={{ ranking.stock_link_universe }}{% endif %}">
+                            {{ r.ticker }}
+                        </a>
+                        {% if r.is_target %}<span class="badge green">目标</span>{% endif %}
+                    </td>
+                    <td class="mono" style="text-align:right;">{{ r.rank }}</td>
+                    <td class="mono" style="text-align:right;">{{ "%.4f"|format(r.score) }}</td>
+                    <td class="mono" style="text-align:right;">{{ group_label }}</td>
+                    <td class="mono" style="text-align:right;">{{ "%.2f"|format((r.target_weight or 0) * 100) }}%</td>
+                    <td class="mono" style="text-align:right;">
+                        {% if r.decision_price is not none %}{{ "%.2f"|format(r.decision_price) }}{% else %}—{% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty"><p>没有可展示的评分结果。</p></div>
+    {% endif %}
+</section>
+
+<script>
+function filterRankingTable() {
+    const search = (document.getElementById('ranking-search')?.value || '').trim().toLowerCase();
+    const group = document.getElementById('ranking-group-filter')?.value || '';
+    const targetOnly = (document.getElementById('ranking-target-filter')?.value || '') === 'target';
+    const rows = document.querySelectorAll('#ranking-table-body tr');
+    let visible = 0;
+    rows.forEach((row) => {
+        const ticker = row.dataset.ticker || '';
+        const rowGroup = row.dataset.group || '';
+        const isTarget = row.dataset.target === '1';
+        const show = (!search || ticker.includes(search))
+            && (!group || rowGroup === group)
+            && (!targetOnly || isTarget);
+        row.style.display = show ? '' : 'none';
+        if (show) visible += 1;
+    });
+    const counter = document.getElementById('ranking-visible-count');
+    if (counter) counter.textContent = String(visible);
+}
+</script>
+{% endif %}
+{% endblock %}

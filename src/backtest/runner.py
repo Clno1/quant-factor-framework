@@ -27,6 +27,7 @@ from src.backtest.quintile import quintile_backtest
 from src.backtest import store as bt_store
 from src.config import CONFIG
 from src.data import apply_point_in_time_mask, load_wide_tables
+from src.execution import resolve_execution_config
 from src.strategies.definition import StrategyComponent, StrategyDefinition
 from src.utils.io import atomic_save_json, save_json, write_parquet
 from src.utils.logger import get_logger
@@ -36,21 +37,7 @@ log = get_logger(__name__)
 
 def _resolve_execution_config(task_exec: dict | None) -> dict[str, Any]:
     """Resolve task-level execution overrides against global defaults."""
-    task_exec = task_exec or {}
-    return {
-        "timing": str(
-            task_exec.get("timing")
-            or getattr(CONFIG.backtest.execution, "timing", "close")
-        ).lower(),
-        "slippage_bps": float(
-            task_exec.get("slippage_bps") if task_exec.get("slippage_bps") is not None
-            else getattr(CONFIG.backtest.execution, "slippage_bps", 0.0)
-        ),
-        "commission_bps": float(
-            task_exec.get("commission_bps") if task_exec.get("commission_bps") is not None
-            else getattr(CONFIG.backtest.execution, "commission_bps", 0.0)
-        ),
-    }
+    return resolve_execution_config(task_exec or {})
 
 
 def _validate_open_coverage(
@@ -310,9 +297,10 @@ def _run_task(task_id: str) -> None:
     effective_top = min(top_group, effective_n_groups)
 
     log.info("[task=%s] running quintile backtest: n_groups=%d, rebalance=%dd, top=Q%d, "
-             "execution=%s slippage=%.1fbps commission=%.1fbps",
+             "execution=%s fee_model=%s slippage_model=%s slippage=%.1fbps commission=%.1fbps",
              task_id, effective_n_groups, rebalance_days, effective_top,
-             exec_cfg["timing"], exec_cfg["slippage_bps"], exec_cfg["commission_bps"])
+             exec_cfg["timing"], exec_cfg.get("fee_model"), exec_cfg.get("slippage_model"),
+             exec_cfg["slippage_bps"], exec_cfg["commission_bps"])
 
     result = quintile_backtest(
         composite, returns,

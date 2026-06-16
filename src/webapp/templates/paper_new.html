@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 
 {% block content %}
-<h1 class="page-title">新建回测</h1>
+<h1 class="page-title">新建模拟盘</h1>
 <div class="page-sub">
-    任务 = 策略 × 股票池 × 日期范围 → 合成因子 → 月末分组回测 → 取 Top 组。
+    账户 = 策略 × 股票池 × 初始资金。第一版使用 next_open：今日决策，下一根开盘价成交。
 </div>
 
 {% if not strategies %}
@@ -40,18 +40,15 @@
         </div>
 
         {% if watchlists %}
-        <div class="universe-group-title" style="margin-top: 14px;">
-            自定义股票组（Watchlist）
-        </div>
+        <div class="universe-group-title" style="margin-top: 14px;">自定义股票池</div>
         <div class="universe-radio-group">
             {% for w in watchlists %}
-            <label class="universe-radio{% if w.item_count < 5 %} warn-small{% endif %}"
-                   {% if w.item_count < 5 %}title="组内股票数 < 5，分组将自动降级"{% endif %}>
+            <label class="universe-radio{% if w.item_count < 5 %} warn-small{% endif %}">
                 <input type="radio" name="universe" value="watchlist:{{ w.id }}"
                        {% if w.id == preselect_watchlist_id %}checked{% endif %}>
                 <span>{{ w.name }}
                     <span style="color: var(--text-2); font-size: 11.5px; margin-left: 4px;">
-                        · {{ w.item_count }} 只{% if w.item_count < 5 %} ⚠{% endif %}
+                        · {{ w.item_count }} 只
                     </span>
                 </span>
             </label>
@@ -59,42 +56,43 @@
         </div>
         {% else %}
         <div class="form-hint" style="margin-top: 8px;">
-            还没有自定义股票组，<a href="/watchlists/new">点这里创建一个</a>。
+            还没有自定义股票池，<a href="/watchlists/new">点这里创建一个</a>。
         </div>
         {% endif %}
     </div>
 
     <div class="form-row">
         <div class="form-field">
-            <label class="form-label">开始日期</label>
-            <input id="date-start" class="form-input mono" type="text"
-                   value="{{ default_start }}"
-                   placeholder="如 5Y / 3M / 2021-01-01">
-            <div class="form-hint">支持：5Y / 3M / 90D / 具体日期 2021-01-01</div>
+            <label class="form-label">账户名</label>
+            <input id="account-name" class="form-input" type="text" maxlength="100"
+                   placeholder="默认：{策略名} 模拟盘">
         </div>
         <div class="form-field">
-            <label class="form-label">结束日期</label>
-            <input id="date-end" class="form-input mono" type="text"
-                   value="{{ default_end }}"
-                   placeholder="如 today / yesterday / 2026-05-08">
-            <div class="form-hint">today / yesterday / 具体日期</div>
+            <label class="form-label">初始资金（USD）</label>
+            <input id="initial-cash" class="form-input mono" type="number"
+                   min="100" step="100" value="{{ default_initial_cash }}">
         </div>
     </div>
 
-    <div class="form-field">
-        <label class="form-label">任务名（可选）</label>
-        <input id="task-name" class="form-input" type="text" maxlength="100"
-               placeholder="默认：{策略名} @ {股票池}">
+    <div class="form-row">
+        <div class="form-field">
+            <label class="form-label">分组数</label>
+            <input id="n-groups" class="form-input mono" type="number"
+                   min="1" max="20" step="1" value="{{ default_n_groups }}">
+        </div>
+        <div class="form-field">
+            <label class="form-label">目标组</label>
+            <input id="top-group" class="form-input mono" type="number"
+                   min="1" max="20" step="1" value="{{ default_top_group }}">
+        </div>
     </div>
 
     <details class="form-advanced">
         <summary>高级选项 · 成交模型</summary>
         <div class="form-advanced-body">
             <div class="form-hint" style="margin-bottom: 12px;">
-                让回测尽量接近实盘可达上限。<b>next_open</b>（推荐）= T 日决策，T+1 开盘价成交；
-                <b>close</b> = T 日收盘价立刻成交（理论上限，未来函数性偏差）。
-                默认使用 <b>{{ default_exec.fee_model }}</b> 费用模型和 <b>{{ default_exec.slippage_model }}</b> 滑点模型，
-                并在每次调仓时按逐票权重、估算股数、成交价和费用明细扣减。
+                默认使用 <b>{{ default_exec.fee_model }}</b> 费用模型和
+                <b>{{ default_exec.slippage_model }}</b> 滑点模型；订单在下一根开盘价成交。
             </div>
             <input id="exec-fee-model" type="hidden" value="{{ default_exec.fee_model }}">
             <input id="exec-slippage-model" type="hidden" value="{{ default_exec.slippage_model }}">
@@ -102,15 +100,14 @@
                 <div class="form-field">
                     <label class="form-label">成交时机</label>
                     <select id="exec-timing" class="form-input">
-                        <option value="next_open" {% if default_exec.timing == 'next_open' %}selected{% endif %}>
-                            next_open · T+1 开盘价（推荐）
-                        </option>
-                        <option value="close" {% if default_exec.timing == 'close' %}selected{% endif %}>
-                            close · T 日收盘价（理论上限）
-                        </option>
+                        <option value="next_open" selected>next_open · 下一根开盘价</option>
                     </select>
                 </div>
-                <div></div>
+                <div class="form-field">
+                    <label class="form-label">忽略小订单（USD）</label>
+                    <input id="min-order-value" class="form-input mono" type="number"
+                           min="0" step="1" value="{{ default_exec.min_order_value }}">
+                </div>
             </div>
             <div class="form-row">
                 <div class="form-field">
@@ -118,55 +115,57 @@
                     <input id="exec-slippage" class="form-input mono" type="number"
                            min="0" max="1000" step="0.5"
                            value="{{ default_exec.slippage_bps }}">
-                    <div class="form-hint">当缺少成交量或无法计算 volume_share 时使用。</div>
                 </div>
                 <div class="form-field">
                     <label class="form-label">简化手续费兜底（单边 bps）</label>
                     <input id="exec-commission" class="form-input mono" type="number"
                            min="0" max="1000" step="0.5"
                            value="{{ default_exec.commission_bps }}">
-                    <div class="form-hint">仅 simple_bps 或缺少成交明细兜底时使用。</div>
                 </div>
             </div>
         </div>
     </details>
 
     <div class="form-actions">
-        <a class="btn" href="/backtests">取消</a>
-        <button class="btn primary" id="submit-btn" onclick="submitBacktest()">开始回测</button>
+        <a class="btn" href="/paper">取消</a>
+        <button class="btn primary" id="submit-btn" onclick="submitPaper()">创建模拟盘</button>
     </div>
     <div id="submit-msg" class="submit-msg"></div>
 </div>
 
 <script>
-async function submitBacktest() {
+async function submitPaper() {
     const btn = document.getElementById('submit-btn');
     const msg = document.getElementById('submit-msg');
     msg.textContent = '';
 
     const strategy_id = document.getElementById('strategy-select').value;
     const universe = document.querySelector('input[name="universe"]:checked')?.value;
-    const start = document.getElementById('date-start').value.trim();
-    const end = document.getElementById('date-end').value.trim();
-    const name = document.getElementById('task-name').value.trim();
-
+    const name = document.getElementById('account-name').value.trim();
+    const initial_cash = parseFloat(document.getElementById('initial-cash').value);
+    const n_groups = parseInt(document.getElementById('n-groups').value, 10);
+    const top_group = parseInt(document.getElementById('top-group').value, 10);
     const timing = document.getElementById('exec-timing').value;
     const fee_model = document.getElementById('exec-fee-model').value;
     const slippage_model = document.getElementById('exec-slippage-model').value;
     const slippage_bps = parseFloat(document.getElementById('exec-slippage').value);
     const commission_bps = parseFloat(document.getElementById('exec-commission').value);
+    const min_order_value = parseFloat(document.getElementById('min-order-value').value);
 
     if (!strategy_id) { msg.textContent = '请选择策略'; msg.className = 'submit-msg err'; return; }
     if (!universe)    { msg.textContent = '请选择股票池'; msg.className = 'submit-msg err'; return; }
+    if (!Number.isFinite(initial_cash) || initial_cash <= 0) {
+        msg.textContent = '初始资金必须大于 0'; msg.className = 'submit-msg err'; return;
+    }
 
     const payload = {
-        strategy_id, universe, start, end, name,
-        execution: { timing, fee_model, slippage_model, slippage_bps, commission_bps },
+        strategy_id, universe, name, initial_cash, n_groups, top_group,
+        execution: { timing, fee_model, slippage_model, slippage_bps, commission_bps, min_order_value },
     };
 
-    btn.disabled = true; btn.textContent = '提交中...';
+    btn.disabled = true; btn.textContent = '创建中...';
     try {
-        const r = await fetch('/api/backtests', {
+        const r = await fetch('/api/paper/accounts', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(payload),
@@ -175,14 +174,14 @@ async function submitBacktest() {
         if (!r.ok) {
             msg.textContent = data.detail || ('HTTP ' + r.status);
             msg.className = 'submit-msg err';
-            btn.disabled = false; btn.textContent = '开始回测';
+            btn.disabled = false; btn.textContent = '创建模拟盘';
             return;
         }
-        window.location.href = '/backtests/' + data.id;
+        window.location.href = '/paper/' + data.id;
     } catch (e) {
-        msg.textContent = '提交失败：' + e;
+        msg.textContent = '创建失败：' + e;
         msg.className = 'submit-msg err';
-        btn.disabled = false; btn.textContent = '开始回测';
+        btn.disabled = false; btn.textContent = '创建模拟盘';
     }
 }
 </script>
