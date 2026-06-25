@@ -28,6 +28,87 @@
         </div>
     </section>
 
+    {% if confidence.available %}
+    <section class="cards confidence-cards">
+        <div class="card">
+            <div class="label">置信结论</div>
+            <div class="value">
+                <span class="badge {{ confidence.verdict_class }}">{{ confidence.verdict }}</span>
+                <span class="mono">{{ confidence.grade }}</span>
+            </div>
+        </div>
+        <div class="card">
+            <div class="label">综合得分</div>
+            <div class="value">{{ confidence.score }}</div>
+        </div>
+        <div class="card">
+            <div class="label">FDR q-value</div>
+            <div class="value">{{ confidence.summary.q_value }}</div>
+        </div>
+        <div class="card">
+            <div class="label">IC 95% CI</div>
+            <div class="value small">{{ confidence.summary.ci95 }}</div>
+        </div>
+    </section>
+
+    <section class="chart-panel">
+        <div class="panel-title"><span>因子置信评估</span></div>
+        <div class="confidence-summary">
+            <div><span>方向调整 IC</span><strong class="mono">{{ confidence.summary.ic_mean }}</strong></div>
+            <div><span>IC_IR</span><strong class="mono">{{ confidence.summary.ic_ir }}</strong></div>
+            <div><span>t / p</span><strong class="mono">{{ confidence.summary.t_stat }} / {{ confidence.summary.p_value }}</strong></div>
+            <div><span>月度同向</span><strong class="mono">{{ confidence.summary.monthly_positive_pct }}</strong></div>
+            <div><span>分组单调</span><strong class="mono">{{ confidence.summary.monotonic_corr }}</strong></div>
+            <div><span>Rank 自相关</span><strong class="mono">{{ confidence.summary.rank_autocorr_median }}</strong></div>
+            <div><span>Top 换手</span><strong class="mono">{{ confidence.summary.top_quantile_turnover_avg }}</strong></div>
+            <div><span>平均覆盖</span><strong class="mono">{{ confidence.summary.avg_coverage }}</strong></div>
+        </div>
+        <div class="confidence-score-strip">
+            {% for item in confidence.category_scores %}
+            <div>
+                <span>{{ item.label }}</span>
+                <strong class="mono">{{ item.score }}</strong>
+            </div>
+            {% endfor %}
+        </div>
+    </section>
+
+    <section class="table-panel">
+        <div class="table-title">置信检查清单</div>
+        <div class="table-wrap">
+            <table class="data">
+                <thead>
+                    <tr>
+                        <th>类别</th>
+                        <th>检查项</th>
+                        <th>当前值</th>
+                        <th>通过阈值</th>
+                        <th>观察阈值</th>
+                        <th>状态</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for c in confidence.checks %}
+                    <tr>
+                        <td>{{ c.category }}</td>
+                        <td>{{ c.label }}</td>
+                        <td>{{ c.value }}</td>
+                        <td>{{ c.threshold }}</td>
+                        <td>{{ c.watch_threshold }}</td>
+                        <td><span class="badge {{ c.status_class }}">{{ c.status }}</span></td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    {% else %}
+    <section class="empty">
+        <p>当前因子还没有生成置信评估产物。</p>
+        <p><code class="mono">python scripts/run_mvp.py --only-universe {{ universe }} --no-web</code></p>
+    </section>
+    {% endif %}
+
     <section class="chart-panel">
         <div class="panel-title"><span>因子数据质量</span></div>
         <div class="diag-grid">

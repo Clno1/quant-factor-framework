@@ -65,6 +65,57 @@ ic_analysis:
   method: "spearman"               # pearson / spearman（Rank IC 用 spearman）
   min_stocks: 10                   # 单日截面最少股票数，低于则跳过（生产 500 只池建议改 100）
 
+# 因子置信评估
+# 用于判断一个因子是否值得进入策略组合：预测力、稳定性、经济意义、可交易性、数据质量。
+factor_confidence:
+  enabled: true
+  fdr_alpha: 0.10                  # 多因子同时检验时的 FDR 参考阈值
+  score_weights:
+    predictive: 0.35
+    stability: 0.25
+    economic: 0.20
+    tradability: 0.10
+    data_quality: 0.10
+  thresholds:
+    min_observations_pass: 120
+    min_observations_watch: 60
+    min_ic_mean_pass: 0.020
+    min_ic_mean_watch: 0.010
+    min_ic_ir_pass: 0.150
+    min_ic_ir_watch: 0.070
+    min_t_stat_pass: 2.0
+    min_t_stat_watch: 1.5
+    max_p_value_pass: 0.05
+    max_p_value_watch: 0.10
+    max_q_value_pass: 0.10
+    max_q_value_watch: 0.20
+    min_ic_positive_pct_pass: 0.52
+    min_ic_positive_pct_watch: 0.50
+    min_monthly_positive_pct_pass: 0.55
+    min_monthly_positive_pct_watch: 0.50
+    min_rolling_positive_pct_pass: 0.55
+    min_rolling_positive_pct_watch: 0.50
+    min_subperiod_positive_pct_pass: 0.67
+    min_subperiod_positive_pct_watch: 0.34
+    min_monotonic_corr_pass: 0.70
+    min_monotonic_corr_watch: 0.30
+    min_long_short_sharpe_pass: 0.50
+    min_long_short_sharpe_watch: 0.20
+    min_long_short_ann_return_pass: 0.02
+    min_long_short_ann_return_watch: 0.00
+    min_rank_autocorr_pass: 0.70
+    min_rank_autocorr_watch: 0.40
+    max_top_quantile_turnover_pass: 0.75
+    max_top_quantile_turnover_watch: 0.90
+    max_cost_bps_per_year_pass: 300
+    max_cost_bps_per_year_watch: 800
+    min_avg_coverage_pass: 0.80
+    min_avg_coverage_watch: 0.60
+    min_latest_coverage_pass: 0.80
+    min_latest_coverage_watch: 0.60
+    max_zero_std_pct_pass: 0.02
+    max_zero_std_pct_watch: 0.05
+
 # 五分位回测
 backtest:
   n_groups: 5                      # 分组数（Quintile = 5）

@@ -104,6 +104,24 @@ def save_factor_values(
     return path
 
 
+def save_factor_confidence_artifacts(
+    name: str,
+    *,
+    report: dict,
+    checks: pd.DataFrame,
+    rank_autocorr: pd.DataFrame,
+    quantile_turnover: pd.DataFrame,
+    universe: str = DEFAULT_UNIVERSE,
+) -> Path:
+    """保存因子置信评估产物。"""
+    d = factor_dir(name, universe=universe)
+    save_json(report, d / "confidence.json")
+    write_parquet(checks, d / "confidence_checks.parquet")
+    write_parquet(rank_autocorr, d / "rank_autocorr.parquet")
+    write_parquet(quantile_turnover, d / "quantile_turnover.parquet")
+    return d
+
+
 def load_factor_values(
     name: str, universe: str = DEFAULT_UNIVERSE,
 ) -> pd.DataFrame | None:
@@ -164,6 +182,10 @@ def _load_factor_dir(d: Path, name: str) -> dict[str, Any] | None:
         "ls_nav": read_parquet(d / "ls_nav.parquet")["LongShort"] if (d / "ls_nav.parquet").exists() else pd.Series(dtype=float),
         "ls_returns": read_parquet(d / "ls_returns.parquet")["LongShort"] if (d / "ls_returns.parquet").exists() else pd.Series(dtype=float),
         "group_metrics": read_parquet(d / "group_metrics.parquet") if (d / "group_metrics.parquet").exists() else pd.DataFrame(),
+        "confidence": load_json(d / "confidence.json") if (d / "confidence.json").exists() else None,
+        "confidence_checks": read_parquet(d / "confidence_checks.parquet") if (d / "confidence_checks.parquet").exists() else pd.DataFrame(),
+        "rank_autocorr": read_parquet(d / "rank_autocorr.parquet") if (d / "rank_autocorr.parquet").exists() else pd.DataFrame(),
+        "quantile_turnover": read_parquet(d / "quantile_turnover.parquet") if (d / "quantile_turnover.parquet").exists() else pd.DataFrame(),
     }
 
 
@@ -183,4 +205,5 @@ __all__ = [
     "save_factor_artifacts", "list_factors", "load_factor",
     "factor_dir", "list_universes",
     "save_factor_values", "load_factor_values",
+    "save_factor_confidence_artifacts",
 ]

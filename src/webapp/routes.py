@@ -72,15 +72,163 @@ def _sanitize(obj: Any) -> Any:
 
 
 def _format_pct(x, digits: int = 2) -> str:
-    if x is None or (isinstance(x, float) and (math.isnan(x) or math.isinf(x))):
+    if x is None:
         return "—"
-    return f"{x * 100:.{digits}f}%"
+    try:
+        value = float(x)
+    except (TypeError, ValueError):
+        return "—"
+    if math.isnan(value) or math.isinf(value):
+        return "—"
+    return f"{value * 100:.{digits}f}%"
 
 
 def _format_num(x, digits: int = 4) -> str:
-    if x is None or (isinstance(x, float) and (math.isnan(x) or math.isinf(x))):
+    if x is None:
         return "—"
-    return f"{x:.{digits}f}"
+    try:
+        value = float(x)
+    except (TypeError, ValueError):
+        return "—"
+    if math.isnan(value) or math.isinf(value):
+        return "—"
+    return f"{value:.{digits}f}"
+
+
+def _status_label(status: str | None) -> str:
+    return {
+        "PASS": "通过",
+        "WATCH": "观察",
+        "FAIL": "拒绝",
+    }.get(str(status or "").upper(), "未生成")
+
+
+def _status_badge_class(status: str | None) -> str:
+    return {
+        "PASS": "green",
+        "WATCH": "amber",
+        "FAIL": "red",
+    }.get(str(status or "").upper(), "")
+
+
+def _category_label(category: str | None) -> str:
+    return {
+        "predictive": "预测力",
+        "stability": "稳定性",
+        "economic": "经济意义",
+        "tradability": "可交易性",
+        "data_quality": "数据质量",
+    }.get(str(category or ""), str(category or "—"))
+
+
+def _format_check_value(check_id: str, value: Any, unit: str = "") -> str:
+    x = _format_num(value, 4)
+    if x == "—":
+        return x
+    if unit == "bps":
+        return f"{float(value):.1f} bps"
+    if check_id in {
+        "ic_positive_pct",
+        "monthly_positive_pct",
+        "rolling_positive_pct_63d",
+        "subperiod_positive_pct",
+        "top_quantile_turnover_avg",
+        "avg_coverage",
+        "latest_coverage",
+        "zero_std_pct",
+        "long_short_ann_return",
+    }:
+        return _format_pct(float(value), 2)
+    if check_id in {"p_value", "q_value"}:
+        return _format_num(value, 5)
+    if check_id == "n_obs":
+        return f"{int(float(value)):,}"
+    return x
+
+
+def _confidence_brief(conf: dict | None, checks_df: pd.DataFrame | None = None) -> dict:
+    if not conf:
+        return {
+            "available": False,
+            "verdict": "未生成",
+            "verdict_class": "",
+            "grade": "—",
+            "score": "—",
+            "q_value": "—",
+            "passed": "—",
+        }
+    summary = conf.get("summary") or {}
+    checks_total = 0
+    checks_passed = 0
+    if checks_df is not None and not checks_df.empty:
+        checks_total = int(len(checks_df))
+        checks_passed = int((checks_df["status"] == "PASS").sum()) if "status" in checks_df else 0
+    return {
+        "available": True,
+        "verdict": _status_label(conf.get("verdict")),
+        "verdict_class": _status_badge_class(conf.get("verdict")),
+        "grade": conf.get("grade") or "—",
+        "score": _format_num(conf.get("score"), 1),
+        "q_value": _format_num(summary.get("q_value"), 5),
+        "p_value": _format_num(summary.get("p_value"), 5),
+        "passed": f"{checks_passed}/{checks_total}" if checks_total else "—",
+    }
+
+
+def _confidence_detail(conf: dict | None, checks_df: pd.DataFrame | None) -> dict:
+    brief = _confidence_brief(conf, checks_df)
+    if not conf:
+        return {**brief, "summary": {}, "category_scores": [], "checks": []}
+
+    summary = conf.get("summary") or {}
+    category_scores = []
+    for category, score in (conf.get("category_scores") or {}).items():
+        category_scores.append({
+            "category": category,
+            "label": _category_label(category),
+            "score": _format_num(score, 1),
+        })
+
+    checks = []
+    if checks_df is not None and not checks_df.empty:
+        for row in checks_df.to_dict(orient="records"):
+            check_id = str(row.get("check_id") or "")
+            unit = str(row.get("unit") or "")
+            checks.append({
+                "category": _category_label(row.get("category")),
+                "label": row.get("label") or check_id,
+                "value": _format_check_value(check_id, row.get("value"), unit),
+                "threshold": (
+                    f"{row.get('operator', '')} "
+                    f"{_format_check_value(check_id, row.get('pass_threshold'), unit)}"
+                ),
+                "watch_threshold": _format_check_value(check_id, row.get("watch_threshold"), unit),
+                "status": _status_label(row.get("status")),
+                "status_class": _status_badge_class(row.get("status")),
+            })
+
+    return {
+        **brief,
+        "summary": {
+            "ic_mean": _format_num(summary.get("ic_mean"), 4),
+            "ic_mean_raw": _format_num(summary.get("ic_mean_raw"), 4),
+            "ic_ir": _format_num(summary.get("ic_ir"), 4),
+            "t_stat": _format_num(summary.get("t_stat"), 3),
+            "p_value": _format_num(summary.get("p_value"), 5),
+            "q_value": _format_num(summary.get("q_value"), 5),
+            "ci95": (
+                f"{_format_num(summary.get('ci95_low'), 4)} / "
+                f"{_format_num(summary.get('ci95_high'), 4)}"
+            ),
+            "monthly_positive_pct": _format_pct(summary.get("monthly_positive_pct")),
+            "monotonic_corr": _format_num(summary.get("monotonic_corr"), 3),
+            "rank_autocorr_median": _format_num(summary.get("rank_autocorr_median"), 3),
+            "top_quantile_turnover_avg": _format_pct(summary.get("top_quantile_turnover_avg")),
+            "avg_coverage": _format_pct(summary.get("avg_coverage")),
+        },
+        "category_scores": category_scores,
+        "checks": checks,
+    }
 
 
 def _resolve_universe(requested: str | None) -> str:
@@ -100,6 +248,10 @@ def _ic_summary_rows(universe: str) -> list[dict]:
         if not data:
             continue
         s = data["ic_summary"]
+        confidence = _confidence_brief(
+            data.get("confidence"),
+            data.get("confidence_checks"),
+        )
         rows.append({
             "factor": name,
             "description": data["meta"].get("description", ""),
@@ -111,6 +263,7 @@ def _ic_summary_rows(universe: str) -> list[dict]:
             "IC_abs_gt_thr_pct": _format_pct(s.get("IC_abs_gt_thr_pct")),
             "t_stat":  _format_num(s.get("t_stat")),
             "N":       s.get("N", 0),
+            "confidence": confidence,
         })
     return rows
 
@@ -297,6 +450,10 @@ def factor_detail(
             "t_stat":            _format_num(data["ic_summary"].get("t_stat")),
             "N":                 data["ic_summary"].get("N", 0),
         },
+        "confidence": _confidence_detail(
+            data.get("confidence"),
+            data.get("confidence_checks"),
+        ),
         "factor_quality": _factor_quality_summary(factor_values),
         "ic_fig_json": fig_to_json(ic_fig),
         "ic_dist_fig_json": fig_to_json(ic_dist_fig),
@@ -520,8 +677,25 @@ def api_factor_summary(name: str, universe: str | None = Query(None)):
         "name": name,
         "meta": d["meta"],
         "ic_summary": d["ic_summary"],
+        "confidence": d.get("confidence"),
         "backtest_config": d["backtest_config"],
         "group_metrics": {idx: row.to_dict() for idx, row in metrics.iterrows()} if not metrics.empty else {},
+    }
+    return JSONResponse(_sanitize(payload))
+
+
+@router.get("/api/factor/{name}/confidence")
+def api_factor_confidence(name: str, universe: str | None = Query(None)):
+    universe = _resolve_universe(universe)
+    d = load_factor(name, universe=universe)
+    if not d:
+        raise HTTPException(status_code=404, detail="Factor not found")
+    checks = d.get("confidence_checks")
+    payload = {
+        "universe": universe,
+        "name": name,
+        "confidence": d.get("confidence"),
+        "checks": checks.to_dict(orient="records") if checks is not None and not checks.empty else [],
     }
     return JSONResponse(_sanitize(payload))
 

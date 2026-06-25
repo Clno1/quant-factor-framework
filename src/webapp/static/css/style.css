@@ -430,8 +430,56 @@ h1.page-title {
     font-family: 'JetBrains Mono', monospace;
     color: var(--text-0); font-size: 24px; font-weight: 600;
 }
+.card .value.small { font-size: 16px; line-height: 1.4; }
 .card .value.pos { color: var(--green); }
 .card .value.neg { color: var(--red); }
+
+.confidence-cards .card .value {
+    min-height: 34px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.confidence-summary,
+.confidence-score-strip {
+    display: grid;
+    gap: 10px;
+}
+
+.confidence-summary {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    padding: 8px 10px 12px;
+}
+
+.confidence-summary > div,
+.confidence-score-strip > div {
+    min-width: 0;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.03);
+    padding: 10px 12px;
+}
+
+.confidence-summary span,
+.confidence-score-strip span {
+    display: block;
+    color: var(--text-2);
+    font-size: 11px;
+    margin-bottom: 4px;
+}
+
+.confidence-summary strong,
+.confidence-score-strip strong {
+    color: var(--text-0);
+    font-size: 13px;
+}
+
+.confidence-score-strip {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    padding: 0 10px 10px;
+}
 
 /* ------------------ 图表包装 ------------------ */
 .chart-panel {
@@ -572,6 +620,8 @@ footer.site-footer {
         white-space: nowrap;
     }
     .cards { grid-template-columns: repeat(2, 1fr); }
+    .confidence-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .confidence-score-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 640px) {
     .sidebar { padding: 12px 10px 10px; }
@@ -595,6 +645,8 @@ footer.site-footer {
     .container { padding: 16px 14px 40px; }
     h1.page-title { font-size: 20px; }
     .cards { grid-template-columns: 1fr; gap: 10px; }
+    .confidence-summary,
+    .confidence-score-strip { grid-template-columns: 1fr; }
     .card { padding: 14px; }
     .card .value { font-size: 20px; }
     table.data { font-size: 12px; }

@@ -32,7 +32,12 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.analysis import compute_ic, ic_summary  # noqa: E402
+from src.analysis import (  # noqa: E402
+    build_factor_confidence,
+    compute_ic,
+    finalize_confidence_reports,
+    ic_summary,
+)
 from src.backtest import double_sort_backtest, quintile_backtest  # noqa: E402
 from src.config import CONFIG  # noqa: E402
 from src.data import build_wide_tables, get_universe  # noqa: E402
@@ -49,6 +54,7 @@ from src.visualization.plots_mpl import (  # noqa: E402
 from src.webapp.results_store import (  # noqa: E402
     factor_dir,
     save_factor_artifacts,
+    save_factor_confidence_artifacts,
     save_factor_values,
 )
 
@@ -94,6 +100,13 @@ def _min_stocks_for(n_universe: int) -> int:
     return base
 
 
+def _factor_confidence_enabled() -> bool:
+    try:
+        return bool(CONFIG.factor_confidence.enabled)
+    except AttributeError:
+        return True
+
+
 def run_pipeline_for_universe(
     universe: str,
     universe_limit: int | None = None,
@@ -127,6 +140,7 @@ def run_pipeline_for_universe(
 
     min_stocks = _min_stocks_for(adj_close.shape[1])
     log.info("[%s] IC min_stocks (adaptive) = %d", universe, min_stocks)
+    confidence_candidates = {}
 
     for fname in enabled:
         if fname not in FACTOR_REGISTRY:
@@ -221,6 +235,41 @@ def run_pipeline_for_universe(
             universe=universe,
         )
         log.info("Artifacts persisted for %s [%s]", fname, universe)
+
+        if _factor_confidence_enabled():
+            try:
+                confidence_candidates[fname] = build_factor_confidence(
+                    factor_name=fname,
+                    ic=ic,
+                    factor_values=clean,
+                    group_metrics=result.group_metrics,
+                    factor_direction=factor.direction,
+                    execution_cost_bps_per_year=result.execution_cost_bps_per_year,
+                )
+                log.info("[%s] Confidence draft built for %s", universe, fname)
+            except Exception as e:  # noqa: BLE001
+                log.exception("[%s] Confidence evaluation failed for %s: %s", universe, fname, e)
+
+    if _factor_confidence_enabled() and confidence_candidates:
+        finalized = finalize_confidence_reports(confidence_candidates)
+        for fname, art in finalized.items():
+            save_factor_confidence_artifacts(
+                fname,
+                report=art.report,
+                checks=art.checks,
+                rank_autocorr=art.rank_autocorr,
+                quantile_turnover=art.quantile_turnover,
+                universe=universe,
+            )
+            log.info(
+                "[%s] Confidence saved for %s: verdict=%s grade=%s score=%.2f q=%s",
+                universe,
+                fname,
+                art.report.get("verdict"),
+                art.report.get("grade"),
+                float(art.report.get("score") or 0.0),
+                art.report.get("summary", {}).get("q_value"),
+            )
 
     log.info("=" * 60)
     log.info("[%s] Pipeline finished. Outputs in: outputs/universes/%s/factors/",

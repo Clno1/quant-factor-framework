@@ -93,6 +93,9 @@
                         <th>IC&gt;0 占比</th>
                         <th>|IC|&gt;0.02 占比</th>
                         <th>t 统计量</th>
+                        <th>置信</th>
+                        <th>得分</th>
+                        <th>q-value</th>
                         <th>样本数</th>
                         <th></th>
                     </tr>
@@ -112,6 +115,12 @@
                         <td>{{ r.IC_gt0_pct }}</td>
                         <td>{{ r.IC_abs_gt_thr_pct }}</td>
                         <td>{{ r.t_stat }}</td>
+                        <td>
+                            <span class="badge {{ r.confidence.verdict_class }}">{{ r.confidence.verdict }}</span>
+                            <span class="mono">{{ r.confidence.grade }}</span>
+                        </td>
+                        <td>{{ r.confidence.score }}</td>
+                        <td>{{ r.confidence.q_value }}</td>
                         <td>{{ r.N }}</td>
                         <td><a href="/backtest/{{ r.factor }}?universe={{ universe }}">回测详情 →</a></td>
                     </tr>
