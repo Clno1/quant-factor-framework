@@ -1,6 +1,15 @@
 # ============================================================
 # 多因子量化研究框架 - 默认配置
 # 所有模块统一从此文件读取参数，避免硬编码
+#
+# 阅读提示：
+#   1. universes / date_range / data 控制“数据准备”。
+#   2. factors / preprocessing / ic_analysis / factor_confidence 控制“因子研究”。
+#   3. backtest / backtest.execution / backtest.tradability 控制“回测成交假设”。
+#   4. webapp 控制“网页服务和 outputs 读取位置”。
+#   5. 不确定某个配置被谁使用时，用：
+#        rg "配置名" src scripts
+#      例如：rg "min_open_coverage" src scripts
 # ============================================================
 
 # 股票池
