@@ -1,5 +1,5 @@
 # ============================================================
-# 多因子量化研究框架 - 默认配置
+# 量化研究平台 - 默认配置
 # 所有模块统一从此文件读取参数，避免硬编码
 #
 # 阅读提示：
@@ -59,13 +59,43 @@ data:
   retry_times: 3                   # 下载失败重试次数
   cache_days: 7                    # 本地缓存有效期（天），过期重新下载
 
+# 动量交易提醒
+# Discord Webhook 等密钥只从环境变量或 .env.local 读取，不写在这里。
+momentum_alerts:
+  universe: "US_ACTIVE"
+  exchange: "NASDAQ"
+  asset_types:
+    include_etfs: false             # Discord 告警默认仅扫描股票；网页 US_ACTIVE 仍保留 ETF
+  broad_scan:
+    min_return_20d: 10.0           # 盘前宽筛，给盘中上涨留出进入严格筛选的空间
+    min_adr_20d: 4.5
+    min_current_dollar_volume_m: 5.0
+    min_avg_dollar_volume_m: 10.0
+    max_symbols: 600
+  strict_scan:
+    min_return_20d: 20.0
+    min_adr_20d: 6.0
+    min_dollar_volume_m: 10.0
+    min_avg_dollar_volume_m: 10.0
+  quotes:
+    chunk_size: 100
+  intraday:
+    enabled: false                 # 影子阶段先关闭；稳定后只对严格候选开启
+    interval: 5
+    max_symbols: 25
+    lookback_days: 3
+  notifications:
+    max_rows: 10
+    mention_levels: ["READY", "BREAKOUT", "OPENING_RANGE_BREAK"]
+    send_empty_digest: false
+
 # 因子预处理
 preprocessing:
   winsorize_method: "mad"          # mad / 3sigma
   winsorize_n: 3                   # MAD 倍数
   standardize: true                # 是否做 Z-score 标准化
-  neutralize_industry: false       # MVP 暂不启用，接口已预留
-  neutralize_mcap: false           # 需要 data/processed/<UNIVERSE>/market_cap.parquet
+  neutralize_industry: true        # 默认开启行业中性化，剥离 sector 暴露后再做最终 Z-score
+  neutralize_mcap: false           # 需要真实历史 data/processed/<UNIVERSE>/market_cap.parquet；缺数据时不要假打开
   neutralize_min_obs: 30
 
 # 单因子 IC 分析
@@ -214,5 +244,5 @@ webapp:
   host: "0.0.0.0"                  # 0.0.0.0 允许手机访问
   port: 18823
   reload: false
-  title: "多因子量化研究"
+  title: "量化研究平台"
   output_dir: "outputs"            # 图表 / JSON 缓存目录

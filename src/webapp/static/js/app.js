@@ -35,6 +35,29 @@
     });
 })();
 
+/** Immediate feedback for same-origin page navigation and form submissions. */
+(function () {
+    function startNavigation() {
+        document.body.classList.add('is-navigating');
+    }
+
+    document.addEventListener('click', function (event) {
+        if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+            return;
+        }
+        const link = event.target.closest('a[href]');
+        if (!link || link.target || link.hasAttribute('download')) return;
+        const target = new URL(link.href, window.location.href);
+        if (target.origin !== window.location.origin || target.href === window.location.href) return;
+        startNavigation();
+    });
+
+    document.addEventListener('submit', startNavigation);
+    window.addEventListener('pageshow', function () {
+        document.body.classList.remove('is-navigating');
+    });
+})();
+
 /**
  * <details class="dropdown"> 增强：点外面自动收起、Esc 关闭。
  */

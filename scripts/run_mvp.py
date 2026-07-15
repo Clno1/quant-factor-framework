@@ -13,7 +13,7 @@ Multi-Factor Quant pipeline 一键脚本（支持多股票池）。
   3. 构建宽表（adj_close / returns / sector ...）
   4. 对每个启用因子：
      a. 计算因子值
-     b. 预处理（MAD 去极值 + 横截面 Z-score）
+     b. 预处理（MAD 去极值 + 行业/市值中性化 + 最终横截面 Z-score）
      c. 计算 IC 时序 + 汇总指标
      d. 五分位分组回测（Quintile + Long-Short）
      e. 生成 matplotlib 静态图 + Plotly 交互图 JSON
@@ -229,7 +229,7 @@ def run_pipeline_for_universe(
                  raw.shape, 100 * raw.notna().mean().mean())
 
         # 5) 预处理因子。
-        #    典型步骤：去极值、横截面 Z-score、可选行业/市值中性化。
+        #    典型步骤：去极值、可选行业/市值中性化、最终横截面 Z-score。
         #    后续 IC 和回测使用 clean，而不是 raw。
         clean = preprocess_factor(
             raw,

@@ -28,6 +28,7 @@ ENV/
 # Project data & logs (保留目录结构，忽略内容)
 data/raw/*
 data/processed/*
+data/cache/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 logs/*

@@ -1,0 +1,13 @@
+[Unit]
+Description=Run US momentum alerts hourly
+
+[Timer]
+OnCalendar=*-*-* *:35:00 Asia/Singapore
+Persistent=true
+AccuracySec=1min
+RandomizedDelaySec=20s
+Unit=quant-momentum-alerts.service
+
+[Install]
+WantedBy=timers.target
+

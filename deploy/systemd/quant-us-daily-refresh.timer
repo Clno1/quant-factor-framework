@@ -1,0 +1,13 @@
+[Unit]
+Description=Refresh US stock cache after each US trading session
+
+[Timer]
+OnCalendar=Tue..Sat *-*-* 07:15:00 Asia/Singapore
+Persistent=true
+AccuracySec=2min
+RandomizedDelaySec=30s
+Unit=quant-us-daily-refresh.service
+
+[Install]
+WantedBy=timers.target
+

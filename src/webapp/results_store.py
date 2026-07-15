@@ -25,6 +25,7 @@ from typing import Any
 import pandas as pd
 
 from src.config import CONFIG, PROJECT_ROOT
+from src.factors.artifacts import load_factor_values
 from src.utils.io import ensure_dir, load_json, read_parquet, save_json, write_parquet
 
 _OUT_DIR = (
@@ -120,18 +121,6 @@ def save_factor_confidence_artifacts(
     write_parquet(rank_autocorr, d / "rank_autocorr.parquet")
     write_parquet(quantile_turnover, d / "quantile_turnover.parquet")
     return d
-
-
-def load_factor_values(
-    name: str, universe: str = DEFAULT_UNIVERSE,
-) -> pd.DataFrame | None:
-    """读取因子值矩阵。文件不存在返回 None，由调用方决定报错方式。"""
-    d = _universe_root(universe) / name
-    p = d / "factor_values.parquet"
-    if p.exists():
-        return read_parquet(p)
-    # 老产物路径无此文件，直接返回 None（提示用户重跑 pipeline）
-    return None
 
 
 # ---------------------------------------------------------------

@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1 class="page-title">
+    {{ ticker }}
+    {% if metric.name %}<span class="page-sub-inline">{{ metric.name }}</span>{% endif %}
+    <span class="badge breakout-status status-{{ metric.status|lower }}">{{ metric.status }}</span>
+</h1>
+<div class="page-sub">
+    {{ metric.sector or '行业未提供' }} · 日线 {{ metric.data_date }} · {{ universe_label }}
+</div>
+
+<div class="toolbar-row breakout-detail-toolbar">
+    <a class="btn" href="/breakouts?universe={{ universe }}&asof={{ metric.data_date }}">返回扫描</a>
+    <a class="btn" href="/stock/{{ ticker }}?universe={{ universe }}">多因子诊断</a>
+</div>
+
+<div class="market-regime-band market-{{ market.status|lower }}">
+    <div><span class="market-regime-label">QQQ 市场环境</span><strong>{{ market.status }}</strong><span>{{ market.reason }}</span></div>
+    <span class="mono">{{ market.asof }}</span>
+</div>
+
+<section class="paper-metrics breakout-detail-metrics">
+    <div class="metric-card"><span>Setup 评分</span><strong class="mono">{{ metric.score }} / 100</strong></div>
+    <div class="metric-card"><span>20日涨幅</span><strong class="mono pos">{{ "%.1f"|format(metric.return_20d) }}%</strong></div>
+    <div class="metric-card"><span>ADR20</span><strong class="mono">{{ "%.1f"|format(metric.adr_20d) }}%</strong></div>
+    <div class="metric-card"><span>20日 Pivot</span><strong class="mono">${{ "%.2f"|format(metric.pivot) }}</strong></div>
+    <div class="metric-card"><span>距 Pivot</span><strong class="mono {% if metric.pivot_distance >= -3 %}pos{% endif %}">{{ "%+.1f"|format(metric.pivot_distance) }}%</strong></div>
+    <div class="metric-card"><span>整理天数</span><strong class="mono">{{ metric.consolidation_days }}d</strong></div>
+</section>
+
+<section class="chart-panel">
+    <div class="plot breakout-daily-chart" data-plotly-json='{{ daily_fig_json|safe }}'></div>
+</section>
+
+<section class="breakout-detail-grid">
+    <div class="chart-panel breakout-check-panel">
+        <div class="panel-title"><span>日线检查表</span><span class="mono">{{ metric.setup_checks.values()|select('equalto', true)|list|length }}/9</span></div>
+        <div class="table-wrap">
+            <table class="data compact breakout-check-table">
+                <tbody>
+                {% for row in check_rows %}
+                    <tr>
+                        <td><span class="check-state {% if row.passed %}is-pass{% else %}is-fail{% endif %}">{% if row.passed %}PASS{% else %}MISS{% endif %}</span></td>
+                        <td><strong>{{ row.label }}</strong></td>
+                        <td>{{ row.value }}</td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="chart-panel breakout-level-panel">
+        <div class="panel-title"><span>日线关键位</span></div>
+        <dl class="breakout-levels">
+            <div><dt>收盘</dt><dd class="mono">${{ "%.2f"|format(metric.close) }}</dd></div>
+            <div><dt>MA10</dt><dd class="mono">${{ "%.2f"|format(metric.ma10) }}</dd></div>
+            <div><dt>MA20</dt><dd class="mono">${{ "%.2f"|format(metric.ma20) }}</dd></div>
+            <div><dt>MA50</dt><dd class="mono">${{ "%.2f"|format(metric.ma50) }}</dd></div>
+            <div><dt>前高日期</dt><dd class="mono">{{ metric.peak_date }}</dd></div>
+            <div><dt>前段涨幅</dt><dd class="mono">{{ "%.1f"|format(metric.prior_move) }}%</dd></div>
+            <div><dt>缩量比</dt><dd class="mono">{{ "%.2f"|format(metric.volume_dryup) }}</dd></div>
+            <div><dt>日线低点风险</dt><dd class="mono">{{ "%.1f"|format(metric.stop_width) }}%</dd></div>
+        </dl>
+    </div>
+</section>
+
+<section class="chart-panel intraday-panel">
+    <div class="panel-title intraday-title-row">
+        <span>盘中触发器</span>
+        <span id="intraday-source" class="mono breakout-count">等待加载</span>
+    </div>
+    <div class="intraday-controls" role="group" aria-label="分钟周期">
+        {% for interval in [1, 5, 15, 30, 60] %}
+        <button type="button" class="interval-btn {% if interval == 5 %}is-active{% endif %}" data-interval="{{ interval }}">{{ interval }}m</button>
+        {% endfor %}
+    </div>
+
+    <div class="paper-metrics intraday-metrics">
+        {% for minutes in [1, 5, 30, 60] %}
+        <div class="metric-card" id="or-card-{{ minutes }}">
+            <span>ORH {{ minutes }}m</span>
+            <strong class="mono" id="or-high-{{ minutes }}">—</strong>
+            <small id="or-state-{{ minutes }}">—</small>
+        </div>
+        {% endfor %}
+        <div class="metric-card"><span>最新价</span><strong class="mono" id="intraday-last">—</strong><small id="intraday-time">—</small></div>
+        <div class="metric-card"><span>当日低点 / 风险</span><strong class="mono" id="intraday-low">—</strong><small id="intraday-risk">—</small></div>
+    </div>
+    <div id="intraday-message" class="intraday-message">正在读取 FMP 分钟行情…</div>
+    <div id="intraday-chart" class="breakout-intraday-chart" aria-label="分钟 K 线图"></div>
+</section>
+
+<script>window.__BREAKOUT_TICKER__ = {{ ticker|tojson }};</script>
+<script src="/static/js/breakout_detail.js?v={{ asset_ver }}"></script>
+{% endblock %}

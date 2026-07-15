@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5">
     <meta name="theme-color" content="#0E1117">
-    <title>{{ title or "多因子量化研究" }}</title>
+    <title>{{ title or "量化研究平台" }}</title>
 
     <!-- Plotly.js CDN -->
     <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
@@ -13,12 +13,13 @@
     <link rel="stylesheet" href="/static/css/style.css?v={{ asset_ver }}">
 </head>
 <body>
+    <div class="nav-progress" aria-hidden="true"></div>
     <div class="app-shell">
         <aside class="sidebar" aria-label="主导航">
             <a href="/" class="brand side-brand">
                 <span class="brand-badge">Q</span>
                 <span>
-                    <strong>多因子量化</strong>
+                    <strong>量化研究平台</strong>
                     <small>Research Console</small>
                 </span>
             </a>
@@ -60,6 +61,11 @@
                    class="side-group-link {% if request.url.path.startswith('/watchlists') %}active{% endif %}">
                     <span>股票池</span>
                 </a>
+
+                <a href="/breakouts"
+                   class="side-group-link {% if request.url.path.startswith('/breakouts') %}active{% endif %}">
+                    <span>动量交易</span>
+                </a>
             </nav>
         </aside>
 
@@ -69,7 +75,7 @@
             </main>
 
             <footer class="site-footer">
-                <span>多因子量化研究 · 深色仪表盘</span>
+                <span>量化研究平台 · Research Console</span>
             </footer>
         </div>
     </div>

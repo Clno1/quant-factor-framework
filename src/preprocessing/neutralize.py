@@ -1,4 +1,13 @@
-"""Cross-sectional factor neutralization."""
+"""
+横截面因子中性化。
+
+这里的“中性化”是每天做一次截面回归：
+
+    factor_i = const + industry_dummies_i + log_mcap_i + residual_i
+
+然后用 residual_i 作为新的因子值。这样可以剥离行业、市值等已知风险暴露。
+如果某一天有效股票太少，或者缺少 sector / market cap 数据，则不会强行回归。
+"""
 from __future__ import annotations
 
 import numpy as np
@@ -34,7 +43,16 @@ def _neutralize_row(
     use_industry: bool,
     use_mcap: bool,
     min_obs: int,
-) -> pd.Series:
+) -> tuple[pd.Series, bool]:
+    """
+    对单个交易日做一次截面中性化。
+
+    Returns
+    -------
+    (neutralized_row, applied)
+        applied=True 表示这一天真的完成了回归并返回残差。
+        applied=False 表示数据不足/配置不可用，返回原始截面。
+    """
     y = factor_row.astype("float64")
     valid = y.notna()
     parts: list[pd.DataFrame | pd.Series] = []
@@ -53,12 +71,12 @@ def _neutralize_row(
         parts.append(np.log(mcap).rename("log_mcap"))
 
     if not parts:
-        return y
+        return y, False
 
     X = pd.concat(parts, axis=1).loc[valid]
     yy = y.loc[valid]
     if len(yy) < max(min_obs, X.shape[1] + 2):
-        return y
+        return y, False
 
     X = pd.concat(
         [pd.Series(1.0, index=X.index, name="const"), X.astype("float64")],
@@ -67,11 +85,11 @@ def _neutralize_row(
     try:
         beta, *_ = np.linalg.lstsq(X.to_numpy(), yy.to_numpy(), rcond=None)
     except np.linalg.LinAlgError:
-        return y
+        return y, False
     resid = yy - X.to_numpy().dot(beta)
     out = pd.Series(np.nan, index=y.index, dtype="float64")
     out.loc[valid] = resid
-    return out
+    return out, True
 
 
 def neutralize_industry(
@@ -108,23 +126,42 @@ def neutralize_industry(
     if use_mcap and not has_mcap:
         log.warning("Market-cap neutralization requested but mcap_df is missing.")
 
-    if (use_industry and sector is None) and (use_mcap and not has_mcap):
+    active_industry = bool(use_industry and sector is not None)
+    active_mcap = bool(use_mcap and has_mcap)
+    if not active_industry and not active_mcap:
+        log.warning(
+            "Neutralization requested but no usable exposure data is available "
+            "(industry=%s, mcap=%s). Returning factor unchanged.",
+            use_industry,
+            use_mcap,
+        )
         return factor_df.copy()
 
     min_obs = int(getattr(CONFIG.preprocessing, "neutralize_min_obs", 30))
     rows = []
+    applied_count = 0
     for dt, row in factor_df.iterrows():
         mcap_row = mcap_df.loc[dt] if has_mcap and dt in mcap_df.index else None
-        rows.append(
-            _neutralize_row(
-                row,
-                sector,
-                mcap_row,
-                use_industry=use_industry and sector is not None,
-                use_mcap=use_mcap and has_mcap,
-                min_obs=min_obs,
-            )
+        neutralized, applied = _neutralize_row(
+            row,
+            sector,
+            mcap_row,
+            use_industry=active_industry,
+            use_mcap=active_mcap,
+            min_obs=min_obs,
         )
+        rows.append(neutralized)
+        applied_count += int(applied)
+    skipped = len(rows) - applied_count
+    log.info(
+        "Neutralization finished: applied=%d skipped=%d "
+        "(industry=%s, mcap=%s, min_obs=%d)",
+        applied_count,
+        skipped,
+        active_industry,
+        active_mcap,
+        min_obs,
+    )
     return pd.DataFrame(rows, index=factor_df.index, columns=factor_df.columns)
 
 

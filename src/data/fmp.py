@@ -5,9 +5,11 @@ Financial Modeling Prep (FMP) API 客户端。
 
 支持的 endpoint：
   - /stable/sp500-constituent              成分股 + sector + subSector
+  - /stable/company-screener               美股活跃股票 / ETF 筛选
   - /stable/historical-price-eod/dividend-adjusted   日线 OHLCV（含分红/拆股复权 close）
   - /stable/historical-price-eod/full      日线 OHLCV（仅拆股复权）
   - /stable/profile                        公司基本资料（备用 sector 来源）
+  - /stable/historical-chart/{interval}   分钟 / 小时 OHLCV
 
 API Key 加载优先级（高 → 低）：
   1. 环境变量 FMP_API_KEY
@@ -67,8 +69,8 @@ def _request_retry() -> int:
 def _get(path: str, params: dict[str, Any] | None = None) -> Any:
     """带超时与指数退避重试的 GET。返回解析后的 JSON。"""
     params = dict(params or {})
-    params["apikey"] = get_api_key()
     url = f"{_BASE_URL}{path}"
+    headers = {"apikey": get_api_key()}
 
     timeout = _request_timeout()
     retry = _request_retry()
@@ -76,7 +78,7 @@ def _get(path: str, params: dict[str, Any] | None = None) -> Any:
 
     for attempt in range(retry + 1):
         try:
-            r = requests.get(url, params=params, timeout=timeout)
+            r = requests.get(url, params=params, headers=headers, timeout=timeout)
             # 限流
             if r.status_code == 429:
                 wait = 2.0 * (2 ** attempt)
@@ -148,6 +150,133 @@ def get_sp500_constituents() -> pd.DataFrame:
     df = df.drop_duplicates(subset=["ticker"]).reset_index(drop=True)
     log.info("FMP returned %d S&P 500 tickers.", len(df))
     return df
+
+
+def get_us_active_equities(
+    *,
+    min_current_dollar_volume: float = 0.0,
+    limit: int = 10_000,
+    include_etfs: bool = False,
+) -> pd.DataFrame:
+    """Return active securities listed on the main US exchanges."""
+    payloads: list[pd.DataFrame] = []
+    asset_types = [False, True] if include_etfs else [False]
+    for exchange in ("NASDAQ", "NYSE", "AMEX"):
+        for is_etf in asset_types:
+            data = _get("/company-screener", params={
+                "exchange": exchange,
+                "isActivelyTrading": True,
+                "isEtf": is_etf,
+                "isFund": False,
+                "limit": max(1, int(limit)),
+            })
+            if not isinstance(data, list):
+                raise RuntimeError("FMP company-screener returned unexpected payload")
+            if not data:
+                continue
+            payload = pd.DataFrame(data)
+            if "isEtf" not in payload.columns:
+                payload["isEtf"] = is_etf
+            payloads.append(payload)
+    if not payloads:
+        raise RuntimeError("FMP company-screener returned empty payload")
+
+    df = pd.concat(payloads, ignore_index=True).rename(columns={
+        "symbol": "ticker",
+        "companyName": "name",
+        "industry": "sub_industry",
+        "exchangeShortName": "exchange_short",
+        "marketCap": "market_cap",
+    })
+    required = {"ticker", "price", "volume"}
+    if not required.issubset(df.columns):
+        raise RuntimeError(f"FMP company-screener missing fields: {sorted(required - set(df.columns))}")
+
+    df["ticker"] = (
+        df["ticker"].astype(str).str.strip().str.upper().str.replace(".", "-", regex=False)
+    )
+    exchange = df.get("exchange_short", pd.Series(index=df.index, dtype="object"))
+    exchange = exchange.fillna(df.get("exchange", pd.Series(index=df.index, dtype="object")))
+    df["exchange"] = exchange.astype(str).str.upper()
+    for column in ("price", "volume", "market_cap"):
+        if column not in df.columns:
+            df[column] = float("nan")
+        df[column] = pd.to_numeric(df[column], errors="coerce")
+    df["current_dollar_volume"] = df["price"] * df["volume"]
+
+    def _boolean_flag(column: str, default: bool = False) -> pd.Series:
+        if column not in df.columns:
+            return pd.Series(default, index=df.index, dtype="bool")
+        return df[column].fillna(default).astype(str).str.lower().isin({"true", "1"})
+
+    is_etf = _boolean_flag("isEtf")
+    is_fund = _boolean_flag("isFund")
+    df["asset_type"] = is_etf.map({True: "ETF", False: "STOCK"})
+    df = df[~is_fund]
+    if not include_etfs:
+        df = df[~is_etf]
+    if "isActivelyTrading" in df.columns:
+        active = df["isActivelyTrading"].fillna(True).astype(str).str.lower().isin({"true", "1"})
+        df = df[active]
+
+    df = df[
+        df["exchange"].isin({"NASDAQ", "NYSE", "AMEX"})
+        & df["ticker"].str.match(r"^[A-Z][A-Z0-9.-]{0,11}$", na=False)
+        & (df["price"] > 0)
+        & (df["volume"] > 0)
+        & (df["current_dollar_volume"] >= max(0.0, float(min_current_dollar_volume)))
+    ].copy()
+    for column in ("name", "sector", "sub_industry"):
+        if column not in df.columns:
+            df[column] = ""
+        df[column] = df[column].fillna("").astype(str)
+
+    columns = [
+        "ticker", "name", "sector", "sub_industry", "asset_type", "exchange",
+        "market_cap", "price", "volume", "current_dollar_volume",
+    ]
+    return (
+        df[columns]
+        .drop_duplicates(subset=["ticker"])
+        .sort_values("current_dollar_volume", ascending=False)
+        .reset_index(drop=True)
+    )
+
+
+def get_security_profile(ticker: str) -> dict[str, Any] | None:
+    """Return normalized profile metadata, including an explicit asset type."""
+    symbol = str(ticker or "").strip().upper().replace(".", "-")
+    if not symbol:
+        return None
+    payload = _get("/profile", {"symbol": symbol})
+    if isinstance(payload, list):
+        row = payload[0] if payload else None
+    else:
+        row = payload if isinstance(payload, dict) else None
+    if not isinstance(row, dict) or not row.get("symbol"):
+        return None
+
+    def _flag(name: str, default: bool = False) -> bool:
+        return str(row.get(name, default)).strip().lower() in {"true", "1"}
+
+    if _flag("isEtf"):
+        asset_type = "ETF"
+    elif _flag("isFund"):
+        asset_type = "FUND"
+    else:
+        asset_type = "STOCK"
+    return {
+        "ticker": str(row.get("symbol") or symbol).strip().upper(),
+        "name": str(row.get("companyName") or row.get("name") or "").strip(),
+        "sector": str(row.get("sector") or "").strip(),
+        "sub_industry": str(row.get("industry") or "").strip(),
+        "asset_type": asset_type,
+        "exchange": str(
+            row.get("exchangeShortName") or row.get("exchange") or ""
+        ).strip().upper(),
+        "currency": str(row.get("currency") or "USD").strip().upper(),
+        "is_actively_trading": _flag("isActivelyTrading", default=True),
+    }
 
 
 # ============================================================
@@ -264,6 +393,102 @@ def batch_historical_ohlcv(
 
 
 # ============================================================
+# 分钟 / 小时 OHLCV
+# ============================================================
+
+_INTRADAY_INTERVALS = {"1min", "5min", "15min", "30min", "1hour", "4hour"}
+
+
+def get_intraday_ohlcv(
+    symbol: str,
+    *,
+    interval: str = "5min",
+    start: str | None = None,
+    end: str | None = None,
+) -> pd.DataFrame | None:
+    """拉取 FMP 稳定版分钟/小时 OHLCV，时间索引使用交易所本地时间。"""
+    interval = str(interval).strip().lower()
+    if interval not in _INTRADAY_INTERVALS:
+        raise ValueError(
+            f"Unsupported FMP intraday interval: {interval}. "
+            f"Choose from {sorted(_INTRADAY_INTERVALS)}"
+        )
+    params: dict[str, Any] = {"symbol": symbol.upper().strip()}
+    if start:
+        params["from"] = start
+    if end:
+        params["to"] = end
+    data = _get(f"/historical-chart/{interval}", params=params)
+    rows = data if isinstance(data, list) else data.get("historical") if isinstance(data, dict) else None
+    if not rows:
+        return None
+    df = pd.DataFrame(rows)
+    required = ["date", "open", "high", "low", "close", "volume"]
+    if df.empty or any(col not in df.columns for col in required):
+        return None
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df = df.dropna(subset=["date"]).set_index("date").sort_index()
+    for col in required[1:]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df = df[required[1:]].dropna(subset=["open", "high", "low", "close"])
+    df.index.name = "date"
+    return df if not df.empty else None
+
+
+def get_batch_quotes(
+    symbols: Iterable[str],
+    *,
+    chunk_size: int = 100,
+) -> pd.DataFrame:
+    """Fetch normalized real-time quote snapshots in bounded symbol chunks."""
+    normalized = list(dict.fromkeys(
+        str(symbol).strip().upper()
+        for symbol in symbols
+        if str(symbol).strip()
+    ))
+    if not normalized:
+        return pd.DataFrame()
+    chunk_size = min(500, max(1, int(chunk_size)))
+    rows: list[dict[str, Any]] = []
+    for offset in range(0, len(normalized), chunk_size):
+        chunk = normalized[offset:offset + chunk_size]
+        payload = _get("/batch-quote", {"symbols": ",".join(chunk)})
+        if isinstance(payload, list):
+            rows.extend(item for item in payload if isinstance(item, dict))
+    if not rows:
+        return pd.DataFrame()
+
+    frame = pd.DataFrame(rows)
+    if "symbol" not in frame.columns:
+        return pd.DataFrame()
+    frame["ticker"] = frame["symbol"].astype(str).str.strip().str.upper()
+    for column in (
+        "price", "changePercentage", "change", "volume", "dayLow", "dayHigh",
+        "marketCap", "priceAvg50", "priceAvg200", "open", "previousClose", "timestamp",
+    ):
+        if column in frame.columns:
+            frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    return (
+        frame.dropna(subset=["ticker"])
+        .drop_duplicates(subset=["ticker"], keep="last")
+        .set_index("ticker", drop=False)
+        .sort_index()
+    )
+
+
+def get_exchange_market_hours(exchange: str = "NASDAQ") -> dict[str, Any]:
+    """Return FMP's current market-hours snapshot for one exchange."""
+    exchange = str(exchange or "NASDAQ").strip().upper()
+    payload = _get("/exchange-market-hours", {"exchange": exchange})
+    if not isinstance(payload, list) or not payload or not isinstance(payload[0], dict):
+        raise RuntimeError(f"FMP exchange-market-hours returned no data for {exchange}")
+    item = dict(payload[0])
+    raw_open = item.get("isMarketOpen", False)
+    item["isMarketOpen"] = str(raw_open).strip().lower() in {"true", "1"}
+    return item
+
+
+# ============================================================
 # Ticker 搜索与校验（给 Watchlist 前端用）
 # ============================================================
 
@@ -371,8 +596,13 @@ def verify_ticker(ticker: str) -> dict[str, str] | None:
 __all__ = [
     "get_api_key",
     "get_sp500_constituents",
+    "get_us_active_equities",
+    "get_security_profile",
     "get_historical_ohlcv",
     "batch_historical_ohlcv",
+    "get_batch_quotes",
+    "get_exchange_market_hours",
+    "get_intraday_ohlcv",
     "search_symbol",
     "verify_ticker",
 ]

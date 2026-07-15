@@ -1,0 +1,21 @@
+[Unit]
+Description=Refresh stock-only US momentum daily cache
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=quant
+Group=quant
+WorkingDirectory=/opt/quant
+EnvironmentFile=/etc/quant/momentum-alerts.env
+Environment=PYTHONUNBUFFERED=1
+Environment=MPLCONFIGDIR=/opt/quant/data/cache/matplotlib
+ExecStart=/opt/quant/.venv/bin/python /opt/quant/scripts/refresh_us_active.py --workers 6 --force-universe --stocks-only --min-current-dollar-volume-m 5 --skip-precompute
+TimeoutStartSec=3h
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+

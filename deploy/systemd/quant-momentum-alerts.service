@@ -1,0 +1,21 @@
+[Unit]
+Description=Quant hourly US momentum alerts
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=quant
+Group=quant
+WorkingDirectory=/opt/quant
+EnvironmentFile=/etc/quant/momentum-alerts.env
+Environment=PYTHONUNBUFFERED=1
+Environment=MPLCONFIGDIR=/opt/quant/data/cache/matplotlib
+ExecStart=/opt/quant/.venv/bin/python /opt/quant/scripts/run_momentum_alerts.py --send --scheduled-hourly
+TimeoutStartSec=50min
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+

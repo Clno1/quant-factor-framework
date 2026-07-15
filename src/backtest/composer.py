@@ -17,10 +17,10 @@ from typing import Iterable
 
 import pandas as pd
 
+from src.factors.artifacts import load_factor_values
 from src.preprocessing.standardize import zscore_cs
 from src.strategies.definition import StrategyComponent
 from src.utils.logger import get_logger
-from src.webapp.results_store import load_factor_values
 
 log = get_logger(__name__)
 

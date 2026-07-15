@@ -1,0 +1,276 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1 class="page-title">动量交易</h1>
+<div class="page-sub">强势筛选、日线 setup 评分与盘中触发器</div>
+
+<section class="form-panel breakout-filter-panel">
+    <form method="get" action="/breakouts">
+        <div class="breakout-filter-grid">
+            <div class="form-field">
+                <label class="form-label">股票池</label>
+                <select class="form-input" name="universe">
+                    {% for u in preset_universes %}
+                    <option value="{{ u.value }}" {% if selected.universe == u.value %}selected{% endif %}>{{ u.label }}</option>
+                    {% endfor %}
+                    {% for w in watchlists %}
+                    {% set value = 'watchlist:' ~ w.id %}
+                    <option value="{{ value }}" {% if selected.universe == value %}selected{% endif %}>{{ w.name }} · {{ w.item_count }} 只</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="form-field">
+                <label class="form-label">数据日期</label>
+                <input class="form-input mono" name="asof" value="{{ selected.asof }}" placeholder="自动选择完整截面">
+            </div>
+            <div class="form-field">
+                <label class="form-label">市场过滤</label>
+                <select class="form-input" name="market_symbol">
+                    <option value="QQQ" {% if selected.market_symbol == 'QQQ' %}selected{% endif %}>QQQ · 纳指</option>
+                    <option value="IWM" {% if selected.market_symbol == 'IWM' %}selected{% endif %}>IWM · 罗素</option>
+                </select>
+            </div>
+            <div class="form-field">
+                <label class="form-label">结果范围</label>
+                <select class="form-input" name="view">
+                    <option value="all" {% if selected.view == 'all' %}selected{% endif %}>全部候选</option>
+                    <option value="setup" {% if selected.view == 'setup' %}selected{% endif %}>形态合格</option>
+                    <option value="ready" {% if selected.view == 'ready' %}selected{% endif %}>临近或已突破</option>
+                    <option value="breakout" {% if selected.view == 'breakout' %}selected{% endif %}>仅已突破</option>
+                </select>
+            </div>
+            <div class="form-field">
+                <label class="form-label">20日涨幅 ≥ %</label>
+                <input class="form-input mono" type="number" step="0.5" name="min_return_20d" value="{{ selected.min_return_20d }}">
+            </div>
+            <div class="form-field">
+                <label class="form-label">ADR20 ≥ %</label>
+                <input class="form-input mono" type="number" step="0.1" name="min_adr_20d" value="{{ selected.min_adr_20d }}">
+            </div>
+            <div class="form-field">
+                <label class="form-label">当日成交额 ≥ 百万美元</label>
+                <input class="form-input mono" type="number" step="1" name="min_dollar_volume_m" value="{{ selected.min_dollar_volume_m }}">
+            </div>
+            <div class="form-field">
+                <label class="form-label">20日均成交额 ≥ 百万美元</label>
+                <input class="form-input mono" type="number" step="1" name="min_avg_dollar_volume_m" value="{{ selected.min_avg_dollar_volume_m }}">
+            </div>
+            <div class="form-field">
+                <label class="form-label">整理天数 ≥</label>
+                <input class="form-input mono" type="number" name="min_consolidation_days" value="{{ selected.min_consolidation_days }}">
+            </div>
+            <div class="form-field">
+                <label class="form-label">距 MA50 ≤ %</label>
+                <input class="form-input mono" type="number" step="1" name="max_distance_ma50" value="{{ selected.max_distance_ma50 }}">
+            </div>
+            <div class="form-field">
+                <label class="form-label">距 Pivot ≤ %</label>
+                <input class="form-input mono" type="number" step="0.5" name="pivot_proximity" value="{{ selected.pivot_proximity }}">
+            </div>
+            <div class="form-field breakout-submit-field">
+                <label class="form-label">&nbsp;</label>
+                <button class="btn primary" type="submit">运行扫描</button>
+            </div>
+        </div>
+    </form>
+</section>
+
+{% if error %}
+<div class="empty breakout-error"><p class="neg">{{ error }}</p></div>
+{% elif scan %}
+<div class="market-regime-band market-{{ scan.market.status|lower }}">
+    <div>
+        <span class="market-regime-label">{{ scan.market.symbol }} 市场环境</span>
+        <strong>{{ scan.market.status }}</strong>
+        <span>{{ scan.market.reason }}</span>
+    </div>
+    <span class="mono">{{ scan.market.asof }}</span>
+</div>
+
+{% if scan.data_lag_days > 5 %}
+<div class="breakout-notice">
+    当前完整截面停留在 <span class="mono">{{ scan.asof }}</span>，距今天 {{ scan.data_lag_days }} 天。结果用于验证页面与规则，不代表今天的候选标的。
+</div>
+{% endif %}
+
+<section class="paper-metrics breakout-metrics">
+    <div class="metric-card"><span>评分日期</span><strong class="mono">{{ scan.asof }}</strong></div>
+    <div class="metric-card"><span>股票池</span><strong class="mono">{{ scan.universe_count }}</strong></div>
+    <div class="metric-card"><span>硬筛候选</span><strong class="mono">{{ scan.all_candidate_count }}</strong></div>
+    <div class="metric-card"><span>形态合格</span><strong class="mono">{{ scan.setup_count }}</strong></div>
+    <div class="metric-card"><span>临近 / 突破</span><strong class="mono pos">{{ scan.ready_count + scan.breakout_count }}</strong></div>
+</section>
+
+<section class="chart-panel breakout-results-panel">
+    <div class="panel-title">
+        <span>{{ scan.universe_label }} · 候选标的</span>
+        <span class="mono breakout-count"><span id="breakout-visible-count">{{ scan.visible_count }}</span> / {{ scan.visible_count }}</span>
+    </div>
+    <div class="breakout-tools">
+        <input id="breakout-search" class="form-input mono" type="search" placeholder="搜索候选 / 查询全池 ticker" oninput="filterBreakoutRows()">
+        <select id="breakout-status-filter" class="form-input" onchange="filterBreakoutRows()">
+            <option value="">全部状态</option>
+            <option value="BREAKOUT">BREAKOUT</option>
+            <option value="READY">READY</option>
+            <option value="SETUP">SETUP</option>
+            <option value="FORMING">FORMING</option>
+        </select>
+    </div>
+    <div id="breakout-universe-lookup" class="breakout-universe-lookup" aria-live="polite" hidden></div>
+    {% if scan.rows %}
+    <div class="table-wrap breakout-table-wrap">
+        <table class="data compact breakout-table">
+            <thead>
+                <tr>
+                    <th>股票</th><th>状态</th><th>评分</th><th>条件</th>
+                    <th>20日涨幅</th><th>ADR20</th><th>当日额</th><th>20日均额</th>
+                    <th>距MA50</th><th>整理</th><th>收窄比</th><th>距Pivot</th><th>止损宽度</th>
+                </tr>
+            </thead>
+            <tbody id="breakout-table-body">
+            {% for r in scan.rows %}
+                <tr data-search="{{ (r.ticker ~ ' ' ~ r.name ~ ' ' ~ r.sector)|lower }}" data-status="{{ r.status }}">
+                    <td>
+                        <a class="mono breakout-ticker" href="/breakouts/{{ r.ticker }}?universe={{ scan.universe }}&asof={{ scan.asof }}">{{ r.ticker }}</a>
+                        {% if r.name %}<small>{{ r.name }}</small>{% endif %}
+                    </td>
+                    <td>
+                        <span class="badge breakout-status status-{{ r.status|lower }}">{{ r.status }}</span>
+                    </td>
+                    <td class="mono"><strong>{{ r.score }}</strong></td>
+                    <td class="mono">{{ r.checks_passed }}/9</td>
+                    <td class="mono pos">{{ "%.1f"|format(r.return_20d) }}%</td>
+                    <td class="mono">{{ "%.1f"|format(r.adr_20d) }}%</td>
+                    <td class="mono">${{ "%.1f"|format(r.dollar_volume / 1000000) }}M</td>
+                    <td class="mono">${{ "%.1f"|format(r.avg_dollar_volume_20d / 1000000) }}M</td>
+                    <td class="mono {% if r.distance_ma50 > 35 or r.distance_ma50 < -5 %}neg{% endif %}">{{ "%.1f"|format(r.distance_ma50) }}%</td>
+                    <td class="mono">{{ r.consolidation_days }}d</td>
+                    <td class="mono {% if r.tightness <= 0.55 %}pos{% endif %}">{{ "%.2f"|format(r.tightness) }}</td>
+                    <td class="mono {% if r.pivot_distance >= -3 %}pos{% endif %}">{{ "%+.1f"|format(r.pivot_distance) }}%</td>
+                    <td class="mono {% if r.stop_width > r.adr_20d %}neg{% else %}pos{% endif %}">{{ "%.1f"|format(r.stop_width) }}%</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty"><p>当前阈值下没有候选标的。</p></div>
+    {% endif %}
+</section>
+
+<script>
+let breakoutLookupTimer = null;
+let breakoutLookupSequence = 0;
+
+function hideBreakoutLookup() {
+    const panel = document.getElementById('breakout-universe-lookup');
+    if (!panel) return;
+    panel.hidden = true;
+    panel.replaceChildren();
+}
+
+function renderBreakoutLookup(data) {
+    const panel = document.getElementById('breakout-universe-lookup');
+    if (!panel) return;
+    panel.replaceChildren();
+    panel.hidden = false;
+    panel.classList.toggle('is-pass', Boolean(data.passes_hard_screen));
+
+    const heading = document.createElement('div');
+    heading.className = 'breakout-lookup-heading';
+    const title = document.createElement('strong');
+    title.className = 'mono';
+    title.textContent = data.ticker || '';
+    const name = document.createElement('span');
+    name.textContent = data.name || '';
+    heading.append(title, name);
+    panel.appendChild(heading);
+
+    const summary = document.createElement('p');
+    if (!data.in_universe) {
+        summary.textContent = '不在当前股票池中。';
+        panel.appendChild(summary);
+        return;
+    }
+    if (!data.has_data) {
+        summary.textContent = '在当前股票池中，但日线样本不足，暂时无法评分。';
+        panel.appendChild(summary);
+        return;
+    }
+    summary.textContent = data.passes_hard_screen
+        ? '在股票池中，并已通过当前四项硬筛。'
+        : '在股票池中，但未进入候选；未通过的条件已标红。';
+    panel.appendChild(summary);
+
+    const rules = document.createElement('div');
+    rules.className = 'breakout-lookup-rules';
+    (data.rules || []).forEach(function (rule) {
+        const item = document.createElement('span');
+        item.className = 'breakout-lookup-rule ' + (rule.passed ? 'is-pass' : 'is-fail');
+        item.textContent = rule.label + ' ' + rule.actual_text + ' / ' + rule.threshold_text;
+        rules.appendChild(item);
+    });
+    panel.appendChild(rules);
+
+    const link = document.createElement('a');
+    link.className = 'breakout-lookup-link';
+    const params = new URLSearchParams({ universe: data.universe || '' });
+    if (data.data_date) params.set('asof', data.data_date);
+    link.href = '/breakouts/' + encodeURIComponent(data.ticker) + '?' + params.toString();
+    link.textContent = '查看日线 Setup 与盘中触发器';
+    panel.appendChild(link);
+}
+
+async function lookupBreakoutTicker(ticker, sequence) {
+    const panel = document.getElementById('breakout-universe-lookup');
+    if (panel) {
+        panel.hidden = false;
+        panel.textContent = '正在查询完整股票池…';
+    }
+    const form = document.querySelector('.breakout-filter-panel form');
+    const params = new URLSearchParams();
+    ['universe', 'asof', 'min_return_20d', 'min_adr_20d', 'min_dollar_volume_m', 'min_avg_dollar_volume_m'].forEach(function (name) {
+        const input = form?.elements?.namedItem(name);
+        if (input && input.value !== '') params.set(name, input.value);
+    });
+    try {
+        const response = await fetch('/api/breakouts/check/' + encodeURIComponent(ticker) + '?' + params.toString(), { cache: 'no-store' });
+        if (!response.ok) throw new Error('查询失败');
+        const data = await response.json();
+        if (sequence === breakoutLookupSequence) renderBreakoutLookup(data);
+    } catch (error) {
+        if (sequence === breakoutLookupSequence && panel) {
+            panel.hidden = false;
+            panel.textContent = error.message || String(error);
+        }
+    }
+}
+
+function filterBreakoutRows() {
+    const search = (document.getElementById('breakout-search')?.value || '').trim().toLowerCase();
+    const status = document.getElementById('breakout-status-filter')?.value || '';
+    let visible = 0;
+    document.querySelectorAll('#breakout-table-body tr').forEach((row) => {
+        const show = (!search || (row.dataset.search || '').includes(search))
+            && (!status || row.dataset.status === status);
+        row.style.display = show ? '' : 'none';
+        if (show) visible += 1;
+    });
+    const count = document.getElementById('breakout-visible-count');
+    if (count) count.textContent = String(visible);
+
+    clearTimeout(breakoutLookupTimer);
+    breakoutLookupSequence += 1;
+    const ticker = search.toUpperCase();
+    if (visible > 0 || !/^[A-Z][A-Z0-9.-]{0,11}$/.test(ticker)) {
+        hideBreakoutLookup();
+        return;
+    }
+    const sequence = breakoutLookupSequence;
+    breakoutLookupTimer = setTimeout(function () {
+        lookupBreakoutTicker(ticker, sequence);
+    }, 250);
+}
+</script>
+{% endif %}
+{% endblock %}

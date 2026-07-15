@@ -3,6 +3,7 @@
 
 支持的股票池：
   - SP500   : S&P 500 成分股（FMP 抓取，含 GICS sector / sub_industry）
+  - US_ACTIVE: NASDAQ/NYSE/AMEX 活跃挂牌股票与 ETF（含海外公司 ADR）
   - MAG7    : Magnificent 7（AAPL/MSFT/GOOGL/AMZN/META/NVDA/TSLA）
   - CUSTOM  : 从配置 universe.custom_tickers 读取自定义列表
 
@@ -55,6 +56,10 @@ _BUILTIN_UNIVERSES: dict[str, list[tuple[str, str, str]]] = {
 
 def _sp500_cache_path() -> Path:
     return _CACHE_DIR / "sp500.parquet"
+
+
+def _us_active_cache_path() -> Path:
+    return _CACHE_DIR / "us_active.parquet"
 
 
 # ============================================================
@@ -117,6 +122,31 @@ def _get_sp500(force_refresh: bool = False) -> pd.DataFrame:
     return df
 
 
+def _get_us_active(force_refresh: bool = False) -> pd.DataFrame:
+    cache = _us_active_cache_path()
+    ensure_dir(cache)
+    cache_days = min(1.0, float(getattr(CONFIG.universe, "cache_days", 1) or 1))
+    if not force_refresh and is_cache_fresh(cache, cache_days):
+        log.info("Loading US active universe from cache: %s", cache)
+        return pd.read_parquet(cache)
+
+    try:
+        from src.data.fmp import get_us_active_equities
+
+        df = get_us_active_equities(
+            min_current_dollar_volume=0.0,
+            include_etfs=True,
+        )
+        df.to_parquet(cache)
+        log.info("Saved %d US active securities to %s", len(df), cache)
+        return df
+    except Exception as exc:  # noqa: BLE001
+        if cache.exists():
+            log.warning("US active universe refresh failed; using stale cache: %s", exc)
+            return pd.read_parquet(cache)
+        raise
+
+
 # ============================================================
 # 内置静态股票池（MAG7 等）
 # ============================================================
@@ -137,7 +167,7 @@ def _get_builtin(name: str) -> pd.DataFrame:
 
 def list_universe_names() -> list[str]:
     """框架已支持的所有股票池名（用于前端切换）。"""
-    return ["SP500"] + sorted(_BUILTIN_UNIVERSES.keys())
+    return ["SP500", "US_ACTIVE"] + sorted(_BUILTIN_UNIVERSES.keys())
 
 
 def get_universe(name: str | None = None, force_refresh: bool = False) -> pd.DataFrame:
@@ -167,6 +197,9 @@ def get_universe(name: str | None = None, force_refresh: bool = False) -> pd.Dat
 
     if name == "SP500":
         return _get_sp500(force_refresh=force_refresh)
+
+    if name == "US_ACTIVE":
+        return _get_us_active(force_refresh=force_refresh)
 
     if name in _BUILTIN_UNIVERSES:
         return _get_builtin(name)
