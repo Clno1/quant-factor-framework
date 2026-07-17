@@ -1,0 +1,4 @@
+-r requirements.txt
+
+# Group analytics API contract tests
+httpx>=0.27,<1

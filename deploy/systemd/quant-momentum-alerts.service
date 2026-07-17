@@ -11,11 +11,10 @@ WorkingDirectory=/opt/quant
 EnvironmentFile=/etc/quant/momentum-alerts.env
 Environment=PYTHONUNBUFFERED=1
 Environment=MPLCONFIGDIR=/opt/quant/data/cache/matplotlib
-ExecStart=/opt/quant/.venv/bin/python /opt/quant/scripts/run_momentum_alerts.py --send --scheduled-hourly
+ExecStart=/opt/quant/.venv/bin/python /opt/quant/scripts/run_momentum_alerts.py --env-file /etc/quant/momentum-alerts.env --send --scheduled-hourly
 TimeoutStartSec=50min
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=true
-

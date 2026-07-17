@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
+import hashlib
 import os
 from pathlib import Path
 import sys
-from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -17,17 +18,91 @@ if str(ROOT) not in sys.path:
 os.environ.setdefault("MPLCONFIGDIR", str(ROOT / "data" / "cache" / "matplotlib"))
 
 from src.breakouts.scanner import load_daily_frame, refresh_daily_frame  # noqa: E402
+from src.alerts.config import AlertSettings, load_local_env  # noqa: E402
 from src.data.universe import get_universe  # noqa: E402
+from src.utils.io import atomic_save_json  # noqa: E402
 
-_NEW_YORK = ZoneInfo("America/New_York")
+
+def _latest_completed_xnys_session(
+    *,
+    now: pd.Timestamp | None = None,
+    calendar=None,
+) -> pd.Timestamp:
+    """Return the latest XNYS session whose official close is at least 90m old."""
+    now_utc = pd.Timestamp.now(tz="UTC") if now is None else pd.Timestamp(now)
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.tz_localize("UTC")
+    else:
+        now_utc = now_utc.tz_convert("UTC")
+    if calendar is None:
+        try:
+            import exchange_calendars as xcals
+        except ImportError as exc:
+            raise RuntimeError(
+                "exchange_calendars is required for XNYS refresh targeting"
+            ) from exc
+        calendar = xcals.get_calendar("XNYS")
+    sessions = calendar.sessions_in_range(
+        (now_utc - pd.Timedelta(days=20)).date(),
+        now_utc.date(),
+    )
+    cutoff = now_utc - pd.Timedelta(minutes=90)
+    completed: list[pd.Timestamp] = []
+    for session in sessions:
+        close = pd.Timestamp(calendar.session_close(session))
+        close = (
+            close.tz_localize("UTC")
+            if close.tzinfo is None
+            else close.tz_convert("UTC")
+        )
+        if close <= cutoff:
+            completed.append(pd.Timestamp(session).tz_localize(None).normalize())
+    if not completed:
+        raise RuntimeError("no completed XNYS session was found in the lookback window")
+    return completed[-1]
 
 
-def _latest_business_day() -> pd.Timestamp:
-    now_et = pd.Timestamp.now(tz=_NEW_YORK)
-    target = now_et.tz_localize(None).normalize()
-    if now_et.hour < 18:
-        target -= pd.offsets.BDay(1)
-    return pd.offsets.BDay().rollback(target)
+def _sha256_path(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return "sha256:" + digest.hexdigest()
+
+
+def _publish_universe_manifest(
+    universe: pd.DataFrame,
+    *,
+    source_session: pd.Timestamp,
+    refresh_started_at: datetime,
+    previous_signature: tuple[int, int, int] | None,
+) -> Path:
+    cache_path = ROOT / "data" / "raw" / "universe" / "us_active.parquet"
+    if not cache_path.is_file():
+        raise RuntimeError("forced US_ACTIVE refresh did not produce its parquet cache")
+    stat = cache_path.stat()
+    current_signature = (stat.st_mtime_ns, stat.st_size, stat.st_ino)
+    if previous_signature == current_signature:
+        raise RuntimeError(
+            "forced US_ACTIVE refresh reused the previous cache; manifest not published"
+        )
+    if stat.st_mtime < refresh_started_at.timestamp() - 2.0:
+        raise RuntimeError(
+            "forced US_ACTIVE refresh fell back to a stale cache; manifest not published"
+        )
+    manifest_path = cache_path.with_suffix(".premarket.json")
+    atomic_save_json(
+        {
+            "schema_version": 1,
+            "universe": "US_ACTIVE",
+            "source_session": source_session.date().isoformat(),
+            "refreshed_at": datetime.now(timezone.utc).isoformat(),
+            "parquet_sha256": _sha256_path(cache_path),
+            "row_count": len(universe),
+        },
+        manifest_path,
+    )
+    return manifest_path
 
 
 def _refresh_one(ticker: str, target: pd.Timestamp) -> tuple[str, str, str | None]:
@@ -37,6 +112,47 @@ def _refresh_one(ticker: str, target: pd.Timestamp) -> tuple[str, str, str | Non
     frame, source = refresh_daily_frame(ticker, end=target)
     latest = str(pd.Timestamp(frame.index.max()).date()) if not frame.empty else None
     return ticker, source, latest
+
+
+def _select_refresh_tickers(
+    universe: pd.DataFrame,
+    *,
+    stocks_only: bool,
+    liquidity_floor: float,
+    always_tickers: set[str],
+    limit: int | None,
+) -> list[str]:
+    if "ticker" not in universe.columns:
+        raise RuntimeError("US_ACTIVE is missing ticker; refusing an unsafe refresh")
+    selected = universe.loc[universe["ticker"].notna()].copy()
+    selected["ticker"] = selected["ticker"].astype(str).str.strip().str.upper()
+    selected = selected.loc[selected["ticker"].ne("")].copy()
+    if stocks_only:
+        if "asset_type" not in selected.columns:
+            raise RuntimeError(
+                "US_ACTIVE is missing asset_type; refusing an unsafe stocks-only refresh"
+            )
+        selected = selected[
+            selected["asset_type"].fillna("").astype(str).str.upper().eq("STOCK")
+        ].copy()
+    if liquidity_floor > 0 and "current_dollar_volume" not in selected.columns:
+        raise RuntimeError(
+            "US_ACTIVE is missing current_dollar_volume; refusing an unsafe liquidity filter"
+        )
+    if liquidity_floor > 0:
+        selected = selected[
+            (
+                pd.to_numeric(selected["current_dollar_volume"], errors="coerce")
+                >= liquidity_floor
+            )
+            | selected["ticker"].isin(always_tickers)
+        ]
+    tickers = selected["ticker"].drop_duplicates().tolist()
+    if limit is not None:
+        ordinary = [ticker for ticker in tickers if ticker not in always_tickers]
+        forced = [ticker for ticker in tickers if ticker in always_tickers]
+        tickers = list(dict.fromkeys([*ordinary[: max(1, limit)], *forced]))
+    return tickers
 
 
 def main() -> None:
@@ -62,23 +178,52 @@ def main() -> None:
         help="Also refresh a market-regime benchmark (default: QQQ); repeatable.",
     )
     parser.add_argument("--skip-precompute", action="store_true")
+    parser.add_argument(
+        "--env-file",
+        type=Path,
+        help="Safely load KEY=VALUE settings without shell-sourcing the file.",
+    )
     args = parser.parse_args()
+    if args.env_file is not None:
+        if load_local_env(args.env_file) is None:
+            raise FileNotFoundError("the requested environment file does not exist")
 
+    cache_path = ROOT / "data" / "raw" / "universe" / "us_active.parquet"
+    previous_signature = None
+    if cache_path.is_file():
+        previous_stat = cache_path.stat()
+        previous_signature = (
+            previous_stat.st_mtime_ns,
+            previous_stat.st_size,
+            previous_stat.st_ino,
+        )
+    target = _latest_completed_xnys_session()
+    refresh_started_at = datetime.now(timezone.utc)
     universe = get_universe("US_ACTIVE", force_refresh=args.force_universe)
-    if args.stocks_only:
-        if "asset_type" not in universe.columns:
-            raise RuntimeError("US_ACTIVE is missing asset_type; refusing an unsafe stocks-only refresh")
-        universe = universe[
-            universe["asset_type"].fillna("").astype(str).str.upper().eq("STOCK")
-        ].copy()
+    if args.force_universe:
+        manifest_path = _publish_universe_manifest(
+            universe,
+            source_session=target,
+            refresh_started_at=refresh_started_at,
+            previous_signature=previous_signature,
+        )
+        print(f"published_universe_manifest={manifest_path}")
     liquidity_floor = max(0.0, args.min_current_dollar_volume_m) * 1_000_000
-    if liquidity_floor > 0 and "current_dollar_volume" in universe.columns:
-        universe = universe[
-            pd.to_numeric(universe["current_dollar_volume"], errors="coerce") >= liquidity_floor
-        ]
-    tickers = universe["ticker"].astype(str).str.upper().tolist()
-    if args.limit:
-        tickers = tickers[: max(1, args.limit)]
+    always_tickers = set(
+        AlertSettings.load(
+            load_env=False,
+            # This unit reads momentum-alerts.env and must continue refreshing
+            # legacy hourly-only extras during their config migration.
+            include_environment_tickers=True,
+        ).always_tickers
+    )
+    tickers = _select_refresh_tickers(
+        universe,
+        stocks_only=args.stocks_only,
+        liquidity_floor=liquidity_floor,
+        always_tickers=always_tickers,
+        limit=args.limit,
+    )
     market_symbols = [
         symbol.strip().upper()
         for value in (args.market_symbol or ["QQQ"])
@@ -86,11 +231,11 @@ def main() -> None:
         if symbol.strip()
     ]
     tickers = list(dict.fromkeys([*tickers, *market_symbols]))
-    target = _latest_business_day()
     print(
         f"US_ACTIVE refresh: {len(tickers)} symbols, target={target.date()}, "
         f"workers={args.workers}, assets={'stocks' if args.stocks_only else 'stocks+etfs'}, "
         f"liquidity_floor=${liquidity_floor / 1_000_000:.1f}M, "
+        f"always_tickers={len(always_tickers)}, "
         f"market_symbols={','.join(market_symbols)}"
     )
 

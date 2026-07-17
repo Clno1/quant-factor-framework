@@ -26,3 +26,4 @@ python-multipart>=0.0.9
 
 # ========== 工具 ==========
 tqdm>=4.66.0           # 进度条
+exchange-calendars==4.13.2  # XNYS 交易日、提前收盘与 DST（group/premarket/refresh，固定版本）

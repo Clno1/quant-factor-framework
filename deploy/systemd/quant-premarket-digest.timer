@@ -1,0 +1,12 @@
+[Unit]
+Description=Run US premarket digests at 09:20 America/New_York
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 09:20:00 America/New_York
+Persistent=true
+AccuracySec=30s
+RandomizedDelaySec=15s
+Unit=quant-premarket-digest.service
+
+[Install]
+WantedBy=timers.target

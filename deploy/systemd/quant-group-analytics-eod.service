@@ -1,0 +1,30 @@
+[Unit]
+Description=Build isolated SP500 EOD group analytics artifacts
+Wants=network-online.target
+After=network-online.target quant-us-daily-refresh.service
+StartLimitIntervalSec=4h
+StartLimitBurst=12
+
+[Service]
+Type=oneshot
+User=quant
+Group=quant
+WorkingDirectory=/opt/quant
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/quant
+EnvironmentFile=-/etc/quant/momentum-alerts.env
+Environment=GROUP_ANALYTICS_ENABLED=true
+Environment=GROUP_ANALYTICS_WEB_ENABLED=false
+ExecStartPre=/opt/quant/.venv/bin/python -c "import sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
+ExecStart=/opt/quant/.venv/bin/python /opt/quant/scripts/run_group_analytics.py --mode eod --universe SP500 --taxonomy FMP --level all --asof latest
+TimeoutStartSec=3h
+Restart=on-failure
+RestartSec=15min
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

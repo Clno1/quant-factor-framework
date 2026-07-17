@@ -1,0 +1,12 @@
+schema_version: 1
+version: "2026-07-15"
+source: "manually-reviewed-share-class-overrides"
+
+overrides:
+  - counting_unit_id: "override:alphabet"
+    issuer_name: "Alphabet Inc."
+    tickers: [GOOG, GOOGL]
+    # Selection is decided from information available through t-1:
+    # full share-class market caps when present, otherwise trailing
+    # 60-session average dollar volume.  This field is only a stable fallback.
+    fallback_representative_ticker: GOOGL

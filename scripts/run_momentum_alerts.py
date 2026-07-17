@@ -21,6 +21,7 @@ from src.alerts import (  # noqa: E402
     build_discord_payload,
 )
 from src.alerts.engine import market_hours_snapshot, run_live_alert_scan  # noqa: E402
+from src.alerts.config import load_local_env  # noqa: E402
 from src.alerts.state import SIGNAL_RANK  # noqa: E402
 from src.utils.io import atomic_save_json  # noqa: E402
 from src.utils.logger import get_logger  # noqa: E402
@@ -100,9 +101,20 @@ def main() -> int:
     )
     parser.add_argument("--extra-ticker", action="append", default=[], help="Always monitor ticker(s); comma-separated accepted.")
     parser.add_argument("--max-rows", type=int, default=None)
+    parser.add_argument(
+        "--env-file",
+        type=Path,
+        help="Safely load KEY=VALUE settings without shell-sourcing the file.",
+    )
     args = parser.parse_args()
+    if args.env_file is not None:
+        if load_local_env(args.env_file) is None:
+            raise FileNotFoundError("the requested environment file does not exist")
 
-    settings = AlertSettings.load(extra_tickers=_parse_tickers(args.extra_ticker))
+    settings = AlertSettings.load(
+        extra_tickers=_parse_tickers(args.extra_ticker),
+        load_env=args.env_file is None,
+    )
     if args.include_etfs is not None:
         settings = replace(settings, include_etfs=args.include_etfs)
     store = AlertStateStore(settings.state_path)

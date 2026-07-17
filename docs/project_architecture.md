@@ -1,6 +1,6 @@
 # 项目运行架构与耦合审计
 
-## 1. 当前不是一个进程，而是五种运行方式
+## 1. 当前不是一个进程，而是七种运行方式
 
 | 入口 | 职责 | 主要输出 |
 |---|---|---|
@@ -9,9 +9,11 @@
 | `src.backtest.runner` | 执行“策略 × 股票池”的回测任务 | `outputs/backtests/` |
 | `scripts/run_momentum_alerts.py` | 独立实时强势扫描、去重、Discord 投递 | `outputs/momentum_alerts/` |
 | `scripts/refresh_us_active.py` | 更新美股活跃池和日线缓存 | `data/raw/` |
+| `scripts/run_group_analytics.py` | 独立构建 Sector/Sub-industry 单日强弱 immutable artifacts | `outputs/universes/*/group_analytics/` |
+| `scripts/run_premarket_digest.py` | 只读编排 T-1 动量与分类涨跌，向两个 Discord 频道投递 | `outputs/premarket_digest/` |
 
-告警 worker 不需要 FastAPI。新加坡服务器只运行后两个定时任务即可，网页可以继续
-留在本机，或者以后单独部署。
+所有 worker 都不需要 FastAPI。新加坡服务器可按需启用日线刷新、盘中告警、group
+writer 和盘前日报 timer；网页可以继续留在本机，或者以后单独部署。
 
 ## 2. 主依赖方向
 
@@ -35,6 +37,13 @@ flowchart LR
     ALERT --> STATE["SQLite dedupe state"]
     ALERT --> DISC["Discord webhook"]
 
+    DATA --> GROUP["group analytics writer"]
+    GROUP --> GOUT["immutable group artifacts"]
+    DATA --> PREOPEN["premarket digest"]
+    GOUT --> PREOPEN
+    PREOPEN --> PSTATE["independent Discord outbox"]
+    PREOPEN --> DISC
+
     WEB["FastAPI / Jinja"] --> FOUT
     WEB --> BT
     WEB --> PAPER
@@ -43,7 +52,8 @@ flowchart LR
 
 依赖原则是：页面和脚本可以调用业务模块；业务模块不应反向导入 FastAPI 页面。
 本次已把 `backtest/composer.py -> webapp/results_store.py` 的反向依赖改为中立的
-`factors/artifacts.py`。
+`factors/artifacts.py`。`premarket_digest` 是叶子编排层：它可以读取 `breakouts/alerts`
+和 `group_analytics`，两者以及主框架均不得反向导入它。
 
 ## 3. 多因子与强势突破如何合作
 

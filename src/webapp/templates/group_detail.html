@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+
+{% block head %}
+<link rel="stylesheet" href="/static/css/group_analytics.css?v={{ asset_ver }}">
+{% endblock %}
+
+{% block content %}
+<section class="ga-page" data-ga-page="detail" data-group-id="{{ group_id | e }}" data-run-id="{{ data_run_id | default('', true) | e }}" data-level="{{ level | default('sector', true) | e }}">
+    <header class="ga-hero">
+        <div>
+            <p class="ga-eyebrow">GROUP DETAIL · IMMUTABLE RUN</p>
+            <h1 id="ga-detail-title">分类详情</h1>
+            <p id="ga-detail-run" class="ga-run-summary">run —</p>
+            <p><a id="ga-back-link" href="/group-analytics?level={{ level | default('sector', true) | urlencode }}">← 返回今日热度</a></p>
+        </div>
+    </header>
+    <div id="ga-error" class="ga-error" role="alert" hidden></div>
+    <section id="ga-detail-summary" class="ga-summary-cards" aria-live="polite"></section>
+    <p id="ga-detail-reasons" class="ga-run-summary" aria-live="polite">正在读取质量原因…</p>
+    <section class="ga-panel" aria-labelledby="ga-provenance-title">
+        <h2 id="ga-provenance-title">分类与产物来源</h2>
+        <dl id="ga-detail-provenance" class="ga-definition-grid"></dl>
+    </section>
+    <section class="ga-driver-grid" aria-label="前五贡献股票">
+        <article class="ga-panel"><h2>前五正贡献</h2><ol id="ga-top-positive" class="ga-driver-list"></ol></article>
+        <article class="ga-panel"><h2>前五负贡献</h2><ol id="ga-top-negative" class="ga-driver-list"></ol></article>
+    </section>
+    <section class="ga-panel">
+        <h2>成员与贡献</h2>
+        <p>包含全部预期 counting units；无效成员保留并显示缺失原因。</p>
+        <form id="ga-member-controls" class="ga-member-controls" aria-label="成员排序和当前页筛选">
+            <label>排序字段
+                <select id="ga-member-sort-by">
+                    <option value="ticker">股票代码</option>
+                    <option value="raw_return_1d">原始收益</option>
+                    <option value="headline_contribution">贡献</option>
+                    <option value="is_valid_for_headline">有效状态</option>
+                </select>
+            </label>
+            <label>排序方向
+                <select id="ga-member-sort-order"><option value="asc">升序</option><option value="desc">降序</option></select>
+            </label>
+            <label>每页
+                <select id="ga-member-page-size"><option value="25">25</option><option value="50">50</option><option value="100">100</option><option value="200">200</option></select>
+            </label>
+            <label>当前页搜索
+                <input id="ga-member-search" type="search" autocomplete="off" placeholder="代码、名称或 Security ID">
+            </label>
+        </form>
+        <p class="ga-filter-note">搜索只过滤当前页，不改变 API 总数、预期成员数或排名。</p>
+        <div class="ga-table-wrap" tabindex="0" aria-label="分类成员表，可横向滚动">
+            <table class="ga-table">
+                <thead><tr>
+                    <th>股票</th><th>名称</th><th>Security ID</th><th>Counting unit</th><th>有效</th>
+                    <th>原始收益</th><th>截尾收益</th><th>截尾</th><th>权重</th>
+                    <th>贡献</th><th>贡献 (bp)</th><th>数据日</th><th>原因</th>
+                </tr></thead>
+                <tbody id="ga-member-rows"></tbody>
+            </table>
+        </div>
+        <nav class="ga-pagination" aria-label="成员分页">
+            <button id="ga-prev-page" type="button">上一页</button>
+            <span id="ga-page-label">—</span>
+            <button id="ga-next-page" type="button">下一页</button>
+        </nav>
+    </section>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/group_analytics.js?v={{ asset_ver }}"></script>
+{% endblock %}

@@ -31,6 +31,12 @@ data/processed/*
 data/cache/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
+data/reference/*
+data/pit_classifications/*
+data/theme_exposures/*
+!data/reference/.gitkeep
+!data/pit_classifications/.gitkeep
+!data/theme_exposures/.gitkeep
 logs/*
 !logs/.gitkeep
 

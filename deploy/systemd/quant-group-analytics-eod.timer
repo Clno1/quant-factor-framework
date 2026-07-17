@@ -1,0 +1,12 @@
+[Unit]
+Description=Build group analytics after each completed US trading session
+
+[Timer]
+OnCalendar=Tue..Sat *-*-* 07:45:00 Asia/Singapore
+Persistent=true
+AccuracySec=2min
+RandomizedDelaySec=30s
+Unit=quant-group-analytics-eod.service
+
+[Install]
+WantedBy=timers.target

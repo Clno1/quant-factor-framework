@@ -8,6 +8,7 @@ FastAPI 主应用。
 """
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 
@@ -25,6 +26,21 @@ _HERE = Path(__file__).resolve().parent
 ASSET_VER = str(int(time.time()))
 
 
+def _strict_config_flag(value, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in {0, 1}:
+        return bool(value)
+    normalized = str(value).strip().casefold()
+    if normalized in {"true", "1"}:
+        return True
+    if normalized in {"false", "0"}:
+        return False
+    raise ValueError("feature flags must be booleans")
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title=CONFIG.webapp.title,
@@ -40,10 +56,39 @@ def create_app() -> FastAPI:
     # 注册路由 + 注入模板全局变量
     from src.webapp.routes import router, templates
     from src.webapp.routes_v2 import router_v2, templates as templates_v2
+    try:
+        writer_enabled = _strict_config_flag(
+            os.environ.get(
+                "GROUP_ANALYTICS_ENABLED",
+                CONFIG.group_analytics.enabled,
+            )
+        )
+        group_analytics_enabled = writer_enabled and _strict_config_flag(
+            os.environ.get(
+                "GROUP_ANALYTICS_WEB_ENABLED",
+                getattr(CONFIG.group_analytics, "web_enabled", False),
+            )
+        )
+    except AttributeError:
+        group_analytics_enabled = False
     templates.env.globals["asset_ver"] = ASSET_VER
     templates_v2.env.globals["asset_ver"] = ASSET_VER
+    templates.env.globals["group_analytics_enabled"] = group_analytics_enabled
+    templates_v2.env.globals["group_analytics_enabled"] = group_analytics_enabled
     app.include_router(router)
     app.include_router(router_v2)
+
+    # Optional composition-root registration.  No factor/backtest/paper module
+    # imports the group domain, and disabled deployments do not import its Web
+    # adapter at all.
+    if group_analytics_enabled:
+        from src.webapp.group_analytics_routes import (
+            router as group_analytics_router,
+            templates as group_analytics_templates,
+        )
+        group_analytics_templates.env.globals["asset_ver"] = ASSET_VER
+        group_analytics_templates.env.globals["group_analytics_enabled"] = True
+        app.include_router(group_analytics_router)
 
     # 启动恢复：把上次进程残留的 running 任务标为 failed
     try:
@@ -54,7 +99,12 @@ def create_app() -> FastAPI:
     except Exception as e:  # noqa: BLE001
         log.error("startup_recovery failed: %s", e)
 
-    log.info("FastAPI app created. Title=%s asset_ver=%s", CONFIG.webapp.title, ASSET_VER)
+    log.info(
+        "FastAPI app created. Title=%s asset_ver=%s group_analytics=%s",
+        CONFIG.webapp.title,
+        ASSET_VER,
+        group_analytics_enabled,
+    )
     return app
 
 

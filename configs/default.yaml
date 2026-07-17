@@ -64,6 +64,8 @@ data:
 momentum_alerts:
   universe: "US_ACTIVE"
   exchange: "NASDAQ"
+  # 盘前日报与刷新任务共同读取的低流动性例外；不要分散写进两个 env 文件。
+  always_tickers: []
   asset_types:
     include_etfs: false             # Discord 告警默认仅扫描股票；网页 US_ACTIVE 仍保留 ETF
   broad_scan:
@@ -88,6 +90,34 @@ momentum_alerts:
     max_rows: 10
     mention_levels: ["READY", "BREAKOUT", "OPENING_RANGE_BREAK"]
     send_empty_digest: false
+
+# 美股开盘前双频道日报。Webhook 密钥只允许来自环境变量或 .env.local。
+# 这是单向编排层；因子、回测、模拟盘、alerts 和 group_analytics 均不依赖它。
+premarket_digest:
+  enabled: false
+  timezone: America/New_York
+  scheduled_window_start: "09:20"
+  scheduled_window_end: "09:29"
+
+  momentum:
+    enabled: true
+    universe: US_ACTIVE
+    include_etfs: false
+    max_rows: 10
+    min_exact_asof_coverage: 0.80
+    # 至少 65 根（约 3 个月）且恰好截至 T-1 的可计算标的覆盖率。
+    min_evaluable_coverage: 0.80
+
+  sector_rotation:
+    enabled: true
+    universe: SP500
+    taxonomy: FMP
+    # 正式推送门槛高于单次 group writer 的最低发布门槛。
+    min_coverage: 0.98
+    sector_top_n: 3
+    sector_bottom_n: 3
+    sub_industry_top_n: 5
+    sub_industry_bottom_n: 5
 
 # 因子预处理
 preprocessing:
@@ -246,3 +276,123 @@ webapp:
   reload: false
   title: "量化研究平台"
   output_dir: "outputs"            # 图表 / JSON 缓存目录
+
+# 行业/主题分析（阶段 1 默认关闭；通过影子运行 Gate 后再开放页面）
+# 该模块是独立领域，不会隐式进入因子、回测或模拟盘。
+group_analytics:
+  enabled: false
+  # 与 writer 分离；影子期可 enabled=true、web_enabled=false。
+  web_enabled: false
+  default_universe: SP500
+  universes: [SP500]
+  output_subdir: "universes"
+
+  classification:
+    default_taxonomy: FMP
+    default_level: sector
+    require_pit_for_current_snapshot: false
+    security_master_path: "data/reference/security_master.parquet"
+    pit_classification_root: "data/pit_classifications"
+    theme_exposure_root: "data/theme_exposures"
+    issuer_override_path: "configs/classifications/issuer_overrides.yaml"
+    group_id_mapping_path: "configs/classifications/fmp_group_ids.yaml"
+    counting_unit: security_with_overrides
+    include_etfs: false
+    min_theme_exposure: 0.20
+
+  history:
+    enabled: false
+    require_point_in_time_universe: true
+    require_point_in_time_classification: true
+
+  benchmarks:
+    SP500: SPY
+    US_ACTIVE: VTI
+
+  # 单次工程发布门槛；98% 是后续 10 个交易日 Production Release Gate。
+  inputs:
+    min_return_coverage: 0.80
+    require_benchmark: false
+
+  daily_return:
+    headline_method: ROBUST_EW
+    winsorize_method: mad
+    winsorize_n: 3.0
+    min_members_for_winsorize: 5
+    unchanged_band_bps: 1
+
+  ranking:
+    top_n: 5
+    bottom_n: 5
+    min_members: 5
+    min_count_coverage: 0.80
+    min_freshness_coverage: 0.80
+    allowed_quality_grades: [A, B]
+    single_name_concentration_warning: 0.35
+
+  # 阶段 1 仅发布 nullable CAP Schema，不执行本段算法。
+  cap_weight:
+    preferred_type: free_float
+    max_constituent_weight: 0.25
+    min_availability_coverage: 0.80
+    min_return_coverage: 0.90
+    allow_silent_equal_weight_fallback: false
+
+  index_series:
+    enabled: false
+    min_count_coverage: 0.80
+    min_cap_return_coverage: 0.90
+    capped_rebalance_frequency: month_end
+
+  live:
+    enabled: false
+    interval_minutes: 15
+    quote_chunk_size: 100
+    max_quote_age_seconds: 300
+    max_future_clock_skew_seconds: 60
+    max_snapshot_span_seconds: 120
+    start_et: "09:45"
+    end_et: "15:55"
+    timezone: America/New_York
+
+  rvol:
+    enabled: false
+    interval_minutes: 5
+    lookback_sessions: 20
+    min_history_sessions: 10
+    min_group_coverage: 0.60
+    lower_clip: 0.20
+    upper_clip: 5.00
+
+  momentum:
+    enabled: false
+    benchmark: auto
+    production_score_id: null
+    research_return_methods: [CAP_FF, CAP_TOTAL, CAPPED_CAP_FF_M]
+    lookback_6m: 126
+    lookback_12m: 252
+    skip_days: 21
+    weight_6m: 0.50
+    weight_12m: 0.50
+    min_window_coverage: 0.95
+    annualized_volatility_floor: 0.05
+    min_groups_for_zscore: 5
+    std_epsilon: 1.0e-12
+    z_clip: 3.0
+
+  overlays:
+    industry:
+      enabled: false
+      lambda: 0.0
+      application_stage: post_neutralization
+    theme:
+      enabled: false
+      lambda: 0.0
+      application_stage: post_neutralization
+
+  freshness:
+    eod_publish_sla_minutes: 180
+    live_stale_after_minutes: 30
+
+  heatmap:
+    default_abs_limit: 0.05

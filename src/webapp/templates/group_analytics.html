@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+
+{% block head %}
+<link rel="stylesheet" href="/static/css/group_analytics.css?v={{ asset_ver }}">
+{% endblock %}
+
+{% block content %}
+<section class="ga-page" data-ga-page="heat">
+    <header class="ga-hero">
+        <div>
+            <p class="ga-eyebrow">GROUP ANALYTICS · EOD</p>
+            <h1>行业/主题</h1>
+            <p>观察分类中多数股票是否共同上涨。今日热度与中期行业动量严格分开。</p>
+        </div>
+        <div class="ga-status-strip" aria-live="polite">
+            <span id="ga-attempt-status" class="ga-pill">任务 —</span>
+            <span id="ga-freshness-status" class="ga-pill">新鲜度 —</span>
+            <span id="ga-quality-status" class="ga-pill">质量 —</span>
+        </div>
+    </header>
+
+    <div class="ga-tabs" role="tablist" aria-label="行业分析视图">
+        <button class="ga-tab active" role="tab" aria-selected="true" data-tab="heat">今日热度</button>
+        <button class="ga-tab" role="tab" aria-selected="false" data-tab="quality">数据质量</button>
+        <button class="ga-tab" role="tab" aria-selected="false" data-tab="method">方法说明</button>
+        <button class="ga-tab" type="button" disabled title="阶段 3：需 PIT 分类与历史权重">行业动量 · 阶段 3</button>
+    </div>
+
+    <section class="ga-panel" data-tab-panel="heat">
+        <form id="ga-filters" class="ga-filters" aria-label="热度筛选">
+            <label>股票池<input name="universe" value="SP500" readonly></label>
+            <label>分类来源<input name="taxonomy" value="FMP" readonly></label>
+            <label>层级<select name="level"><option value="sector">sector</option><option value="sub_industry">sub_industry</option></select></label>
+            <label>视图<select name="view"><option value="all">全部</option><option value="top">Top</option><option value="bottom">Bottom</option></select></label>
+            <label>排序<select name="sort_by"><option value="robust_ew_return_1d">截尾等权 1D</option><option value="up_pct">上涨比例</option><option value="n_valid">有效成员</option><option value="group_name">分类名称</option></select></label>
+            <label>顺序<select name="sort_order"><option value="desc">降序</option><option value="asc">升序</option></select></label>
+            <label>最低成员<input name="view_min_members" type="number" min="0" step="1" value="5"></label>
+            <label class="ga-check"><input name="show_low_confidence" type="checkbox">显示低置信</label>
+            <button type="submit" class="ga-primary">应用</button>
+        </form>
+
+        <div id="ga-run-summary" class="ga-run-summary" aria-live="polite">正在读取预计算产物…</div>
+        <dl id="ga-status-details" class="ga-definition-grid ga-status-details" aria-label="数据状态详情"></dl>
+        <div id="ga-error" class="ga-error" role="alert" hidden></div>
+
+        <div class="ga-visual-heading">
+            <div>
+                <h2 class="ga-table-title">分类涨跌图</h2>
+                <p id="ga-scale-label" class="ga-scale-label">颜色/长度范围：固定 ±5.00%</p>
+            </div>
+            <label class="ga-scale-toggle"><input id="ga-auto-scale" type="checkbox"> 自动范围</label>
+        </div>
+        <div id="ga-heatmap" class="ga-heatmap" role="list" aria-label="分类截尾等权一日涨跌水平条"></div>
+
+        <h2 id="ga-heat-title" class="ga-table-title">按截尾等权 1D 降序</h2>
+
+        <div class="ga-table-wrap" tabindex="0" aria-label="行业今日热度表，可横向滚动">
+            <table class="ga-table">
+                <thead><tr>
+                    <th>视图/总榜排名</th><th>分类</th><th>质量</th><th>N有效/总数</th><th>覆盖</th>
+                    <th>截尾等权 1D</th><th>原始等权 1D</th><th>中位数 1D</th>
+                    <th>市值加权 1D</th><th>CAP 类型</th>
+                    <th>上涨比例</th><th>Breadth</th><th>MAD</th><th>相对 SPY</th>
+                    <th>最大正贡献</th><th>最大负贡献</th><th>数据日</th>
+                </tr></thead>
+                <tbody id="ga-heat-rows"></tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="ga-panel" data-tab-panel="quality" hidden>
+        <h2>数据质量</h2>
+        <p>质量、任务状态和产物新鲜度是三条独立状态轴。低置信结果不会默认进入主榜。</p>
+        <dl id="ga-quality-details" class="ga-definition-grid"></dl>
+    </section>
+
+    <section class="ga-panel" data-tab-panel="method" hidden>
+        <h2>阶段 1 方法</h2>
+        <div class="ga-method-grid">
+            <article><h3>原始等权</h3><p>有效成员当日复权收益的简单平均，用于与参考表对账。</p></article>
+            <article><h3>截尾等权</h3><p>分类内按 Median ± 3×1.4826×MAD 截尾；少于 5 只或 MAD=0 时保持原值。</p></article>
+            <article><h3>市场宽度</h3><p>超过 +1bp 为上涨，低于 −1bp 为下跌；缺失收益不填 0。</p></article>
+            <article><h3>边界</h3><p>当前仅 SP500、FMP sector/sub_industry、完整 EOD。行业动量与策略接入尚未启用。</p></article>
+        </div>
+    </section>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/group_analytics.js?v={{ asset_ver }}"></script>
+{% endblock %}

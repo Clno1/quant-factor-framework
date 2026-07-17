@@ -1,0 +1,54 @@
+{
+  "fixture_version": "ga-stage1-golden-v1",
+  "description": "Ten completed-session replay with independently frozen cross-sectional expectations.",
+  "sessions": [
+    "2026-06-29",
+    "2026-06-30",
+    "2026-07-01",
+    "2026-07-02",
+    "2026-07-06",
+    "2026-07-07",
+    "2026-07-08",
+    "2026-07-09",
+    "2026-07-10",
+    "2026-07-13",
+    "2026-07-14"
+  ],
+  "session_multipliers": [1.0, -1.0, 0.5, -0.5, 1.5, -1.5, 0.25, -0.25, 2.0, -2.0],
+  "groups": [
+    {
+      "group_id": "golden-growth",
+      "group_name": "Golden Growth",
+      "tickers": ["GG1", "GG2", "GG3", "GG4", "GG5"],
+      "base_returns": [-0.01, 0.0, 0.01, 0.02, 0.1],
+      "expected": {
+        "raw_ew_return_1d_per_multiplier": 0.024,
+        "median_return_1d_per_multiplier": 0.01,
+        "robust_ew_return_1d_per_multiplier": 0.0148956,
+        "positive_breadth_net": 0.4,
+        "negative_breadth_net": -0.4,
+        "positive_up_pct": 0.6,
+        "positive_down_pct": 0.2,
+        "negative_up_pct": 0.2,
+        "negative_down_pct": 0.6
+      }
+    },
+    {
+      "group_id": "golden-defensive",
+      "group_name": "Golden Defensive",
+      "tickers": ["GD1", "GD2", "GD3", "GD4", "GD5"],
+      "base_returns": [0.02, 0.015, 0.01, 0.005, 0.0],
+      "expected": {
+        "raw_ew_return_1d_per_multiplier": 0.01,
+        "median_return_1d_per_multiplier": 0.01,
+        "robust_ew_return_1d_per_multiplier": 0.01,
+        "positive_breadth_net": 0.8,
+        "negative_breadth_net": -0.8,
+        "positive_up_pct": 0.8,
+        "positive_down_pct": 0.0,
+        "negative_up_pct": 0.0,
+        "negative_down_pct": 0.8
+      }
+    }
+  ]
+}

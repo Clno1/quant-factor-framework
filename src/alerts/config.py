@@ -79,11 +79,28 @@ class AlertSettings:
     runs_dir: Path = PROJECT_ROOT / "outputs" / "momentum_alerts" / "runs"
 
     @classmethod
-    def load(cls, *, extra_tickers: Iterable[str] = ()) -> "AlertSettings":
-        load_local_env()
+    def load(
+        cls,
+        *,
+        extra_tickers: Iterable[str] = (),
+        load_env: bool = True,
+        include_environment_tickers: bool = True,
+    ) -> "AlertSettings":
+        if load_env:
+            load_local_env()
         root = CONFIG.to_dict().get("momentum_alerts") or {}
-        configured_extra = os.environ.get("MOMENTUM_ALERT_EXTRA_TICKERS", "")
+        configured_always = root.get("always_tickers") or []
+        if isinstance(configured_always, str):
+            configured_always = configured_always.split(",")
+        elif not isinstance(configured_always, (list, tuple, set)):
+            raise ValueError("momentum_alerts.always_tickers must be a list or CSV string")
+        configured_extra = (
+            os.environ.get("MOMENTUM_ALERT_EXTRA_TICKERS", "")
+            if include_environment_tickers
+            else ""
+        )
         always = _tickers([
+            *configured_always,
             *configured_extra.split(","),
             *extra_tickers,
         ])
