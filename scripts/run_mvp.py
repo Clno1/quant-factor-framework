@@ -372,7 +372,7 @@ def run_pipeline(
     universe_limit: int | None = None,
     force_refresh: bool = False,
     only_universe: str | None = None,
-) -> None:
+) -> list[str]:
     """
     跑一个或多个股票池。
 
@@ -393,11 +393,14 @@ def run_pipeline(
         only_universe = only_universe.upper()
         universes = [u for u in universes if u == only_universe] or [only_universe]
     log.info("Pipeline will run for universes: %s", universes)
+    failures: list[str] = []
     for uni in universes:
         try:
             run_pipeline_for_universe(uni, universe_limit=universe_limit, force_refresh=force_refresh)
         except Exception as e:  # noqa: BLE001
             log.exception("[%s] Pipeline failed: %s", uni, e)
+            failures.append(uni)
+    return failures
 
 
 def serve_web(host: str | None = None, port: int | None = None) -> None:
@@ -430,11 +433,14 @@ def main() -> int:
         args.force_refresh = True
         args.no_web = True
     if not args.serve_only:
-        run_pipeline(
+        failures = run_pipeline(
             universe_limit=args.universe,
             force_refresh=args.force_refresh,
             only_universe=args.only_universe,
         )
+        if failures:
+            log.error("Pipeline failed for universes: %s", failures)
+            return 1
     if not args.no_web:
         serve_web(host=args.host, port=args.port)
     return 0

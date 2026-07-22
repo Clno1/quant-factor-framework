@@ -26,6 +26,9 @@ _RAW_DIR = PROJECT_ROOT / CONFIG.data.raw_dir / "ohlcv" \
     if not Path(CONFIG.data.raw_dir).is_absolute() \
     else Path(CONFIG.data.raw_dir) / "ohlcv"
 _FAILED_LOG = PROJECT_ROOT / "logs" / "failed_tickers.log"
+_REQUIRED_CACHE_COLUMNS = frozenset(
+    {"open", "high", "low", "close", "adj_close", "volume"}
+)
 
 
 def _ticker_cache_path(ticker: str) -> Path:
@@ -36,19 +39,46 @@ def _provider_name() -> str:
     return str(getattr(CONFIG.data, "provider", "fmp")).lower()
 
 
-def _cache_covers_end(path: Path, end_iso: str, tolerance_days: int = 3) -> bool:
+def _ohlcv_frame_is_usable(df: pd.DataFrame) -> bool:
+    """Return whether a shared cache is safe for the multi-factor pipeline."""
+    if df is None or df.empty or not _REQUIRED_CACHE_COLUMNS.issubset(df.columns):
+        return False
+    close = pd.to_numeric(df["close"], errors="coerce")
+    adj_close = pd.to_numeric(df["adj_close"], errors="coerce")
+    valid_close = close.notna()
+    # A partially restored column (new rows only) is still unsafe: historical
+    # factors would otherwise be calculated across a long NaN region.
+    return bool(valid_close.any() and adj_close.loc[valid_close].notna().all())
+
+
+def _cache_covers_range(
+    path: Path,
+    start_iso: str,
+    end_iso: str,
+    *,
+    start_tolerance_days: int = 7,
+    end_tolerance_days: int = 3,
+) -> bool:
     """
-    检查缓存 parquet 里的数据是否覆盖到 end 日期（允许 tolerance_days 的容忍：
-    美股周末/节假日、FMP 更新延迟、今天还没收盘等情况）。
+    检查共享缓存 schema 以及请求的起止范围。
+
+    起点容忍周末/节假日，终点容忍周末、数据源延迟和当天尚未收盘。
+    只检查末日会误把 momentum 为新标的创建的约 180 天缓存当成多因子 5 年缓存。
     """
     try:
         df = read_parquet(path)
-        if df is None or df.empty:
+        if not _ohlcv_frame_is_usable(df):
             return False
+        first_date = pd.Timestamp(df.index.min()).date()
         last_date = pd.Timestamp(df.index.max()).date()
+        start_date = pd.Timestamp(start_iso).date()
         end_date = pd.Timestamp(end_iso).date()
-        gap = (end_date - last_date).days
-        return gap <= tolerance_days
+        start_gap = (first_date - start_date).days
+        end_gap = (end_date - last_date).days
+        return (
+            start_gap <= max(0, int(start_tolerance_days))
+            and end_gap <= max(0, int(end_tolerance_days))
+        )
     except Exception:  # noqa: BLE001
         return False
 
@@ -85,10 +115,15 @@ def download_ohlcv(
     to_fetch: list[str] = []
     for t in tickers:
         p = _ticker_cache_path(t)
-        # 两个条件都要满足才算缓存命中：
+        # 三个条件都要满足才算缓存命中：
         #   1. 文件新鲜（没超过 cache_days 天）
-        #   2. 数据范围能覆盖到 end（否则要重拉最新的）
-        if not force and is_cache_fresh(p, cache_days) and _cache_covers_end(p, end):
+        #   2. 六列 schema/adj_close 有效
+        #   3. 数据范围覆盖 start..end（否则要重拉）
+        if (
+            not force
+            and is_cache_fresh(p, cache_days)
+            and _cache_covers_range(p, start, end)
+        ):
             results[t] = p
         else:
             to_fetch.append(t)
@@ -141,7 +176,16 @@ def load_or_download(
     out: dict[str, pd.DataFrame] = {}
     for t, p in paths.items():
         try:
-            out[t] = read_parquet(p)
+            frame = read_parquet(p)
+            if not _ohlcv_frame_is_usable(frame):
+                log.warning(
+                    "Skipping invalid OHLCV cache for %s: required columns=%s, got=%s",
+                    t,
+                    sorted(_REQUIRED_CACHE_COLUMNS),
+                    list(frame.columns),
+                )
+                continue
+            out[t] = frame
         except Exception as e:  # noqa: BLE001
             log.warning("Read cache fail for %s: %s", t, e)
     return out

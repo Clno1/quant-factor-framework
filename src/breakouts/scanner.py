@@ -61,11 +61,16 @@ def _normalize_daily(frame: pd.DataFrame) -> pd.DataFrame:
     out = frame.copy()
     out.index = pd.to_datetime(out.index, errors="coerce")
     out = out.loc[~out.index.isna()].sort_index()
-    for col in required:
+    # The breakout scanner only consumes the five base columns, but this cache
+    # is shared with the multi-factor pipeline, which requires adj_close.  Keep
+    # it whenever it is present instead of destructively narrowing the Parquet
+    # schema during a daily append.
+    preserved = [*required, "adj_close"] if "adj_close" in out.columns else required
+    for col in preserved:
         out[col] = pd.to_numeric(out[col], errors="coerce")
     out = out.dropna(subset=["high", "low", "close", "volume"])
     out = out[(out["high"] > 0) & (out["low"] > 0) & (out["close"] > 0)]
-    return out[required]
+    return out[preserved]
 
 
 def _daily_cache_path(ticker: str) -> Path:

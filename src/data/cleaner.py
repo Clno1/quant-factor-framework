@@ -104,7 +104,10 @@ def build_wide_tables(
     tickers = list(tickers)
     log.info("[%s] Building wide tables from %d tickers ...", universe, len(tickers))
 
-    data = load_or_download(tickers)
+    # Propagate the caller's refresh intent.  Previously --update rebuilt the
+    # wide tables but silently reused every fresh per-ticker cache, so a cache
+    # with an incompatible schema could survive indefinitely.
+    data = load_or_download(tickers, force=force)
 
     close_map: dict[str, pd.Series] = {}
     open_map: dict[str, pd.Series] = {}

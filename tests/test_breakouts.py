@@ -53,6 +53,34 @@ class DailyBreakoutScannerTests(unittest.TestCase):
         self.assertEqual(merged.loc[pd.Timestamp("2026-05-11"), "close"], 104.0)
         self.assertEqual(len(merged), 3)
 
+    def test_daily_refresh_preserves_shared_adjusted_close_column(self):
+        existing = pd.DataFrame({
+            "open": [100.0, 101.0],
+            "high": [102.0, 103.0],
+            "low": [99.0, 100.0],
+            "close": [101.0, 102.0],
+            "adj_close": [98.0, 99.0],
+            "volume": [1_000.0, 1_100.0],
+        }, index=pd.to_datetime(["2026-05-07", "2026-05-08"]))
+        incoming = pd.DataFrame({
+            "open": [201.0, 103.0],
+            "high": [203.0, 105.0],
+            "low": [200.0, 102.0],
+            "close": [202.0, 104.0],
+            "adj_close": [199.0, 101.0],
+            "volume": [9_100.0, 1_200.0],
+        }, index=pd.to_datetime(["2026-05-08", "2026-05-11"]))
+
+        merged = _merge_daily_cache(existing, incoming)
+
+        self.assertEqual(
+            merged.columns.tolist(),
+            ["open", "high", "low", "close", "volume", "adj_close"],
+        )
+        # Existing bars remain immutable while the new bar retains adj_close.
+        self.assertEqual(merged.loc[pd.Timestamp("2026-05-08"), "adj_close"], 99.0)
+        self.assertEqual(merged.loc[pd.Timestamp("2026-05-11"), "adj_close"], 101.0)
+
     def test_daily_metrics_use_qullamaggie_adr_formula(self):
         index = pd.bdate_range("2025-01-02", periods=100)
         close = np.concatenate([
