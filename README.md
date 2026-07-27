@@ -108,6 +108,10 @@ python scripts/run_mvp.py --serve-only
 
 浏览器访问 `http://<服务器IP>:18823`（手机/电脑均可）。
 
+上面是前台开发启动方式，SSH 断开后进程也会退出。当前
+`root + /home/projects/quant` 服务器的长期运行、Discord timer 状态和代码更新命令，请直接
+使用 [`docs/server_daily_runbook.md`](docs/server_daily_runbook.md)。
+
 ---
 
 ## 核心设计

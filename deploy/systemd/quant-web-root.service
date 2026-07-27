@@ -1,0 +1,31 @@
+[Unit]
+Description=Quant multi-factor FastAPI website (root deployment)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/home/projects/quant
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONPATH=/home/projects/quant
+Environment=MPLCONFIGDIR=/home/projects/quant/data/cache/matplotlib
+Environment=XDG_CACHE_HOME=/home/projects/quant/data/cache
+EnvironmentFile=-/etc/quant/web.env
+ExecStartPre=/home/projects/quant/.venv/bin/python -c "import sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
+ExecStart=/home/projects/quant/.venv/bin/python /home/projects/quant/scripts/run_mvp.py --serve-only --host 0.0.0.0 --port 18823
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/projects/quant/data /home/projects/quant/outputs /home/projects/quant/logs
+ReadWritePaths=-/home/projects/quant/runlog
+
+[Install]
+WantedBy=multi-user.target

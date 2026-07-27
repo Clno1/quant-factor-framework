@@ -1,5 +1,9 @@
 # Momentum Alerts
 
+> 这份文件只说明旧的盘中小时告警 worker。涵盖 Web、盘前 T-1 日报、完整算法、状态机、
+> root 服务器命令和当前限制的统一说明见
+> [`momentum_breakout_summary.md`](momentum_breakout_summary.md)。
+
 Discord 动量提醒采用独立 worker，不依赖 FastAPI 进程。现有强势筛选、日线 Setup
 评分和盘中触发器保持不变，提醒层只负责定时运行、状态去重和消息投递。
 

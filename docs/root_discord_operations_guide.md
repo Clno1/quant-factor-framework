@@ -1,4 +1,4 @@
-# 新加坡服务器多因子网站与 Discord 日报维护手册（root 运行版）
+# 服务器多因子网站与 Discord 日报维护手册（root 运行版）
 
 > 适用环境：腾讯云 TencentOS，新加坡时区，项目目录为
 > `/home/projects/quant`，systemd 服务以 `root` 用户运行，任务专用 Python 环境为
@@ -7,8 +7,14 @@
 > 这份文档以“能自己维护”为目标。每组命令都说明用途、是否需要重复执行、正常现象，
 > 以及是否会真实发送 Discord 消息。
 
+> **日常不需要先读这份长手册。** 登录服务器后如何启动网站、检查手机访问、启用 Discord
+> 定时任务，以及代码更新后是否需要重载 timer，请直接看日常速查版
+> [`server_daily_runbook.md`](server_daily_runbook.md)。本文保留首次安装、深度解释和故障恢复细节。
+
 如果只想日常维护，不必每次从头读到尾：
 
+- 只想登录后立即启动网站和定时任务：读
+  [`server_daily_runbook.md`](server_daily_runbook.md)；
 - 想理解整体结构：读第 1～3 节；
 - 想知道以前安装命令做了什么：读第 4～5 节；
 - 数据或板块任务失败：读第 6～7、13～14 节；
@@ -85,8 +91,9 @@ FastAPI 多因子网站（默认端口 18823）
 | `quant-group-analytics-eod.timer` | `quant-group-analytics-eod.service` | 计算板块和细分行业 | 不会 |
 | `quant-premarket-digest.timer` | `quant-premarket-digest.service` | 生成并发送两份盘前日报 | **会** |
 
-多因子网站通常由你原来已经部署的 Web service 长期运行。仓库没有给它固定一个生产
-systemd 名称，所以本文不会猜测服务器上的真实 service 名；第 20 节提供发现方法。
+仓库现在提供当前 root 部署专用的 `deploy/systemd/quant-web-root.service`，安装到服务器时
+统一命名为 `quant-web.service`。旧服务器可能仍由其他 systemd 名称、Supervisor、
+screen/tmux 或手工 Shell 启动；首次迁移前用第 20.3 节的方法确认，避免同一端口启动两份。
 
 这里的概念是：
 
@@ -110,6 +117,8 @@ systemd 名称，所以本文不会猜测服务器上的真实 service 名；第
 | 网站原有 Python 环境 | `/home/projects/quant/.venv` |
 | Discord/分析任务 Python 环境 | `/home/projects/quant/.venv-worker` |
 | 网站启动入口 | `/home/projects/quant/scripts/run_mvp.py --serve-only` |
+| 网站 systemd 单元 | `/etc/systemd/system/quant-web.service` |
+| 网站环境文件 | `/etc/quant/web.env` |
 | 网站默认监听端口 | `18823` |
 | FMP 配置 | `/etc/quant/momentum-alerts.env` |
 | Discord 双频道配置 | `/etc/quant/premarket-digest.env` |
@@ -748,7 +757,9 @@ systemctl enable --now quant-premarket-digest.timer
 - 类型：改变长期运行配置；第三条会使未来到点时真实发送；
 - `enable`：创建开机自动启用关系；
 - `--now`：无需重启服务器，立即让 timer 进入等待状态；
-- 启用 timer 不等于立即运行 service，它只是开始等待下一次计划时间；
+- 三个 timer 都设置了 `Persistent=true`，如果停用期间错过过触发，启动时可能立刻补跑；
+- 盘前 sender 即使被补跑，也会再次检查美股交易日、09:20–09:29 美东窗口和防重复状态，
+  窗口外不会直接发送；
 - 应先完成 dry-run 和两个 Webhook 测试，再启用第三条。
 
 ### 11.2 查看是否已启用
@@ -1170,13 +1181,25 @@ systemctl is-active \
 
 ```bash
 cd /home/projects/quant
+BEFORE=$(git rev-parse HEAD)
 git pull --ff-only
-/home/projects/quant/.venv-worker/bin/python -m pip install -r requirements.txt
+git diff --name-only "$BEFORE" HEAD -- requirements.txt
 ```
 
 - `git pull --ff-only` 只允许快进更新，避免服务器上自动产生合并提交；
-- `pip install -r` 让 worker 依赖与新代码声明一致；
+- 只有最后一条列出 `requirements.txt` 时，才运行下面的依赖安装，避免普通代码更新触发
+  `>=` 依赖无意义升级；
 - 如果服务器代码不是通过 Git 管理，应使用实际发布流程替换 `git pull`。
+
+依赖确有变化时执行：
+
+```bash
+/home/projects/quant/.venv-worker/bin/python -m pip install -r requirements.txt
+/home/projects/quant/.venv-worker/bin/python -m pip check
+```
+
+如果此次版本同时修改 Web 代码或 Web 依赖，完整的停站、更新 `.venv` 和恢复步骤以
+[`server_daily_runbook.md`](server_daily_runbook.md) 第 4 节为准。
 
 ### 15.3 unit 文件没有变化时
 
@@ -1284,6 +1307,7 @@ scripts/refresh_us_active.py
 ```text
 /etc/quant/momentum-alerts.env
 /etc/quant/premarket-digest.env
+/etc/quant/web.env
 ```
 
 迁移服务器时必须保持单机运行：先停旧服务器 timer，确认所有 service 都 inactive，再复制
@@ -1411,10 +1435,16 @@ systemctl enable --now quant-premarket-digest.timer
 - `group-analytics` writer 成功，只代表页面所需文件存在，不代表 Web 导航开关已经打开；
 - 打开行业页面不会让 `group_analytics` 反向进入多因子算法、回测或模拟盘。
 
-### 20.3 找到网站现在是怎么启动的
+### 20.3 确认网站现在是怎么启动的
 
-因为你之前已经部署过网站，但仓库无法知道服务器给它起的 systemd 名称，先运行以下
-只读命令发现真实状态。
+标准化完成后的固定服务名是 `quant-web.service`，先运行：
+
+```bash
+systemctl status quant-web.service --no-pager
+```
+
+如果显示 `Unit quant-web.service could not be found`，或者端口已有进程但这个 service 并未
+运行，说明服务器仍是旧部署。此时再运行以下只读命令发现真实状态，不要直接启动第二份。
 
 查看可能的 Web 进程：
 
@@ -1448,9 +1478,9 @@ systemctl list-units --type=service --all | \
   grep -Ei 'quant|uvicorn|fastapi|gunicorn'
 ```
 
-这条命令只筛选可能的服务名。找到真实名称后，在后文用它替换
-`YOUR_WEB_SERVICE.service`。例如发现名字是 `quant-web.service`，就把占位符替换成这个
-名字；不要原样执行占位符。
+这条命令只筛选可能的旧服务名。找到真实名称后，在带有
+`YOUR_WEB_SERVICE.service` 的旧部署示例中替换占位符；不要原样执行占位符。完成迁移后统一
+使用 `quant-web.service`。
 
 如果只知道进程 PID，也可以让 systemd 尝试定位它属于哪个 service：
 
@@ -1497,14 +1527,14 @@ curl -sS -o /dev/null -w 'HTTP %{http_code}\n' \
 - 本机返回 200、外网打不开：继续检查腾讯云安全组、系统防火墙、Nginx/Caddy 和域名，
   这不属于 Python 页面本身故障。
 
-如果网站由 systemd 管理，查看状态和日志：
+标准部署查看状态和日志：
 
 ```bash
-systemctl status YOUR_WEB_SERVICE.service --no-pager
-journalctl -u YOUR_WEB_SERVICE.service -n 200 --no-pager
+systemctl status quant-web.service --no-pager
+journalctl -u quant-web.service -n 200 --no-pager
 ```
 
-务必先把 `YOUR_WEB_SERVICE.service` 替换成第 20.3 节发现的真实名称。
+尚未迁移的旧部署，应把服务名换成第 20.3 节实际发现的名称。
 
 ### 20.5 网站使用 `.venv`，worker 使用 `.venv-worker`
 
@@ -1559,7 +1589,7 @@ cd /home/projects/quant
 - `--port 18823`：使用项目默认端口；
 - 这是前台进程，终端断开或按 `Ctrl+C` 就会停止；
 - 它不会发送 Discord；
-- 生产环境仍应继续使用你已有的 systemd、Supervisor、Docker 或其他正式启动方式。
+- 生产环境使用本仓库提供的 `quant-web.service`；旧部署在迁移完成前继续使用其原有进程管理器。
 
 如果端口已被占用，会出现 `Address already in use`。这通常说明现有网站本来就在运行，
 不要启动第二份。
@@ -1640,33 +1670,30 @@ cd /home/projects/quant
 不要只因为 `.venv-worker` 导入成功，就推断网站 `.venv` 也具备同样依赖。这两个环境是
 彼此隔离的。
 
-如果网站由 systemd 管理，先确认真实 service 名，然后执行：
+标准 `quant-web.service` 从 `/etc/quant/web.env` 读取这两个开关。编辑：
 
 ```bash
-systemctl edit YOUR_WEB_SERVICE.service
+vi /etc/quant/web.env
 ```
 
-在打开的 override 编辑器中加入：
+设置：
 
-```ini
-[Service]
-Environment=GROUP_ANALYTICS_ENABLED=true
-Environment=GROUP_ANALYTICS_WEB_ENABLED=true
+```dotenv
+GROUP_ANALYTICS_ENABLED=true
+GROUP_ANALYTICS_WEB_ENABLED=true
 ```
 
 保存后执行：
 
 ```bash
-systemctl daemon-reload
-systemctl restart YOUR_WEB_SERVICE.service
-systemctl status YOUR_WEB_SERVICE.service --no-pager
+systemctl restart quant-web.service
+systemctl status quant-web.service --no-pager
 ```
 
-- `systemctl edit` 创建本机 override，不直接修改原始 service；
-- `daemon-reload` 让 systemd 读取 override；
+- 环境文件变化不需要 `daemon-reload`；
 - `restart` 会造成一次短暂页面中断，并让 FastAPI 重新注册可选路由；
 - 这些命令不会发送 Discord；
-- 占位符必须替换为真实 service 名。
+- 旧部署若不读取 `/etc/quant/web.env`，应在其真实进程管理器中设置同样变量后重启。
 
 验证页面和 API：
 
@@ -1681,8 +1708,8 @@ curl -sS -o /dev/null -w 'api HTTP %{http_code}\n' \
 两条都应为 `HTTP 200`。页面只读取第 7 节已经生成的 immutable artifacts，不会在浏览器
 请求中重新下载 FMP 或重算全市场。
 
-如果网站不是 systemd 管理，不要执行上面的占位符命令。应在它实际使用的 Supervisor、
-Docker Compose、面板或启动脚本中加入同样两个环境变量，然后按对应方式重启。
+如果网站不是标准 systemd 服务，应在它实际使用的 Supervisor、Docker Compose、面板或
+启动脚本中加入同样两个环境变量，然后按对应方式重启。
 
 ### 20.9 让 Discord 动量消息链接回项目页面
 
@@ -1711,13 +1738,14 @@ worker，因为盘前 service 每次启动都会重新读取它；下一份尚�
 
 第 15 节的 timer 更新流程还需要加上网站检查：
 
-1. 先用第 20.3 节找出真实 Web service 或进程管理方式；
+1. 标准部署使用 `quant-web.service`；旧部署先用第 20.3 节找出真实进程管理方式；
 2. 只更新 `.venv-worker` 时，现有网站环境不会被修改；
 3. 更新 `.venv` 或 Web 代码时，选择维护窗口；
-4. 更新依赖完成后重启真实 Web service；
+4. 更新依赖完成后运行 `systemctl restart quant-web.service`；旧部署重启其真实 Web service；
 5. 用第 20.4 节依次检查 `/`、`/factors`；
 6. 如果已开放行业页面，再检查 `/group-analytics` 与 metadata API；
 7. 最后恢复更新前实际处于 active 的 timer。
 
-不要为了更新 Discord worker 而猜测并停止一个未知名字的网站服务；先发现真实启动方式。
-同样，不要把 `.venv-worker` 直接替换成网站 `.venv`，两个环境隔离正是为了降低维护风险。
+尚未标准化的旧部署，不要为了更新 Discord worker 而猜测并停止一个未知名字的网站服务；
+先发现真实启动方式。同样，不要把 `.venv-worker` 直接替换成网站 `.venv`，两个环境隔离
+正是为了降低维护风险。

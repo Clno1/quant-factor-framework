@@ -1,10 +1,10 @@
 # 新加坡服务器部署
 
 > 当前腾讯云服务器若采用 `/home/projects/quant`、`root` systemd 用户和独立
-> `.venv-worker`，请优先阅读
-> [root_discord_operations_guide.md](root_discord_operations_guide.md)。该手册逐条解释多因子
-> FastAPI 网站、行业/主题页面、命令、自动/手动发送方式、状态检查和日常维护。本文件
-> 下面的通用示例仍以 `/opt/quant + quant 用户` 为默认环境。
+> `.venv-worker`，日常启动、状态检查和代码更新请先读
+> [server_daily_runbook.md](server_daily_runbook.md)；只有首次安装和复杂故障再读
+> [root_discord_operations_guide.md](root_discord_operations_guide.md)。本文件下面的通用示例
+> 仍以 `/opt/quant + quant 用户` 为默认环境，不应直接复制到当前 root 服务器。
 
 推荐使用 Ubuntu 24.04 或 Debian 12，并通过 `systemd timer` 运行。项目使用
 `enum.StrEnum`，因此 Python 必须是 3.11 或更高版本。告警 worker 与 FastAPI
