@@ -6,7 +6,7 @@ from typing import Any
 
 import pandas as pd
 
-from src.data.foundation import MarketDataReader, MarketDataWriter
+from src.data.foundation import MarketDataWriter
 from src.config import CONFIG
 from src.storage import (
     DATA_REQUEST_SUCCESS,
@@ -29,16 +29,8 @@ class RequestProcessingResult:
 
 def _membership_for_request(
     request: DataRequest,
-    *,
-    reader: MarketDataReader,
 ) -> pd.DataFrame:
     payload = request.payload
-    try:
-        existing = reader.load_membership(request.data_universe)
-    except Exception:
-        existing = None
-    if existing is not None and not existing.empty:
-        return existing
     baseline = pd.Timestamp(payload["initial_start"]).normalize()
     return pd.DataFrame(
         {
@@ -54,17 +46,15 @@ def process_data_request(
     *,
     database: AppDatabase | None = None,
     writer: MarketDataWriter | None = None,
-    reader: MarketDataReader | None = None,
 ) -> RequestProcessingResult:
     database = database or app_database()
     writer = writer or MarketDataWriter()
-    reader = reader or MarketDataReader(catalog=writer.catalog)
     try:
         payload = request.payload
         universe_frame = pd.DataFrame(payload.get("universe_records") or [])
         if universe_frame.empty or "ticker" not in universe_frame.columns:
             raise ValueError("Data request contains no universe records")
-        membership = _membership_for_request(request, reader=reader)
+        membership = _membership_for_request(request)
         result = writer.update_universe(
             request.data_universe,
             target_session=None,
@@ -74,6 +64,7 @@ def process_data_request(
             initial_start=payload["initial_start"],
             membership_frame=membership,
             membership_source=f"sqlite_data_request:{request.request_id}",
+            derive_membership_from_bars=True,
             min_latest_coverage=1.0,
         )
         result_payload = result.to_dict()

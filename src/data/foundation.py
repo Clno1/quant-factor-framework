@@ -664,6 +664,45 @@ def _normalize_membership_frame(
     return out
 
 
+def _observed_membership_frame(
+    bars: pd.DataFrame,
+    *,
+    tickers: set[str],
+    start: pd.Timestamp,
+    target: pd.Timestamp,
+) -> pd.DataFrame:
+    """Build fixed-basket membership without treating pre-listing bars as missing."""
+    normalized_tickers = sorted(str(ticker).upper() for ticker in tickers)
+    work = bars.loc[
+        bars["ticker"].astype(str).isin(normalized_tickers),
+        ["date", "ticker"],
+    ].copy()
+    work["date"] = pd.to_datetime(work["date"], errors="coerce").dt.normalize()
+    work = work.loc[work["date"].between(start, target)]
+    first_dates = work.groupby("ticker")["date"].min().to_dict()
+    snapshots = sorted(
+        {start}
+        | {
+            max(start, pd.Timestamp(first_date).normalize())
+            for first_date in first_dates.values()
+            if pd.notna(first_date)
+        }
+    )
+    rows = [
+        {
+            "date": snapshot,
+            "ticker": ticker,
+            "active": (
+                ticker in first_dates
+                and pd.Timestamp(first_dates[ticker]).normalize() <= snapshot
+            ),
+        }
+        for snapshot in snapshots
+        for ticker in normalized_tickers
+    ]
+    return pd.DataFrame(rows, columns=["date", "ticker", "active"])
+
+
 def _normalize_download(
     ticker: str,
     frame: pd.DataFrame | None,
@@ -994,7 +1033,7 @@ def validate_pit_bar_coverage(
         relevant_active.update(active)
         observed = observed_by_date.get(pd.Timestamp(session), set())
         covered = len(active & observed)
-        coverage = covered / len(active) if active else 0.0
+        coverage = covered / len(active) if active else 1.0
         daily.append((session, coverage, covered, len(active)))
 
     worst = min(daily, key=lambda item: item[1]) if daily else None
@@ -1168,6 +1207,7 @@ class MarketDataWriter:
         initial_start: str | date | pd.Timestamp | None = None,
         membership_frame: pd.DataFrame | None = None,
         membership_source: str | None = None,
+        derive_membership_from_bars: bool = False,
         min_latest_coverage: float | None = None,
     ) -> IngestionResult:
         universe = safe_path_component(universe.upper(), label="universe")
@@ -1402,6 +1442,15 @@ class MarketDataWriter:
                     .reset_index(drop=True)
                 )
                 candidate, session_date_check = _filter_non_xnys_bars(candidate)
+
+                if derive_membership_from_bars:
+                    pit_membership = _observed_membership_frame(
+                        candidate,
+                        tickers=current_tickers,
+                        start=start,
+                        target=target,
+                    )
+                    pit_path = membership_source or "observed_daily_bars"
 
                 coverage_threshold = float(
                     min_latest_coverage

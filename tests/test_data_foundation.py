@@ -96,6 +96,44 @@ class DataFoundationTests(unittest.TestCase):
             )
             self.assertTrue(wide["returns"].iloc[0].isna().all())
 
+    def test_observed_membership_does_not_penalize_pre_listing_sessions(self):
+        def fetcher(ticker: str, start: str, end: str) -> pd.DataFrame:
+            dates = ["2026-07-17", "2026-07-20"]
+            if ticker == "BBB":
+                dates = ["2026-07-20"]
+            return _bars(ticker, dates)
+
+        membership = pd.DataFrame(
+            {
+                "date": pd.Timestamp("2026-07-17"),
+                "ticker": ["AAA", "BBB"],
+                "active": True,
+            }
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, writer, reader = self._components(root, fetcher)
+            result = writer.update_universe(
+                "WATCHLIST_TEST",
+                target_session="2026-07-20",
+                universe_frame=_universe(),
+                initial_start="2026-07-17",
+                membership_frame=membership,
+                membership_source="sqlite_data_request:test",
+                derive_membership_from_bars=True,
+                workers=2,
+            )
+
+            self.assertEqual(result.status, "PUBLISHED")
+            frozen = reader.load_membership("WATCHLIST_TEST")
+            first = frozen.loc[frozen["date"].eq(pd.Timestamp("2026-07-17"))]
+            last = frozen.loc[frozen["date"].eq(pd.Timestamp("2026-07-20"))]
+            self.assertEqual(
+                dict(zip(first["ticker"], first["active"], strict=True)),
+                {"AAA": True, "BBB": False},
+            )
+            self.assertTrue(last["active"].all())
+
     def test_non_xnys_vendor_rows_are_excluded_and_audited(self):
         bars = pd.DataFrame(
             {
