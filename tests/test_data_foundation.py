@@ -366,6 +366,48 @@ class DataFoundationTests(unittest.TestCase):
                         reader=reader,
                     )
 
+    def test_runtime_factor_bundle_rejects_short_membership_history(self):
+        def fetcher(ticker: str, start: str, end: str) -> pd.DataFrame:
+            return _bars(ticker, ["2026-07-20"])
+
+        membership = pd.DataFrame(
+            {
+                "date": pd.Timestamp("2026-07-20"),
+                "ticker": ["AAA", "BBB"],
+                "active": True,
+            }
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, writer, reader = self._components(root, fetcher)
+            result = writer.update_universe(
+                "TEST",
+                target_session="2026-07-20",
+                universe_frame=_universe(),
+                initial_start="2026-07-20",
+                membership_frame=membership,
+                membership_source="unit-test",
+            )
+            with patch(
+                "src.data.access._expected_session",
+                return_value=pd.Timestamp("2026-07-20"),
+            ):
+                with self.assertRaises(MarketDataNotReadyError) as raised:
+                    load_published_bundle(
+                        requested_universe="TEST",
+                        tickers=["AAA", "BBB"],
+                        start="2026-07-20",
+                        end="2026-07-20",
+                        exact_universe=True,
+                        factor_ids=["MOM_12M"],
+                        dataset_version_id=result.version.version_id,
+                        reader=reader,
+                    )
+            self.assertIn(
+                "insufficient_membership_history",
+                raised.exception.coverage.failures,
+            )
+
     def test_pit_membership_is_frozen_inside_published_version(self):
         membership = pd.DataFrame(
             {

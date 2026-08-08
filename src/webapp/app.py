@@ -8,6 +8,7 @@ FastAPI 主应用。
 """
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import os
 import time
 from pathlib import Path
@@ -30,6 +31,42 @@ _HERE = Path(__file__).resolve().parent
 ASSET_VER = str(int(time.time()))
 
 
+def _recover_application_state() -> tuple[int, int]:
+    """Recover interrupted jobs and activate the WAITING_FOR_DATA monitor."""
+    interrupted = 0
+    submitted = 0
+    try:
+        from src.backtest.store import startup_recovery
+
+        interrupted = startup_recovery()
+        if interrupted:
+            log.warning(
+                "startup_recovery: %d stale backtest tasks marked as failed.",
+                interrupted,
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.error("startup_recovery failed: %s", exc)
+
+    try:
+        from src.backtest.runner import get_runner
+
+        submitted = get_runner().reconcile_waiting()
+        if submitted:
+            log.info(
+                "startup_recovery: submitted %d backtests whose data is ready.",
+                submitted,
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.error("WAITING_FOR_DATA startup reconciliation failed: %s", exc)
+    return interrupted, submitted
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    _recover_application_state()
+    yield
+
+
 def _strict_config_flag(value, *, default: bool = False) -> bool:
     if value is None:
         return default
@@ -50,6 +87,7 @@ def create_app() -> FastAPI:
         title=CONFIG.webapp.title,
         description="Multi-Factor Quant Research Dashboard",
         version="0.1.0",
+        lifespan=_lifespan,
     )
     install_basic_auth_middleware(app, basic_auth_credentials())
 
@@ -108,15 +146,6 @@ def create_app() -> FastAPI:
         group_analytics_templates.env.globals["asset_ver"] = ASSET_VER
         group_analytics_templates.env.globals["group_analytics_enabled"] = True
         app.include_router(group_analytics_router)
-
-    # 启动恢复：把上次进程残留的 running 任务标为 failed
-    try:
-        from src.backtest.store import startup_recovery
-        fixed = startup_recovery()
-        if fixed:
-            log.warning("startup_recovery: %d stale backtest tasks marked as failed.", fixed)
-    except Exception as e:  # noqa: BLE001
-        log.error("startup_recovery failed: %s", e)
 
     log.info(
         "FastAPI app created. Title=%s asset_ver=%s group_analytics=%s",

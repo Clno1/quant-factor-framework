@@ -44,6 +44,8 @@ class DataCoverage:
     unexpected_tickers: tuple[str, ...]
     requested_start: str | None
     requested_end: str | None
+    required_history_start: str | None
+    membership_start: str | None
     expected_session: str
     observed_session: str | None
     latest_coverage: float
@@ -150,6 +152,7 @@ def inspect_coverage(
     tickers: Iterable[str] | None,
     start: str | pd.Timestamp | None,
     end: str | pd.Timestamp | None,
+    history_start: str | pd.Timestamp | None,
     require_open: bool,
     exact_universe: bool,
     min_latest_coverage: float,
@@ -213,6 +216,19 @@ def inspect_coverage(
     if require_open and open_coverage < float(min_latest_coverage):
         failures.append("open_coverage")
 
+    membership_start: pd.Timestamp | None = None
+    if exact_universe and history_start is not None:
+        membership = reader.load_membership(
+            data_universe,
+            version=version,
+        )
+        if membership is None or membership.empty:
+            failures.append("membership_history_missing")
+        else:
+            membership_start = pd.Timestamp(membership["date"].min()).normalize()
+            if membership_start > pd.Timestamp(history_start).normalize():
+                failures.append("insufficient_membership_history")
+
     observed_session = (
         pd.Timestamp(bars["date"].max()).strftime("%Y-%m-%d")
         if not bars.empty
@@ -229,6 +245,16 @@ def inspect_coverage(
         ),
         requested_end=(
             pd.Timestamp(end).strftime("%Y-%m-%d") if end is not None else None
+        ),
+        required_history_start=(
+            pd.Timestamp(history_start).strftime("%Y-%m-%d")
+            if history_start is not None
+            else None
+        ),
+        membership_start=(
+            membership_start.strftime("%Y-%m-%d")
+            if membership_start is not None
+            else None
         ),
         expected_session=expected_session.strftime("%Y-%m-%d"),
         observed_session=observed_session,
@@ -302,6 +328,12 @@ def load_published_bundle(
             1.0 if tickers else 0.98,
         )
     )
+    factors = list(dict.fromkeys(str(value) for value in (factor_ids or [])))
+    history_start = None
+    if start is not None and factors:
+        history_start = (
+            pd.Timestamp(start) - pd.Timedelta(days=DEFAULT_WARMUP_CALENDAR_DAYS)
+        ).normalize()
     coverage, _ = inspect_coverage(
         reader,
         data_universe=selected_universe,
@@ -309,6 +341,7 @@ def load_published_bundle(
         tickers=tickers,
         start=start,
         end=end,
+        history_start=history_start,
         require_open=require_open,
         exact_universe=exact_universe,
         min_latest_coverage=min_coverage,
@@ -321,7 +354,6 @@ def load_published_bundle(
             coverage=coverage,
         )
 
-    factors = list(dict.fromkeys(str(value) for value in (factor_ids or [])))
     publication: dict[str, Any] | None = None
     if require_factor_publication:
         try:
