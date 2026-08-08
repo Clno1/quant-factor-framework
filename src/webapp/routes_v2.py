@@ -641,11 +641,19 @@ def backtest_detail_page(request: Request, tid: UUID):
     for c in snapshot.get("components", []):
         fid = c.get("factor_id")
         entry = catalog.get(fid) if fid else None
+        direction = int(entry.direction) if entry else 0
+        weight = float(c.get("weight", 0.0))
         components_rows.append({
             "factor_id": fid,
             "display_name": entry.display_name if entry else fid,
             "category": entry.category if entry else "—",
-            "weight": c.get("weight", 0.0),
+            "direction": direction,
+            "weight": weight,
+            "direction_mismatch": (
+                direction in {-1, 1}
+                and weight != 0.0
+                and (1 if weight > 0 else -1) != direction
+            ),
         })
 
     # 格式化指标

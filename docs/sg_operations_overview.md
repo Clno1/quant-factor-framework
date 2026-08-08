@@ -2,14 +2,15 @@
 
 更新日期：2026-08-08
 
-## 1. 当前必须区分两套状态
+## 1. 当前部署状态
 
 | 范围 | 状态 |
 |---|---|
-| 本地 `/Users/huozhihong/Documents/Quant` | 已删除旧兼容代码；旧数据已校验后移出项目；group timer 改为 09:15；待完整测试 |
-| SG `/home/projects/quant` | 上次 SSH 验收时服务可运行且完成影子观察；尚未部署本次本地清理 commit |
+| 本地 `/Users/huozhihong/Documents/Quant` | 统一存储与最终页面修复已完成；完整测试 326 项通过 |
+| SG `/home/projects/quant` | 统一存储主基线 `1028487`；Web 和六个正式 timer 已部署、验证并恢复 |
 
-因此本文中的“目标状态”是下一次部署后应达到的状态，不能仅凭本地文件推断 SG 已经同步。
+SG 发布使用精确 `git archive`，不是从未推送的本地 `main` 做远端 `git pull`。部署标记保存在
+`/home/projects/quant/.deploy-commit`。当前代码已经部署，但本地提交尚未推到共享 `origin/main`。
 
 ## 2. 目标生产拓扑
 
@@ -81,33 +82,72 @@ DuckDB 和 SQLite 都是嵌入式文件，不需要独立 daemon。Parquet 也�
 .venv-worker/bin/python scripts/check_app_storage.py
 ```
 
-## 6. 下一次 SG 发布验收
+## 6. 2026-08-08 SG 发布与验收记录
 
-发布前：
+一致性备份位于：
 
-1. 记录本地测试结果和 commit ID。
-2. 停止会写数据的 service，避免备份中途变化。
-3. 备份代码、`configs/default.yaml`、DuckDB catalog、SQLite 和 systemd units。
+```text
+/home/projects/quant-backups/20260808T183044+0800/
+```
 
-发布后：
+它包含代码、完整 `data/outputs/logs`、`/etc/quant`、systemd units、SQLite Backup API 副本、
+DuckDB 副本、各次精确 release archive 和 `SHA256SUMS`。发布过程排除了 `.git`、`data`、
+`outputs`、`logs`、两个虚拟环境和环境变量文件，未用代码覆盖状态目录。
 
-1. 安装依赖并执行 `python -m compileall src scripts`。
-2. 对全部新增或修改 unit 执行 `systemd-analyze verify`。
-3. 确认 group timer 是 09:15，service `After=quant-market-data.service`。
-4. 运行行情 status 和 SQLite integrity。
-5. 启动 Web，带认证检查首页、因子、策略、Watchlist、回测和模拟盘页。
-6. 手动运行一次缺数 worker，确认空队列时幂等退出。
-7. 观察至少一个生产交易日，再归档 SG 旧目录。
+验收结果：
 
-旧目录处理必须采用“先核验、再外部归档、最后从项目移出”，不要删除当前 Parquet lake、SQLite
-或仍被页面引用的回测结果。
+- `systemd-analyze verify` 通过；唯一提示来自腾讯云 `tat_agent.service` 的旧 `/var/run` 路径。
+- SG 使用 `.venv` 运行 Web、`.venv-worker` 运行 writer/research/paper worker。
+- 最终完整测试为 `326 passed`；新版 Starlette 只有测试客户端弃用 warning。
+- 页面验收发现冻结策略快照的成分行缺少方向字段，导致成功回测详情页 500；补齐字段并增加模板
+  回归测试后，未认证首页返回 401，认证后的六个主页面及真实 Strategy、Watchlist、Backtest、
+  Paper 详情页全部返回 200。
+- `scripts/run_data_pipeline.py status`：MAG7、SP500、US_LIQUID_5M 都指向 2026-08-07 正式版。
+- `scripts/check_app_storage.py` 和 SQLite `PRAGMA integrity_check` 通过。
+- group timer 已从旧 07:45 改为 09:15；缺数 timer 恢复为每 5 分钟。
+- `systemctl --failed` 没有 Quant unit；宿主机原有的 IPMI、kdump、mcelog 三个失败 unit 与本项目
+  无关，应由服务器基础设施层另行处理。
+
+### 6.1 真实业务对象
+
+| 对象 | ID | 结果 |
+|---|---|---|
+| Strategy | `42bafed1-df08-47d4-95bd-9c25a7d54e3c` | MOM_12M 0.6 + VOL_60D -0.4 |
+| Watchlist | `76f37adb-5a45-449a-89ba-23ac045488d5` | 10 只真实美股，等权 |
+| 最终回测 | `db026d38-0b27-46a5-bdf8-3d26240fe26a` | WAITING 自动恢复后 success |
+| Paper account | `df937dec-c04c-486e-aac7-3cd547628944` | next-open 成交和故障恢复通过，验收后 paused |
+
+Watchlist 专属数据池是
+`WATCHLIST_76F37ADB5A45449A89BA23AC045488D5_5684832A95B7`，最终正式版本是
+`a95650c5dc37488795248c75f72322ce`：2020-07-06 至 2026-08-07，14,114 行、10 票、
+目标日覆盖 100%。
+
+### 6.2 缺数与重启恢复
+
+- 实测 pending -> running；第二个独立领取进程返回空列表，没有重复领取。
+- stale running 故障注入后安全回到 pending，attempts 保留。
+- 发现并修复了 IPO 前覆盖率误判、扩大日期范围不向后回补、短版本静默截断、Web 重启后
+  未初始化 WAITING monitor、批 worker 残留 reader 调用五个问题。
+- Web 关闭时数据请求 success、回测仍保持 WAITING；新 Web lifespan 日志明确记录
+  `submitted 1 backtests whose data is ready`，随后任务 success。
+
+### 6.3 交易账本故障注入
+
+- 回测逐票 `trades.parquet` 的成本合计、按日 `costs.parquet` 合计和任务 diagnostics 完全一致。
+- 模拟盘使用 2026-07-01 next open 成交，逐票保存动态滑点、佣金、SEC/TAF/CAT、清算和
+  pass-through 成本。
+- 注入“fills 已写、orders 写失败”后，fill ledger 增至 4 行、orders 仍为 pending；同日重试后
+  fill ID 数仍为 4，orders 全部 filled，累计成交数量逐单精确一致。
+- 重启 Web 后账户现金、权益、orders、fills、runs、positions 和历史 frame 均从 SQLite 恢复。
 
 ## 7. 当前限制
 
-- SG 尚未实际部署和验证本次 2026-08-08 本地清理。
-- 第一个真实 Watchlist 缺数队列还没有完成端到端验收。
-- 真实策略、回测和 active 模拟盘账户的重启恢复还没有完成验收。
-- 模拟盘单个 record/frame 写入有事务，但整轮包含多次写入，需要故障注入确认幂等边界。
+- 这个 10 票 Watchlist 没有发布 sector metadata，且小于 `neutralize_min_obs=30`；本次 runtime
+  factor 日志明确提示行业中性化未执行。它适合验证数据和交易链路，不应作为行业中性策略的
+  正式研究样本。
+- SG 仍保留备份窗口前的旧 `data/raw/ohlcv`、`data/processed` 等文件；当前代码不读取它们。
+  它们应在保留期确认后移到服务器外部归档，不要与 `data/lake` 一起删除。
+- 当前部署来自校验归档，本地提交尚未推送到共享远端仓库。
 - Web 原始 18823 端口若直接公网 HTTP 暴露，Basic Auth 不能提供传输加密。
 - 统一告警尚未覆盖所有 systemd 失败。
 
