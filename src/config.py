@@ -3,7 +3,7 @@
 
 用法：
     from src.config import CONFIG
-    print(CONFIG.universe.name)          # 属性访问
+    print(CONFIG.universes.default)      # 属性访问
     print(CONFIG["universe"]["name"])    # 字典访问
     CONFIG.reload()                      # 强制重载
 """

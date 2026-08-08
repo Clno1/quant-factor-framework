@@ -1,0 +1,12 @@
+[Unit]
+Description=Start the shadow intraday momentum monitor before each US session
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 09:20:00 America/New_York
+Persistent=true
+AccuracySec=10s
+RandomizedDelaySec=5s
+Unit=quant-intraday-momentum-monitor.service
+
+[Install]
+WantedBy=timers.target

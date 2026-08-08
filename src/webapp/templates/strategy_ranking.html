@@ -76,6 +76,12 @@
         <div class="label">入选数</div>
         <div class="value mono">{{ ranking.target_count }}</div>
     </div>
+    <div class="card">
+        <div class="label">行情版本</div>
+        <div class="value mono" title="{{ ranking.data_contract.dataset_version_id }}">
+            {{ ranking.data_contract.dataset_version_id[:8] }}
+        </div>
+    </div>
 </section>
 
 {% if ranking.warnings or ranking.tickers_missing %}
@@ -108,6 +114,7 @@
                     <th>因子</th>
                     <th>中文名</th>
                     <th>分类</th>
+                    <th>预设方向</th>
                     <th style="text-align:right;">原始权重</th>
                 </tr>
             </thead>
@@ -117,7 +124,11 @@
                     <td class="mono">{{ c.factor_id }}</td>
                     <td>{{ c.display_name }}</td>
                     <td><span class="factor-cat-badge">{{ c.category }}</span></td>
-                    <td class="mono" style="text-align:right;">{{ "%.4f"|format(c.weight) }}</td>
+                    <td class="mono">{% if c.direction > 0 %}+1{% else %}-1{% endif %}</td>
+                    <td class="mono" style="text-align:right;">
+                        {{ "%.4f"|format(c.weight) }}
+                        {% if c.direction_mismatch %}<span class="badge amber">与预设相反</span>{% endif %}
+                    </td>
                 </tr>
                 {% endfor %}
             </tbody>

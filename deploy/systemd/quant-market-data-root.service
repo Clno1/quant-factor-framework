@@ -1,0 +1,34 @@
+[Unit]
+Description=Publish validated FMP daily bars (root deployment)
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=6h
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/home/projects/quant
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONPATH=/home/projects/quant
+EnvironmentFile=/etc/quant/market-data.env
+ExecStartPre=/home/projects/quant/.venv-worker/bin/python -c "import duckdb, exchange_calendars, sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
+# PIT failure is recorded but does not prevent independent static universes
+# from publishing. The update command still fails SP500 closed and exits nonzero.
+ExecStartPre=-/home/projects/quant/.venv-worker/bin/python /home/projects/quant/scripts/run_data_pipeline.py pit --env-file /etc/quant/market-data.env
+ExecStart=/home/projects/quant/.venv-worker/bin/python /home/projects/quant/scripts/run_data_pipeline.py update --universe SP500 --universe MAG7 --workers 6 --env-file /etc/quant/market-data.env
+TimeoutStartSec=5h
+Restart=on-failure
+RestartSec=30min
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/projects/quant/data /home/projects/quant/outputs /home/projects/quant/logs
+ReadWritePaths=-/home/projects/quant/runlog
+
+[Install]
+WantedBy=multi-user.target

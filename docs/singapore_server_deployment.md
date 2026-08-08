@@ -2,8 +2,7 @@
 
 > 当前腾讯云服务器若采用 `/home/projects/quant`、`root` systemd 用户和独立
 > `.venv-worker`，日常启动、状态检查和代码更新请先读
-> [server_daily_runbook.md](server_daily_runbook.md)；只有首次安装和复杂故障再读
-> [root_discord_operations_guide.md](root_discord_operations_guide.md)。本文件下面的通用示例
+> [server_daily_runbook.md](server_daily_runbook.md)。本文件下面的通用示例
 > 仍以 `/opt/quant + quant 用户` 为默认环境，不应直接复制到当前 root 服务器。
 
 推荐使用 Ubuntu 24.04 或 Debian 12，并通过 `systemd timer` 运行。项目使用
@@ -56,6 +55,32 @@ service user、专用 ACL/组或 systemd credentials。
 
 ## 3. 首次准备数据
 
+### 3.1 主多因子 DuckDB 日线
+
+主多因子数据链路应先安装单独的 FMP 环境文件并完成首次发布。完整的数据目录、质量门禁和
+故障语义见 [`data_foundation.md`](data_foundation.md)。
+
+```bash
+sudo install -m 0640 -o root -g quant \
+  /opt/quant/deploy/systemd/market-data.env.example \
+  /etc/quant/market-data.env
+sudoedit /etc/quant/market-data.env
+sudo -u quant /opt/quant/.venv/bin/python \
+  /opt/quant/scripts/run_data_pipeline.py pit \
+  --env-file /etc/quant/market-data.env
+sudo -u quant /opt/quant/.venv/bin/python \
+  /opt/quant/scripts/run_data_pipeline.py update \
+  --universe SP500 --universe MAG7 \
+  --env-file /etc/quant/market-data.env
+sudo -u quant /opt/quant/.venv/bin/python \
+  /opt/quant/scripts/run_data_pipeline.py status
+sudo -u quant /opt/quant/.venv/bin/python \
+  /opt/quant/scripts/run_factor_research.py
+```
+
+正式 SP500 数据要求 `data/pit_universes/SP500.parquet` 的最后快照等于目标交易日，并与
+current constituents 一致。缺少或不一致时，数据写入和研究都会拒绝继续。
+
 默认只刷新流动性达到 500 万美元的股票，并额外刷新 `QQQ` 作为市场过滤基准。
 `QQQ` 不会进入告警候选。
 
@@ -90,6 +115,8 @@ sudo -u quant /opt/quant/.venv/bin/python /opt/quant/scripts/run_momentum_alerts
 sudo install -m 0644 /opt/quant/deploy/systemd/*.service /etc/systemd/system/
 sudo install -m 0644 /opt/quant/deploy/systemd/*.timer /etc/systemd/system/
 sudo systemctl daemon-reload
+sudo systemctl enable --now quant-market-data.timer
+sudo systemctl enable --now quant-factor-research.timer
 sudo systemctl enable --now quant-us-daily-refresh.timer
 sudo systemctl enable --now quant-momentum-alerts.timer
 sudo systemctl list-timers 'quant-*'
@@ -106,11 +133,124 @@ sudo journalctl -u quant-momentum-alerts.service -n 100 --no-pager
 
 两个任务分别是：
 
+- `quant-market-data.timer`：新加坡时间周二至周六 08:15，发布 SP500/MAG7 已校验版本。
+- `quant-factor-research.timer`：新加坡时间周二至周六 08:45，发布与当日 DuckDB
+  version 绑定的主因子研究。
 - `quant-us-daily-refresh.timer`：新加坡时间周二至周六 07:15，更新刚结束的美股交易日。
 - `quant-momentum-alerts.timer`：每小时 35 分唤醒；worker 再按 NASDAQ 实际开市状态和
   美东 10:00-15:59 判断是否扫描，因此自动适配夏令时、节假日和提前收盘。
 
-## 5. 行业涨跌影子任务
+### 4.1 内部模拟盘每日运行
+
+模拟盘必须在因子产物刷新成功后运行，不能只定时执行 `run_paper.py`。安装独立的只含 FMP key
+环境文件和串行 service：
+
+```bash
+sudo install -m 0640 -o root -g quant \
+  /opt/quant/deploy/systemd/paper-trading.env.example \
+  /etc/quant/paper-trading.env
+sudoedit /etc/quant/paper-trading.env
+sudo install -m 0644 \
+  /opt/quant/deploy/systemd/quant-paper-trading.service \
+  /etc/systemd/system/
+sudo install -m 0644 \
+  /opt/quant/deploy/systemd/quant-paper-trading.timer \
+  /etc/systemd/system/
+sudo systemd-analyze verify \
+  /etc/systemd/system/quant-factor-research.service \
+  /etc/systemd/system/quant-factor-research.timer \
+  /etc/systemd/system/quant-paper-trading.service \
+  /etc/systemd/system/quant-paper-trading.timer
+sudo systemctl daemon-reload
+sudo systemctl start quant-paper-trading.service
+sudo journalctl -u quant-paper-trading.service -n 200 --no-pager
+sudo systemctl enable --now quant-paper-trading.timer
+```
+
+因子研究在 08:45 独立运行；模拟盘 Timer 在新加坡时间周二至周六 10:30 启动。Service
+先执行 `prepare_paper_data.py`，校验 active 账户使用的命名股票池研究发布与最新 DuckDB
+version 一致，并只刷新自定义 Watchlist，成功后再执行 `run_paper.py`。动态 `SP500/US_ACTIVE`
+账户还必须准备
+`data/pit_universes/<UNIVERSE>.parquet`；缺文件时账户会 fail closed。完整说明见
+[`paper_trading_operations.md`](paper_trading_operations.md)。
+
+## 5. 分钟级突破影子服务
+
+该服务与旧的 `quant-momentum-alerts.timer` 不同：它在 09:20 ET 启动一个常驻进程，默认
+600 只每 5 分钟宽筛、40 只每分钟观察，16:05 ET 自行退出。当前 unit 只有 `--shadow`，
+环境文件只含 FMP key，没有 Discord Webhook。
+
+先安装独立环境文件并确认依赖：
+
+```bash
+sudo install -m 0640 -o root -g quant \
+  /opt/quant/deploy/systemd/intraday-momentum-monitor.env.example \
+  /etc/quant/intraday-momentum-monitor.env
+sudoedit /etc/quant/intraday-momentum-monitor.env
+sudo -u quant /opt/quant/.venv/bin/python -c \
+  'import exchange_calendars; print(exchange_calendars.__version__)'
+```
+
+运行第 3 节的日线刷新后，先做性能回放和只读状态检查：
+
+```bash
+sudo -u quant /opt/quant/.venv/bin/python \
+  /opt/quant/scripts/benchmark_intraday_monitor.py \
+  --days 5 --candidates 600 --active 60 --enforce
+
+sudo -u quant /opt/quant/.venv/bin/python \
+  /opt/quant/scripts/run_intraday_momentum_monitor.py \
+  --env-file /etc/quant/intraday-momentum-monitor.env --status
+```
+
+第一次真实 smoke 应在美股开市后执行，仍不会发送 Discord：
+
+```bash
+sudo -u quant /opt/quant/.venv/bin/python \
+  /opt/quant/scripts/run_intraday_momentum_monitor.py \
+  --env-file /etc/quant/intraday-momentum-monitor.env \
+  --shadow --once
+```
+
+输出必须同时满足：
+
+- `market_open=true`；
+- `source_data_date` 等于上一真实 XNYS session；
+- 日线 exact coverage 至少 80%，否则进程应明确失败关闭；
+- `errors=[]`；
+- `active_count <= 40`；
+- 没有 Discord 消息。
+
+然后只安装这两个新 unit，不要借机覆盖服务器上已经适配过路径/用户的其他 unit：
+
+```bash
+sudo install -m 0644 \
+  /opt/quant/deploy/systemd/quant-intraday-momentum-monitor.service \
+  /etc/systemd/system/
+sudo install -m 0644 \
+  /opt/quant/deploy/systemd/quant-intraday-momentum-monitor.timer \
+  /etc/systemd/system/
+sudo systemd-analyze verify \
+  /etc/systemd/system/quant-intraday-momentum-monitor.service \
+  /etc/systemd/system/quant-intraday-momentum-monitor.timer
+sudo systemctl daemon-reload
+sudo systemctl enable --now quant-intraday-momentum-monitor.timer
+sudo systemctl status quant-intraday-momentum-monitor.timer
+```
+
+连续观察至少 5 个完整交易日：
+
+```bash
+sudo journalctl -u quant-intraday-momentum-monitor.service -n 300 --no-pager
+sudo -u quant /opt/quant/.venv/bin/python \
+  /opt/quant/scripts/run_intraday_momentum_monitor.py \
+  --env-file /etc/quant/intraday-momentum-monitor.env --status
+```
+
+状态库是 `/opt/quant/outputs/intraday_momentum_monitor/state.sqlite3`。完成五日观察前不要修改
+service 加入 Webhook，也不要停用旧小时提醒；两者切换属于下一阶段发布操作。
+
+## 6. 行业涨跌影子任务
 
 `group_analytics` 的 writer 与网页入口使用两个独立开关。仓库默认均关闭；systemd
 单元只通过环境变量开启 writer，并显式保持网页关闭，因此影子运行不会改变现有因子、
@@ -147,7 +287,7 @@ sudo journalctl -u quant-group-analytics-eod.service -n 200 --no-pager
 `GROUP_ANALYTICS_WEB_ENABLED=true` 后重启 Web；完成连续 10 个实际交易日的影子
 观察与生产机性能复测前，不要开启页面。
 
-## 6. 美股开盘前 Discord 双频道日报
+## 7. 美股开盘前 Discord 双频道日报
 
 独立盘前 worker 在每个 XNYS session 的 09:20 America/New_York 读取上一完整交易日的
 动量日线，以及 `sector` / `sub_industry` immutable group artifacts，分别投递到
@@ -199,7 +339,7 @@ service 最近一次成功日志；最终数据门槛仍会阻止陈旧消息。
 详细算法、消息合同、幂等状态和故障处理见 `docs/premarket_discord.md`。如果希望动量频道
 每天严格只有盘前一条，应另行停用 `quant-momentum-alerts.timer`；否则两者可并存。
 
-## 7. 运维与更新
+## 8. 运维与更新
 
 ```bash
 sudo journalctl -u quant-momentum-alerts.service -f

@@ -17,7 +17,7 @@ from typing import Iterable
 
 import pandas as pd
 
-from src.factors.artifacts import load_factor_values
+from src.factors.artifacts import load_factor_matrix_bundle
 from src.preprocessing.standardize import zscore_cs
 from src.strategies.definition import StrategyComponent
 from src.utils.logger import get_logger
@@ -37,26 +37,39 @@ class CompositionResult:
     date_range: tuple[str, str]             # (start_iso, end_iso) 合成后的有效日期范围
     tickers_count: int                      # 合成矩阵列数
     warnings: list[str] = field(default_factory=list)
+    factor_raw: dict[str, pd.DataFrame] = field(default_factory=dict)
+    factor_clean: dict[str, pd.DataFrame] = field(default_factory=dict)
+    factor_inputs: dict[str, pd.DataFrame] = field(default_factory=dict)
+    factor_contributions: dict[str, pd.DataFrame] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------
 # 加载因子值（带存在性校验）
 # ---------------------------------------------------------------
 
-def _load_factor_matrix(
+def _load_factor_bundle(
     factor_id: str, universe: str,
-) -> pd.DataFrame:
-    df = load_factor_values(factor_id, universe=universe)
-    if df is None or df.empty:
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    try:
+        raw, clean, _ = load_factor_matrix_bundle(
+            factor_id,
+            universe=universe,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        raise FactorDataMissingError(
+            f"因子 {factor_id} 在股票池 {universe} 上没有可验证的 "
+            "raw/clean 同代产物，请先运行 "
+            f"`python scripts/run_mvp.py --update --only-universe {universe}`。"
+        ) from exc
+    if clean.empty:
         raise FactorDataMissingError(
             f"因子 {factor_id} 在股票池 {universe} 上尚未计算 factor_values.parquet，"
             f"请先运行 `python scripts/run_mvp.py --update --only-universe {universe}`。"
         )
-    # 确保索引是 DatetimeIndex 并排序
-    df = df.sort_index()
-    if not isinstance(df.index, pd.DatetimeIndex):
-        df.index = pd.to_datetime(df.index)
-    return df
+    for values in (raw, clean):
+        if not isinstance(values.index, pd.DatetimeIndex):
+            values.index = pd.to_datetime(values.index)
+    return raw.sort_index(), clean.sort_index()
 
 
 # ---------------------------------------------------------------
@@ -100,9 +113,13 @@ def compose_factor(
              universe, len(components), {k: round(v, 4) for k, v in norm.items()})
 
     # 读入各因子值矩阵
-    per_factor: dict[str, pd.DataFrame] = {
-        c.factor_id: _load_factor_matrix(c.factor_id, universe)
+    bundles: dict[str, tuple[pd.DataFrame, pd.DataFrame]] = {
+        c.factor_id: _load_factor_bundle(c.factor_id, universe)
         for c in components
+    }
+    per_factor = {
+        factor_id: values[1]
+        for factor_id, values in bundles.items()
     }
 
     # 日期交集（避免长窗口因子前期 NaN 传染合成结果）
@@ -137,6 +154,9 @@ def compose_factor(
     # 对齐后 Zscore + 加权累加
     composite: pd.DataFrame | None = None
     warnings: list[str] = []
+    factor_clean: dict[str, pd.DataFrame] = {}
+    factor_inputs: dict[str, pd.DataFrame] = {}
+    factor_contributions: dict[str, pd.DataFrame] = {}
     for fid, df in per_factor.items():
         aligned = df.reindex(index=pd.date_range(common_start, common_end, freq="B"),
                              columns=tickers)
@@ -146,13 +166,28 @@ def compose_factor(
 
         w = norm[fid]
         weighted = z * w
-        composite = weighted if composite is None else composite.add(weighted, fill_value=0.0)
+        factor_clean[fid] = aligned
+        factor_inputs[fid] = z
+        factor_contributions[fid] = weighted
+        # Complete-case policy: every stock/date must have every configured
+        # factor. Treating one missing factor as a zero contribution would run
+        # a different effective strategy for different stocks.
+        composite = weighted if composite is None else composite + weighted
 
     assert composite is not None
     # 清理全 NaN 的行列（合成后仍可能有空洞）
     composite = composite.dropna(how="all")
     if composite.empty:
         raise FactorDataMissingError("合成因子矩阵为空（可能所有因子截面都无有效值）")
+
+    final_index = composite.index
+    final_columns = composite.columns
+    factor_raw: dict[str, pd.DataFrame] = {}
+    for fid, (raw, _) in bundles.items():
+        factor_raw[fid] = raw.reindex(
+            index=final_index,
+            columns=final_columns,
+        )
 
     return CompositionResult(
         composite=composite,
@@ -164,6 +199,19 @@ def compose_factor(
         ),
         tickers_count=composite.shape[1],
         warnings=warnings,
+        factor_raw=factor_raw,
+        factor_clean={
+            fid: values.reindex(index=final_index, columns=final_columns)
+            for fid, values in factor_clean.items()
+        },
+        factor_inputs={
+            fid: values.reindex(index=final_index, columns=final_columns)
+            for fid, values in factor_inputs.items()
+        },
+        factor_contributions={
+            fid: values.reindex(index=final_index, columns=final_columns)
+            for fid, values in factor_contributions.items()
+        },
     )
 
 

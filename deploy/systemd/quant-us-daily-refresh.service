@@ -1,5 +1,5 @@
 [Unit]
-Description=Refresh stock-only US momentum daily cache
+Description=Publish versioned US_LIQUID_5M daily market data
 Wants=network-online.target
 After=network-online.target
 

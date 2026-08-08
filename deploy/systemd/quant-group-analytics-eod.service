@@ -1,7 +1,7 @@
 [Unit]
 Description=Build isolated SP500 EOD group analytics artifacts
 Wants=network-online.target
-After=network-online.target quant-us-daily-refresh.service
+After=network-online.target quant-market-data.service
 StartLimitIntervalSec=4h
 StartLimitBurst=12
 

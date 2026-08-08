@@ -5,7 +5,7 @@
     const countEl = document.getElementById('selected-count');
     const sumEl = document.getElementById('weight-sum');
 
-    // 当前已选因子 -> {fid, name, category, weight}
+    // 当前已选因子 -> {fid, name, category, direction, weight}
     const state = {};
 
     function renderWeights() {
@@ -66,7 +66,8 @@
                     state[fid] = {
                         fid, name: cb.dataset.name,
                         category: cb.dataset.category,
-                        weight: 1.0,
+                        direction: Number(cb.dataset.direction) || 1,
+                        weight: Number(cb.dataset.direction) || 1,
                     };
                 }
             } else {
@@ -80,7 +81,11 @@
         const fids = Object.keys(state);
         if (fids.length === 0) return;
         const w = 1.0 / fids.length;
-        fids.forEach(fid => { state[fid].weight = Math.round(w * 10000) / 10000; });
+        fids.forEach(fid => {
+            state[fid].weight = Math.round(
+                w * state[fid].direction * 10000
+            ) / 10000;
+        });
         renderWeights();
     };
 

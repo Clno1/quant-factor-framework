@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Refresh active US securities and their daily momentum cache."""
+"""Publish the versioned US_LIQUID_5M universe after the US market close."""
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 import hashlib
 import os
@@ -17,9 +16,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 os.environ.setdefault("MPLCONFIGDIR", str(ROOT / "data" / "cache" / "matplotlib"))
 
-from src.breakouts.scanner import load_daily_frame, refresh_daily_frame  # noqa: E402
 from src.alerts.config import AlertSettings, load_local_env  # noqa: E402
+from src.config import CONFIG  # noqa: E402
+from src.data.foundation import MarketDataReader, MarketDataWriter  # noqa: E402
 from src.data.universe import get_universe  # noqa: E402
+from src.data.universe_ids import US_LIQUID_5M  # noqa: E402
 from src.utils.io import atomic_save_json  # noqa: E402
 
 
@@ -105,15 +106,6 @@ def _publish_universe_manifest(
     return manifest_path
 
 
-def _refresh_one(ticker: str, target: pd.Timestamp) -> tuple[str, str, str | None]:
-    cached = load_daily_frame(ticker)
-    if not cached.empty and pd.Timestamp(cached.index.max()).normalize() >= target:
-        return ticker, "current", str(pd.Timestamp(cached.index.max()).date())
-    frame, source = refresh_daily_frame(ticker, end=target)
-    latest = str(pd.Timestamp(frame.index.max()).date()) if not frame.empty else None
-    return ticker, source, latest
-
-
 def _select_refresh_tickers(
     universe: pd.DataFrame,
     *,
@@ -153,6 +145,94 @@ def _select_refresh_tickers(
         forced = [ticker for ticker in tickers if ticker in always_tickers]
         tickers = list(dict.fromkeys([*ordinary[: max(1, limit)], *forced]))
     return tickers
+
+
+def _foundation_setting(name: str, default):
+    try:
+        return getattr(CONFIG.data.foundation, name)
+    except (AttributeError, KeyError):
+        return default
+
+
+def _liquid_setting(name: str, default):
+    try:
+        return getattr(CONFIG.data.liquid_universe, name)
+    except (AttributeError, KeyError):
+        return default
+
+
+def _initial_start(target: pd.Timestamp) -> pd.Timestamp:
+    raw = str(_liquid_setting("initial_start", "180D")).strip().upper()
+    if raw.endswith("D") and raw[:-1].isdigit():
+        return target - pd.Timedelta(days=int(raw[:-1]))
+    return pd.Timestamp(raw).normalize()
+
+
+def _formal_universe_frame(
+    source: pd.DataFrame,
+    *,
+    tickers: list[str],
+    target: pd.Timestamp,
+) -> pd.DataFrame:
+    metadata = source.copy()
+    metadata["ticker"] = (
+        metadata["ticker"].astype(str).str.strip().str.upper()
+    )
+    metadata = (
+        metadata.loc[metadata["ticker"].isin(tickers)]
+        .drop_duplicates("ticker", keep="last")
+        .copy()
+    )
+    observed = set(metadata["ticker"])
+    missing = [ticker for ticker in tickers if ticker not in observed]
+    if missing:
+        metadata = pd.concat(
+            [
+                metadata,
+                pd.DataFrame(
+                    {
+                        "ticker": missing,
+                        "name": missing,
+                        "sector": None,
+                        "sub_industry": None,
+                        "asset_type": "BENCHMARK",
+                    }
+                ),
+            ],
+            ignore_index=True,
+        )
+    metadata["selection_date"] = target
+    metadata["selection_rule"] = "current_dollar_volume"
+    return metadata.reset_index(drop=True)
+
+
+def _versioned_membership(
+    reader: MarketDataReader,
+    *,
+    tickers: list[str],
+    start: pd.Timestamp,
+    target: pd.Timestamp,
+) -> pd.DataFrame:
+    try:
+        existing = reader.load_membership(US_LIQUID_5M)
+    except Exception:
+        existing = None
+    snapshots: list[pd.DataFrame] = []
+    if existing is not None and not existing.empty:
+        snapshots.append(existing.loc[existing["date"].lt(target)].copy())
+    else:
+        snapshots.append(
+            pd.DataFrame({"date": start, "ticker": tickers, "active": True})
+        )
+    snapshots.append(
+        pd.DataFrame({"date": target, "ticker": tickers, "active": True})
+    )
+    return (
+        pd.concat(snapshots, ignore_index=True)
+        .drop_duplicates(["date", "ticker"], keep="last")
+        .sort_values(["date", "ticker"])
+        .reset_index(drop=True)
+    )
 
 
 def main() -> None:
@@ -208,7 +288,15 @@ def main() -> None:
             previous_signature=previous_signature,
         )
         print(f"published_universe_manifest={manifest_path}")
-    liquidity_floor = max(0.0, args.min_current_dollar_volume_m) * 1_000_000
+    configured_floor = float(
+        _liquid_setting("min_current_dollar_volume_m", 5.0)
+    )
+    requested_floor = (
+        args.min_current_dollar_volume_m
+        if args.min_current_dollar_volume_m > 0
+        else configured_floor
+    )
+    liquidity_floor = max(0.0, requested_floor) * 1_000_000
     always_tickers = set(
         AlertSettings.load(
             load_env=False,
@@ -217,9 +305,12 @@ def main() -> None:
             include_environment_tickers=True,
         ).always_tickers
     )
+    stocks_only = args.stocks_only or (
+        str(_liquid_setting("asset_type", "STOCK")).strip().upper() == "STOCK"
+    )
     tickers = _select_refresh_tickers(
         universe,
-        stocks_only=args.stocks_only,
+        stocks_only=stocks_only,
         liquidity_floor=liquidity_floor,
         always_tickers=always_tickers,
         limit=args.limit,
@@ -230,46 +321,72 @@ def main() -> None:
         for symbol in value.split(",")
         if symbol.strip()
     ]
-    tickers = list(dict.fromkeys([*tickers, *market_symbols]))
+    support_symbols = [
+        str(symbol).strip().upper()
+        for symbol in _liquid_setting("always_tickers", ["QQQ", "SPY", "IWM"])
+        if str(symbol).strip()
+    ]
+    tickers = list(
+        dict.fromkeys([*tickers, *support_symbols, *market_symbols])
+    )
     print(
-        f"US_ACTIVE refresh: {len(tickers)} symbols, target={target.date()}, "
-        f"workers={args.workers}, assets={'stocks' if args.stocks_only else 'stocks+etfs'}, "
+        f"{US_LIQUID_5M} publish: {len(tickers)} symbols, target={target.date()}, "
+        f"workers={args.workers}, assets={'stocks' if stocks_only else 'stocks+etfs'}, "
         f"liquidity_floor=${liquidity_floor / 1_000_000:.1f}M, "
         f"always_tickers={len(always_tickers)}, "
         f"market_symbols={','.join(market_symbols)}"
     )
 
-    counts: dict[str, int] = {}
-    failures: list[str] = []
-    with ThreadPoolExecutor(max_workers=max(1, args.workers)) as executor:
-        futures = {executor.submit(_refresh_one, ticker, target): ticker for ticker in tickers}
-        for completed, future in enumerate(as_completed(futures), start=1):
-            ticker = futures[future]
-            try:
-                _, source, latest = future.result()
-                counts[source] = counts.get(source, 0) + 1
-                if latest is None:
-                    failures.append(ticker)
-            except Exception:  # noqa: BLE001
-                failures.append(ticker)
-                counts["error"] = counts.get("error", 0) + 1
-            if completed % 100 == 0 or completed == len(futures):
-                print(f"progress={completed}/{len(futures)} sources={counts} failures={len(failures)}")
-
-    print(f"done sources={counts} failures={len(failures)}")
-    if failures:
-        print("missing=" + ",".join(failures[:100]))
+    start = _initial_start(target)
+    reader = MarketDataReader()
+    membership = _versioned_membership(
+        reader,
+        tickers=tickers,
+        start=start,
+        target=target,
+    )
+    formal_universe = _formal_universe_frame(
+        universe,
+        tickers=tickers,
+        target=target,
+    )
+    writer = MarketDataWriter(catalog=reader.catalog)
+    result = writer.update_universe(
+        US_LIQUID_5M,
+        target_session=target,
+        force=args.force_universe,
+        workers=args.workers,
+        universe_frame=formal_universe,
+        initial_start=start,
+        membership_frame=membership,
+        membership_source=f"US_ACTIVE_liquidity_snapshot:{target.date()}",
+        min_latest_coverage=float(
+            _foundation_setting("min_latest_coverage", 0.98)
+        ),
+    )
+    version = result.version
+    if version is None:
+        raise RuntimeError(f"{US_LIQUID_5M} publication returned no version")
+    print(
+        f"published_version={version.version_id} status={result.status} "
+        f"rows={version.row_count} tickers={version.ticker_count} "
+        f"coverage={version.target_coverage:.2%} "
+        f"failed_fetches={len(result.failed_tickers)}"
+    )
+    if result.failed_tickers:
+        print("failed_tickers=" + ",".join(result.failed_tickers[:100]))
     if args.limit is None:
         from src.breakouts.scan_cache import clear_scan_cache
 
         removed = clear_scan_cache()
         print(f"cleared_scan_cache={removed}")
         if not args.skip_precompute:
-            from src.webapp.routes_v2 import _get_breakout_scan
+            from src.breakouts.application import get_breakout_scan
 
             print("precomputing default momentum scan ...")
-            scan = _get_breakout_scan(
+            scan = get_breakout_scan(
                 universe="US_ACTIVE",
+                enabled_universes=("US_ACTIVE",),
                 asof=None,
                 min_return_20d=20.0,
                 min_adr_20d=6.0,

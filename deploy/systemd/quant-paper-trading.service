@@ -1,0 +1,30 @@
+[Unit]
+Description=Run internal paper accounts from published factor research
+Wants=network-online.target
+After=network-online.target quant-factor-research.service quant-us-daily-refresh.service
+StartLimitIntervalSec=6h
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+User=quant
+Group=quant
+WorkingDirectory=/opt/quant
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/quant
+Environment=MPLCONFIGDIR=/opt/quant/data/cache/matplotlib
+EnvironmentFile=/etc/quant/paper-trading.env
+ExecStartPre=/opt/quant/.venv/bin/python -c "import exchange_calendars, sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
+ExecStartPre=/opt/quant/.venv/bin/python /opt/quant/scripts/prepare_paper_data.py
+ExecStart=/opt/quant/.venv/bin/python /opt/quant/scripts/run_paper.py
+TimeoutStartSec=5h
+Restart=on-failure
+RestartSec=20min
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

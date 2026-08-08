@@ -7,9 +7,8 @@
 经验方向：**负向**（高波动股票长期收益反而较差），direction = -1
 图片研报中：
     VOL_20D / VOL_60D 的 IC 均值显示为正 0.04+，IC_IR ≈ 0.10
-    （这是**收益方向**——高波动 → 高未来收益的反向；视样本期与市场环境而定）
-
-> 注意：方向用 0 让框架按 IC 自动判断更稳健，避免锁死。
+    方向是否在不同样本期稳定，交给因子置信评估报告检验；正式回测不能
+    使用完整测试期收益反向选择方向。
 """
 from __future__ import annotations
 
@@ -21,7 +20,7 @@ from src.factors.base import FactorBase, register
 class Volatility(FactorBase):
     """可参数化的滚动波动率因子。"""
 
-    direction: int = 0   # 由 IC 自动判定，避免方向偏见
+    direction: int = -1
     inputs = ("returns",)
 
     def __init__(self, window: int, name: str | None = None):

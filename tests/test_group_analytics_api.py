@@ -470,10 +470,17 @@ class GroupAnalyticsAPITests(unittest.TestCase):
             {"code": "UPSTREAM_UNAVAILABLE", "stage": "load_inputs", "summary": "supplier unavailable"},
         )
 
-        response = self.client.get(
-            "/api/group-analytics/heat",
-            params={"view_min_members": 0},
-        )
+        # Freshness ageing is covered independently above.  Isolate this test
+        # from wall-clock time so it only verifies failed-attempt fallback.
+        with mock.patch.object(
+            group_analytics_routes,
+            "_derive_eod_freshness",
+            side_effect=lambda _manifest, persisted, **_kwargs: persisted,
+        ):
+            response = self.client.get(
+                "/api/group-analytics/heat",
+                params={"view_min_members": 0},
+            )
 
         self.assertEqual(response.status_code, 200, response.text)
         payload = response.json()

@@ -4,7 +4,19 @@
     if (!tid) return;
 
     const elapsedEl = document.getElementById('running-elapsed');
+    const messageEl = document.getElementById('running-message');
+    const badgeEl = document.getElementById('status-badge');
     const startTime = Date.now();
+    const statusLabels = {
+        pending: '待执行',
+        waiting_for_data: '等待行情',
+        running: '运行中'
+    };
+    const statusMessages = {
+        pending: '回测已进入执行队列...',
+        waiting_for_data: '正在等待统一行情服务补齐并发布数据...',
+        running: '回测运行中...'
+    };
 
     function renderElapsed() {
         if (!elapsedEl) return;
@@ -18,6 +30,13 @@
             const r = await fetch('/api/backtests/' + tid + '/status', { cache: 'no-store' });
             if (!r.ok) return;
             const data = await r.json();
+            if (statusLabels[data.status]) {
+                if (badgeEl) {
+                    badgeEl.textContent = statusLabels[data.status];
+                    badgeEl.className = 'status-pill status-' + data.status;
+                }
+                if (messageEl) messageEl.textContent = statusMessages[data.status];
+            }
             if (data.status === 'success' || data.status === 'failed') {
                 clearInterval(pollTimer);
                 clearInterval(elapsedTimer);

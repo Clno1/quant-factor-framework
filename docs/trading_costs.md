@@ -1,6 +1,6 @@
 # 回测与模拟盘交易费用说明
 
-更新日期：2026-06-16
+更新日期：2026-07-30
 
 本文记录系统内回测和模拟盘使用的成交、滑点、手续费模型。相关代码集中在
 `src/execution/models.py`，默认参数在 `configs/default.yaml` 的
@@ -23,9 +23,9 @@
 | `portfolio_value` | `100000` | 回测中将权重换算成股数的名义组合规模 |
 | `fee_model` | `ibkr_us_pro_fixed` | 默认使用 IBKR Pro Fixed 风格美股费用 |
 | `slippage_model` | `volume_share` | 默认使用成交量占比滑点模型 |
-| `slippage_bps` | `5` | 缺少成交量或 `constant_bps` 时的单边滑点兜底 |
+| `slippage_bps` | `5` | `constant_bps` 模型的单边滑点；不用于绕过成交量校验 |
 | `commission_bps` | `2` | `simple_bps` 费用模型的单边手续费兜底 |
-| `min_open_coverage` | `0.95` | `open.parquet` 最低覆盖率校验 |
+| `min_open_coverage` | `0.95` | 正式行情版本中 `open` 的最低覆盖率校验 |
 
 ## 费用模型
 
@@ -65,15 +65,17 @@ PnL 中模拟。后续接入真实券商订单路由后，`exchange_fee_bps` 和
 
 | 参数 | 默认值 | 含义 |
 | --- | ---: | --- |
-| `fallback_bps` | `5` | 成交量缺失时的兜底滑点 |
+| `fallback_bps` | `5` | 底层直接调用的兼容值；标准回测/模拟盘缺成交量会失败 |
 | `spread_bps` | `2` | 基础价差/开盘冲击 |
-| `volume_limit` | `0.025` | 单根日线 bar 最高按 2.5% 成交量参与率计算冲击 |
+| `volume_limit` | `0.025` | 每个交易日最多成交过去 20 日 ADV 的 2.5% |
+| `adv_window` | `20` | 只使用决策时已经知道的过去 20 个有效成交量 |
 | `price_impact` | `0.10` | 价格冲击系数 |
 
 计算公式：
 
 ```text
-participation = abs(quantity) / bar_volume
+reference_volume = mean(valid volume over the trailing 20 sessions)
+participation = abs(quantity) / reference_volume
 capped = min(participation, volume_limit)
 slippage_bps = spread_bps + price_impact * capped^2 * 10000
 buy_fill_price = raw_price * (1 + slippage_bps / 10000)
@@ -88,9 +90,15 @@ slippage_cost = abs(quantity) * raw_price * slippage_bps / 10000
 
 1. `estimated_notional = abs(trade_weight) * portfolio_value`
 2. `estimated_quantity = estimated_notional / raw_price`
-3. 调用 `calculate_execution(...)` 得到成交价、滑点成本、费用明细。
-4. `cost = total_cost_cash / portfolio_value`
-5. 在调仓生效日从对应组的日收益中扣除 `cost`。
+3. 校验 `estimated_quantity <= trailing_ADV × volume_limit`；超过时拒绝回测，
+   不假装整单成交，也不在横截面回测中暗做部分成交。
+4. 调用 `calculate_execution(...)` 得到成交价、滑点成本、费用明细。
+5. `cost = total_cost_cash / portfolio_value`
+6. 在调仓生效日从对应组的日收益中扣除 `cost`。
+
+只有同时存在成交开盘价和下一次估值开盘价的调仓才进入回测绩效。区间尾部若只有
+`T+1 open`、没有 `T+2 open`，页面仍可显示 T 日信号，但不会生成一笔成本与收益期限不一致的
+截断交易。
 
 回测产物中会保存：
 
@@ -103,17 +111,28 @@ slippage_cost = abs(quantity) * raw_price * slippage_bps / 10000
 模拟盘与回测共用执行模型，但使用真实账户状态：
 
 1. 先处理等待成交的卖单，再处理买单，卖出现金可用于买入。
-2. 买单用 `max_buy_quantity_for_cash(...)` 计算在含滑点和费用后现金可承受的最大股数。
-3. 持仓成本价使用实际成交价 notional 更新。
-4. `fills.parquet` 保存成交价、费用模型、滑点模型、监管费用、清算费、总成本等字段。
+2. 每个交易日最多成交 `trailing_ADV × volume_limit`，超出的数量保持 pending，
+   下一交易日继续尝试，形成可审计的部分成交。
+3. 买单用 `max_buy_quantity_for_cash(...)` 计算在含滑点和费用后现金可承受的最大股数。
+4. 持仓成本价使用实际成交价 notional 更新。
+5. SQLite 中的 `fills` frame 是现金和持仓的事实账本；账户主记录和 `positions` frame 是
+   可由成交账本重建的投影。失败重跑会按 `fill_id` 和 `order_id` 防止重复成交或重复扣费。
+6. `fills` frame 保存成交价、费用模型、滑点模型、监管费用、清算费、总成本等字段；所有行和
+   frame 元数据都在 `outputs/quant_app.sqlite3` 中并带 checksum。
 
 ## 数据与校验要求
 
-- `next_open` 必须有 `open.parquet`，且覆盖率至少达到 `min_open_coverage`。
-- 当 `slippage_model=volume_share` 时，优先使用 `volume.parquet`；如果某票某日成交量缺失，
-  该笔交易使用 `fallback_bps`。
-- 股票池支持 point-in-time 成分股快照；开启
-  `backtest.require_point_in_time_universe=true` 后，没有 PIT 股票池会拒绝回测。
+- `next_open` 必须在绑定的正式行情版本中有完整 `open` 数据，且覆盖率至少达到
+  `min_open_coverage`；缺失时不得回退 `close`。
+- 当 `slippage_model=volume_share` 时必须有可用的历史成交量。成交量缺失时回测拒绝任务，
+  模拟盘拒绝本轮运行；不会把成交上限静默视为无限。
+- 所有成本、滑点、参与率和费率参数必须是有限非负数；`volume_limit`、费用占成交金额上限
+  和 open 覆盖率必须在 `[0, 1]` 内。负值、`NaN`、无限值和非布尔开关会在任务启动前被拒绝。
+- `SP500`、`US_LIQUID_5M` 是动态股票池，必须提供 point-in-time 完整成分快照。
+  严格校验包括：首个快照覆盖回测起点、历史活跃股票都存在于行情/因子矩阵。
+  `MAG7` 在配置中被明确声明为固定研究池，因此不要求 PIT 文件。
+- 模拟盘只接受目标因子日期等于指定 `as-of` 对应的 XNYS session；不传 `as-of`
+  时必须等于最近一个已经正式收盘的 XNYS session。数据陈旧会直接失败。
 
 ## 参数来源
 

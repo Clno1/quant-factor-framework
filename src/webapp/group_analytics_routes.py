@@ -88,7 +88,6 @@ _SENSITIVE_DIAGNOSTIC_KEYS = {
     "source_path",
     "input_path",
     "input_paths",
-    "raw_ohlcv_root",
     "token",
     "api_key",
     "secret",

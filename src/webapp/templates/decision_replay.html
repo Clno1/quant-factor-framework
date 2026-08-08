@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+
+{% block content %}
+<header class="replay-page-header">
+    <div>
+        <h1 class="page-title">
+            策略决策回放
+            <span class="badge">{{ source_kind_label }}</span>
+            <span class="badge green">{{ universe_label }}</span>
+        </h1>
+        <div class="page-sub">
+            <strong>{{ source_name }}</strong>
+            · 策略：{{ strategy.name or '—' }}
+            · <span class="mono">{{ source_id }}</span>
+        </div>
+    </div>
+    <div class="toolbar-row replay-header-actions">
+        <a class="btn" href="{{ back_href }}">返回详情</a>
+        {% if source_kind == 'backtest' and strategy.id %}
+        <a class="btn" href="/strategies/{{ strategy.id }}/ranking">当前策略预览</a>
+        {% endif %}
+    </div>
+</header>
+
+{% if not available %}
+<section class="replay-unavailable">
+    <div class="replay-unavailable-code mono">NO_DECISION_SNAPSHOT</div>
+    {% if source_kind == 'backtest' %}
+    <h2>这次旧回测没有决策快照</h2>
+    <p>任务结果仍可查看，但无法严格还原历史每日因子、排名与决策。需要使用同一策略重新运行回测。</p>
+    <a class="btn primary" href="{{ rerun_href }}">新建同策略回测</a>
+    {% else %}
+    <h2>模拟盘还没有决策记录</h2>
+    <p>账户完成第一次运行后，会开始按真实运行日期追加决策快照。</p>
+    <a class="btn primary" href="{{ rerun_href }}">返回并运行一次</a>
+    {% endif %}
+</section>
+{% else %}
+<div id="decision-replay-app"
+     data-source-kind="{{ source_kind }}"
+     data-source-id="{{ source_id }}">
+    <section class="replay-context-band">
+        <div>
+            <span>因子</span>
+            <strong class="mono">{{ manifest.factor_ids|join(' + ') }}</strong>
+        </div>
+        <div>
+            <span>成交</span>
+            <strong class="mono">{{ manifest.execution.timing or '—' }}</strong>
+        </div>
+        <div>
+            <span>费用</span>
+            <strong class="mono">{{ manifest.execution.fee_model or '—' }}</strong>
+        </div>
+        <div>
+            <span>滑点</span>
+            <strong class="mono">{{ manifest.execution.slippage_model or '—' }}</strong>
+        </div>
+        <div>
+            <span>快照</span>
+            <strong class="mono">v{{ manifest.schema_version }}</strong>
+        </div>
+    </section>
+
+    <section class="replay-date-toolbar" aria-label="回放日期">
+        <div class="replay-date-stepper">
+            <button class="icon-btn" id="replay-prev" type="button"
+                    title="上一个交易日" aria-label="上一个交易日">←</button>
+            <input class="form-input mono" id="replay-date" type="date">
+            <button class="icon-btn" id="replay-next" type="button"
+                    title="下一个交易日" aria-label="下一个交易日">→</button>
+        </div>
+        <div class="segmented-control" role="group" aria-label="日期范围">
+            <button class="segment is-active" data-mode="all" type="button">全部交易日</button>
+            <button class="segment" data-mode="decision" type="button">仅调仓日</button>
+        </div>
+        <div class="replay-date-status">
+            <span class="status-pill" id="replay-day-type">载入中</span>
+            <span class="mono" id="replay-execution-date"></span>
+        </div>
+    </section>
+
+    <section class="replay-timeline-band">
+        <div id="replay-timeline" class="replay-timeline"></div>
+    </section>
+
+    <section class="replay-summary-strip" id="replay-summary"></section>
+
+    <section class="replay-table-section">
+        <div class="panel-title replay-table-title">
+            <span>股票池决策截面</span>
+            <span class="mono" id="replay-visible-count">—</span>
+        </div>
+        <div class="replay-tools">
+            <input id="replay-search" class="form-input mono" type="search"
+                   placeholder="搜索 ticker" aria-label="搜索股票">
+            <select id="replay-eligibility" class="form-input" aria-label="资格筛选">
+                <option value="">全部股票</option>
+                <option value="eligible">仅合格股票</option>
+                <option value="excluded">仅排除股票</option>
+            </select>
+            <select id="replay-action" class="form-input" aria-label="决策筛选">
+                <option value="">全部决策</option>
+                <option value="买入">买入</option>
+                <option value="卖出">卖出</option>
+                <option value="调增">调增</option>
+                <option value="调减">调减</option>
+                <option value="持有">持有</option>
+                <option value="观察">观察</option>
+            </select>
+            <select id="replay-group" class="form-input" aria-label="信号分组筛选">
+                <option value="">全部信号组</option>
+                {% for group in range(1, (manifest.n_groups or 1) + 1) %}
+                <option value="{{ group }}">Q{{ group }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div class="table-wrap replay-table-wrap">
+            <table class="data compact replay-table">
+                <thead>
+                    <tr class="replay-column-groups">
+                        <th colspan="2">股票</th>
+                        <th colspan="3">T 日已知行情</th>
+                        <th colspan="5">策略信号</th>
+                        <th colspan="4">实际决策</th>
+                        <th colspan="3" class="post-event-head">后验结果</th>
+                    </tr>
+                    <tr>
+                        <th></th>
+                        <th>代码</th>
+                        <th class="num">收盘价</th>
+                        <th class="num">当日涨跌</th>
+                        <th class="num">成交量</th>
+                        <th class="num">综合分</th>
+                        <th class="num">排名</th>
+                        <th class="num">百分位</th>
+                        <th class="num">信号组</th>
+                        <th>资格</th>
+                        <th class="num">当前权重</th>
+                        <th class="num">目标权重</th>
+                        <th>动作</th>
+                        <th>成交状态</th>
+                        <th class="num post-event-cell">成交价</th>
+                        <th class="num post-event-cell">后续收益</th>
+                        <th class="num post-event-cell">收益贡献</th>
+                    </tr>
+                </thead>
+                <tbody id="replay-table-body"></tbody>
+            </table>
+        </div>
+        <div class="replay-loading" id="replay-loading">正在载入决策快照…</div>
+    </section>
+</div>
+
+<aside class="replay-drawer" id="replay-drawer" aria-hidden="true">
+    <div class="replay-drawer-head">
+        <div>
+            <span>股票决策轨迹</span>
+            <strong class="mono" id="replay-drawer-ticker"></strong>
+        </div>
+        <button class="icon-btn" id="replay-drawer-close" type="button"
+                title="关闭" aria-label="关闭">×</button>
+    </div>
+    <div class="replay-drawer-body">
+        <div id="replay-stock-price-chart" class="replay-stock-chart"></div>
+        <div id="replay-stock-signal-chart" class="replay-stock-chart"></div>
+        <div id="replay-stock-factor-table"></div>
+    </div>
+</aside>
+<div class="replay-drawer-backdrop" id="replay-drawer-backdrop"></div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if available %}
+<script src="/static/js/decision_replay.js?v={{ asset_ver }}"></script>
+{% endif %}
+{% endblock %}

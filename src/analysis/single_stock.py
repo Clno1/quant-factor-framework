@@ -22,6 +22,7 @@ from src.data.cleaner import load_wide_tables
 from src.data.fmp import get_historical_ohlcv
 from src.data.universe import get_universe
 from src.factors import FACTOR_REGISTRY, get_factor
+from src.utils.identifiers import canonical_ticker, safe_path_component
 from src.utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -43,7 +44,7 @@ def _build_single_stock_wide(ticker: str) -> dict[str, pd.DataFrame] | None:
     wide = {}
     for col in ["close", "adj_close", "volume"]:
         wide[col] = df[[col]].rename(columns={col: ticker})
-    wide["returns"] = wide["adj_close"].pct_change()
+    wide["returns"] = wide["adj_close"].pct_change(fill_method=None)
     return wide
 
 
@@ -61,7 +62,7 @@ def _try_load_from_pool(ticker: str, universe: str) -> dict[str, pd.DataFrame] |
         df = wide.get(k, pd.DataFrame())
         if ticker in df.columns:
             sub[k] = df[[ticker]]
-    sub["returns"] = sub["adj_close"].pct_change()
+    sub["returns"] = sub["adj_close"].pct_change(fill_method=None)
     return sub
 
 
@@ -95,7 +96,11 @@ def compute_single_stock_factors(
     reference_universe : 参考股票池（用于算分位排名）
     enabled_factors : 要算的因子列表（None 用配置里 enabled 全部）
     """
-    ticker = ticker.upper().strip()
+    ticker = canonical_ticker(ticker)
+    reference_universe = safe_path_component(
+        str(reference_universe).upper(),
+        label="reference_universe",
+    )
     enabled = enabled_factors or list(CONFIG.factors.enabled)
 
     # 1. 取数据：先尝试从参考池里直接取（最快）

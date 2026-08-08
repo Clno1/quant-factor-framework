@@ -7,7 +7,7 @@
 #   category      : 因子分类（动量类/波动类/反转类/换手类/...）
 #   formula       : LaTeX-ish 或伪代码形式的公式
 #   description   : 文字描述（用途、理论背景、注意事项）
-#   direction     : +1 / -1 / 0（0 表示由 IC 自动判定，仅作参考，真实方向仍从代码读）
+#   direction     : +1 / -1（正式回测方向必须事先确定，真实方向仍从代码读）
 #   risk_note     : （可选）使用时的注意事项
 #
 # 启动时 src.factors.library 会做一致性校验：
@@ -51,15 +51,15 @@ factors:
     display_name: 20日波动率
     category: 波动类
     formula: "std(r_{t-19..t})"
-    direction: 0
-    description: "20 个交易日日收益率的样本标准差，反映短期波动水平。经验上低波动股票长期收益更优（Low-Vol Anomaly），实际方向由 IC 判定。"
+    direction: -1
+    description: "20 个交易日日收益率的样本标准差，反映短期波动水平。按低波动异象的事前假设固定为负向，样本内稳定性由因子置信评估检验。"
 
   - id: VOL_60D
     display_name: 60日波动率
     category: 波动类
     formula: "std(r_{t-59..t})"
-    direction: 0
-    description: "60 个交易日日收益率的样本标准差，代表中期波动水平。比 20D 更平滑，受单日噪声影响小。"
+    direction: -1
+    description: "60 个交易日日收益率的样本标准差，代表中期波动水平。按低波动异象的事前假设固定为负向。"
 
   # ---------- 反转类 ----------
   - id: REVERSAL

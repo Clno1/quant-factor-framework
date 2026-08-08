@@ -9,16 +9,12 @@
   5. 计算换手率、累计净值、绩效指标
 
 成交模型（execution）：
-  - timing="close"（旧行为）：T 日打分 → T 日收盘价隐式成交 → 持有期日收益用 close-to-close。
-                              **不可实盘**：决策与成交同时刻。
   - timing="next_open"（推荐）：T 日打分 → T+1 开盘价成交 → 持有期日收益用 open-to-open。
                               **更接近实盘**：决策完到下一个交易日开盘才动手。
   - 调仓日按逐票交易权重估算成交数量，再由共享的 FeeModel / SlippageModel
     计算成交价、滑点成本、券商佣金和监管费用，最后汇总扣到组收益。
 
 防前视偏差：
-  - close 模式：调仓日 t 使用 factor_t，持仓从 t+1 开始生效（assign.shift(1)），
-                收益用 t+1..t' 的日收益。
   - next_open 模式：T 日因子 → T+1 开盘买入 → 区间 [T+1 open, T+2 open) 收益归当日。
 """
 from __future__ import annotations
@@ -32,7 +28,11 @@ import pandas as pd
 from src.backtest.metrics import performance_summary, relative_performance_summary
 from src.backtest.rebalance import get_rebalance_dates
 from src.config import CONFIG
-from src.execution import calculate_execution, resolve_execution_config
+from src.execution import (
+    calculate_execution,
+    max_volume_fill_quantity,
+    resolve_execution_config,
+)
 from src.utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -56,6 +56,14 @@ class QuintileResult:
     excess_returns: pd.Series = field(default_factory=pd.Series)
     config: dict = field(default_factory=dict)
     execution_cost_bps_per_year: dict = field(default_factory=dict)  # 各组年化摩擦成本 bps
+    gross_group_returns: pd.DataFrame = field(default_factory=pd.DataFrame)
+    cost_returns: pd.DataFrame = field(default_factory=pd.DataFrame)
+    effective_returns: pd.DataFrame = field(default_factory=pd.DataFrame)
+    held_assignment: pd.DataFrame = field(default_factory=pd.DataFrame)
+    tradable_mask: pd.DataFrame = field(default_factory=pd.DataFrame)
+    rebalance_dates: pd.DatetimeIndex = field(
+        default_factory=lambda: pd.DatetimeIndex([])
+    )
 
 
 def _compute_open_to_open_returns(open_df: pd.DataFrame) -> pd.DataFrame:
@@ -72,15 +80,17 @@ def _compute_open_to_open_returns(open_df: pd.DataFrame) -> pd.DataFrame:
     """
     if open_df is None or open_df.empty:
         return pd.DataFrame()
-    return open_df.pct_change()
+    return open_df.pct_change(fill_method=None)
 
 
 def _resolve_execution(execution: dict | None) -> dict:
     """规范化 execution 参数，缺失字段从 CONFIG 兜底。"""
     out = resolve_execution_config(execution or {})
-    if out["timing"] not in ("close", "next_open"):
+    if out["timing"] != "next_open":
         raise ValueError(
-            f"Unknown execution.timing={out['timing']!r}; expected 'close' or 'next_open'."
+            "Only execution.timing='next_open' is supported. Same-day close "
+            "fills are disabled because a close-derived signal cannot trade at "
+            "that already-observed close."
         )
     return out
 
@@ -97,6 +107,25 @@ def _safe_lookup(df: pd.DataFrame | None, dt: pd.Timestamp, ticker: str) -> floa
     except (TypeError, ValueError):
         return None
     return value if np.isfinite(value) and value > 0 else None
+
+
+def _safe_trailing_volume(
+    df: pd.DataFrame | None,
+    decision_date: pd.Timestamp,
+    ticker: str,
+    window: int,
+) -> float | None:
+    """Use only volume observed by the decision-date close."""
+    if df is None or df.empty or ticker not in df.columns:
+        return None
+    values = pd.to_numeric(
+        df.loc[df.index <= decision_date, ticker],
+        errors="coerce",
+    )
+    values = values[np.isfinite(values) & (values > 0)].tail(max(1, window))
+    if values.empty:
+        return None
+    return float(values.mean())
 
 
 def _build_execution_details(
@@ -120,6 +149,9 @@ def _build_execution_details(
     """
     group_names = [f"Q{g}" for g in range(1, n_groups + 1)]
     portfolio_value = float(execution.get("portfolio_value", 100000.0) or 100000.0)
+    adv_window = int(
+        ((execution.get("slippage") or {}).get("adv_window", 20)) or 20
+    )
 
     prev_weights: dict[str, pd.Series] = {
         g: pd.Series(dtype="float64") for g in group_names
@@ -130,7 +162,10 @@ def _build_execution_details(
 
     for decision_date in rebal_dates:
         effective_idx = return_index.searchsorted(decision_date, side="right")
-        if effective_idx >= len(return_index):
+        # Include a next-open trade only when its following valuation open is
+        # also inside the measured horizon. Otherwise costs and returns would
+        # be truncated on different dates.
+        if effective_idx + 1 >= len(return_index):
             continue
         effective_date = return_index[effective_idx]
 
@@ -173,42 +208,64 @@ def _build_execution_details(
                 trade_abs = abs(float(trade_weight))
                 side = "BUY" if trade_weight > 0 else "SELL"
                 raw_price = _safe_lookup(execution_price_df, pd.Timestamp(effective_date), str(ticker))
-                bar_volume = _safe_lookup(volume_df, pd.Timestamp(effective_date), str(ticker))
+                bar_volume = _safe_trailing_volume(
+                    volume_df,
+                    pd.Timestamp(decision_date),
+                    str(ticker),
+                    adv_window,
+                )
                 estimated_notional = trade_abs * portfolio_value
                 estimated_quantity = (
                     estimated_notional / raw_price
                     if raw_price is not None and raw_price > 0 else 0.0
                 )
-                if estimated_quantity > 0 and raw_price is not None:
-                    ex = calculate_execution(
-                        side=side,
-                        quantity=estimated_quantity,
-                        raw_price=raw_price,
-                        volume=bar_volume,
-                        execution=execution,
+                if raw_price is None or raw_price <= 0:
+                    raise ValueError(
+                        "Missing execution price for required backtest trade: "
+                        f"decision_date={pd.Timestamp(decision_date).date()} "
+                        f"execution_date={pd.Timestamp(effective_date).date()} "
+                        f"ticker={ticker} side={side}. Rebuild open/close data; "
+                        "the engine will not synthesize a fill."
                     )
-                    slippage_cost = float(ex["slippage_cost"])
-                    fee = float(ex["fee"])
-                    total_cost_cash = float(ex["total_cost"])
-                    cost_rate = total_cost_cash / portfolio_value if portfolio_value > 0 else 0.0
-                    fee_components = ex.get("fee_components") or {}
-                    fill_price = float(ex["fill_price"])
-                    slippage_bps_used = float(ex["slippage_bps"])
-                    participation_rate = float(ex["participation_rate"])
-                    impact_bps = float(ex["impact_bps"])
-                else:
-                    # Last-resort fallback keeps old behavior when price data is missing.
-                    fallback_bps = float(execution.get("slippage_bps", 0.0) or 0.0)
-                    fallback_fee_bps = float(execution.get("commission_bps", 0.0) or 0.0)
-                    slippage_cost = estimated_notional * fallback_bps / 10000.0
-                    fee = estimated_notional * fallback_fee_bps / 10000.0
-                    total_cost_cash = slippage_cost + fee
-                    cost_rate = total_cost_cash / portfolio_value if portfolio_value > 0 else 0.0
-                    fee_components = {"model": "fallback_simple_bps", "total_fee": fee}
-                    fill_price = np.nan
-                    slippage_bps_used = fallback_bps
-                    participation_rate = 0.0
-                    impact_bps = fallback_bps
+                if estimated_quantity <= 0:
+                    raise ValueError(
+                        "Backtest trade resolved to a non-positive quantity: "
+                        f"ticker={ticker} notional={estimated_notional}"
+                    )
+                max_quantity = max_volume_fill_quantity(
+                    requested_quantity=estimated_quantity,
+                    volume=bar_volume,
+                    execution=execution,
+                )
+                if estimated_quantity > max_quantity + 1e-9:
+                    raise ValueError(
+                        "Backtest order exceeds the configured ADV fill limit: "
+                        f"decision_date={pd.Timestamp(decision_date).date()} "
+                        f"ticker={ticker} requested={estimated_quantity:.4f} "
+                        f"allowed={max_quantity:.4f} adv={bar_volume}. "
+                        "Reduce portfolio_value, widen the universe, or use an "
+                        "event-driven partial-fill model."
+                    )
+                ex = calculate_execution(
+                    side=side,
+                    quantity=estimated_quantity,
+                    raw_price=raw_price,
+                    volume=bar_volume,
+                    execution=execution,
+                )
+                slippage_cost = float(ex["slippage_cost"])
+                fee = float(ex["fee"])
+                total_cost_cash = float(ex["total_cost"])
+                cost_rate = (
+                    total_cost_cash / portfolio_value
+                    if portfolio_value > 0
+                    else 0.0
+                )
+                fee_components = ex.get("fee_components") or {}
+                fill_price = float(ex["fill_price"])
+                slippage_bps_used = float(ex["slippage_bps"])
+                participation_rate = float(ex["participation_rate"])
+                impact_bps = float(ex["impact_bps"])
 
                 trade_row = {
                     "date": pd.Timestamp(effective_date).strftime("%Y-%m-%d"),
@@ -226,6 +283,7 @@ def _build_execution_details(
                     "raw_price": float(raw_price) if raw_price is not None else np.nan,
                     "fill_price": float(fill_price),
                     "bar_volume": float(bar_volume) if bar_volume is not None else np.nan,
+                    "volume_reference": f"ADV{adv_window}_asof_decision",
                     "participation_rate": participation_rate,
                     "slippage_model": execution.get("slippage_model"),
                     "slippage_bps": slippage_bps_used,
@@ -295,24 +353,50 @@ def _assign_groups_on_rebalance(
     )
 
     assign = pd.DataFrame(np.nan, index=dates, columns=factor_df.columns)
-    for dt in rebal_dates:
-        row = factor_df.loc[dt]
-        if tradable_mask is not None:
-            if dt not in tradable_mask.index:
+    rebalance_set = set(rebal_dates)
+    current = pd.Series(np.nan, index=factor_df.columns, dtype="float64")
+    portfolio_started = False
+    for dt in dates:
+        if dt in rebalance_set:
+            # A rebalance replaces the complete target snapshot. Ineligible
+            # names must become NaN instead of inheriting their previous group.
+            current = pd.Series(
+                np.nan,
+                index=factor_df.columns,
+                dtype="float64",
+            )
+            row = factor_df.loc[dt]
+            if tradable_mask is not None:
+                if dt not in tradable_mask.index:
+                    assign.loc[dt] = current
+                    continue
+                allowed = tradable_mask.loc[dt].reindex(row.index).fillna(False)
+                row = row.where(allowed)
+            row = row.dropna()
+            if len(row) < n_groups:
+                has_future_session = dates.get_loc(dt) < len(dates) - 1
+                if portfolio_started and has_future_session:
+                    raise ValueError(
+                        "Insufficient eligible securities on rebalance date: "
+                        f"date={pd.Timestamp(dt).date()} available={len(row)} "
+                        f"required={n_groups}"
+                    )
+                assign.loc[dt] = current
                 continue
-            row = row.where(tradable_mask.loc[dt].reindex(row.index).fillna(False))
-        row = row.dropna()
-        if len(row) < n_groups:
-            continue
-        try:
-            labels = pd.qcut(row.rank(method="first"),
-                             q=n_groups,
-                             labels=list(range(1, n_groups + 1)))
-        except ValueError:
-            continue
-        assign.loc[dt, labels.index] = labels.astype(int).values
-
-    assign = assign.ffill()
+            try:
+                labels = pd.qcut(
+                    row.rank(method="first"),
+                    q=n_groups,
+                    labels=list(range(1, n_groups + 1)),
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    "Unable to form complete quantile groups on rebalance "
+                    f"date={pd.Timestamp(dt).date()}"
+                ) from exc
+            current.loc[labels.index] = labels.astype(int).values
+            portfolio_started = True
+        assign.loc[dt] = current
     return assign
 
 
@@ -341,6 +425,58 @@ def _compute_turnover(
     return pd.DataFrame(rows).set_index("date")
 
 
+def _strict_equal_weight_group_returns(
+    returns: pd.DataFrame,
+    held_assignment: pd.DataFrame,
+    *,
+    n_groups: int,
+    timing: str,
+) -> pd.DataFrame:
+    """
+    Compute equal-weight returns without ex-post removal of missing holdings.
+
+    A partially missing held cross-section is an execution/data error, not an
+    instruction to renormalize the remaining stocks. The final next-open row is
+    allowed to be wholly unavailable because its holding interval ends outside
+    the requested backtest horizon.
+    """
+    group_cols = [f"Q{g}" for g in range(1, n_groups + 1)]
+    out = pd.DataFrame(np.nan, index=returns.index, columns=group_cols)
+    final_date = pd.Timestamp(returns.index[-1]) if len(returns.index) else None
+
+    for group_no, group_name in enumerate(group_cols, start=1):
+        selected = held_assignment.eq(group_no)
+        held_count = selected.sum(axis=1)
+        available_count = (selected & returns.notna()).sum(axis=1)
+        incomplete = (held_count > 0) & (available_count < held_count)
+        if timing == "next_open" and final_date is not None:
+            horizon_only = (
+                incomplete
+                & (available_count == 0)
+                & (pd.DatetimeIndex(returns.index) == final_date)
+            )
+            incomplete &= ~horizon_only
+        if incomplete.any():
+            bad_date = pd.Timestamp(incomplete.index[incomplete][0])
+            missing = selected.loc[bad_date] & returns.loc[bad_date].isna()
+            tickers = list(returns.columns[missing])[:10]
+            raise ValueError(
+                "Missing return for held securities; refusing ex-post "
+                "renormalization: "
+                f"date={bad_date.date()} group={group_name} "
+                f"tickers={tickers}"
+            )
+
+        weights = selected.astype("float64").div(
+            held_count.replace(0, np.nan),
+            axis=0,
+        )
+        values = (returns * weights).sum(axis=1, min_count=1)
+        complete = (held_count > 0) & (available_count == held_count)
+        out[group_name] = values.where(complete)
+    return out
+
+
 def _cfg_get(obj: object, key: str, default):
     try:
         return getattr(obj, key)
@@ -361,8 +497,8 @@ def build_tradable_mask(
     """
     Build a decision-date tradability mask.
 
-    Rules use only information known on the decision date, except optional
-    next-open availability, which prevents impossible fills in historical data.
+    Every rule uses only information known by the decision-date close. Future
+    execution-price availability is validated by the fill engine, after ranking.
     """
     cfg = _cfg_get(CONFIG.backtest, "tradability", {})
     enabled = bool(_cfg_get(cfg, "enabled", True))
@@ -401,12 +537,6 @@ def build_tradable_mask(
         valid_count = r.notna().rolling(lookback, min_periods=1).sum()
         mask &= valid_count >= min_obs
 
-    if timing == "next_open" and open_df is not None and not open_df.empty:
-        require_next = bool(_cfg_get(cfg, "require_next_open", True))
-        o = open_df.reindex(index=idx, columns=cols)
-        if require_next:
-            mask &= o.shift(-1).notna() & (o.shift(-1) > 0)
-
     return mask.fillna(False)
 
 
@@ -415,7 +545,7 @@ def quintile_backtest(
     returns_df: pd.DataFrame,
     n_groups: Optional[int] = None,
     rebalance_days: Optional[int] = None,
-    factor_direction: int = 0,
+    factor_direction: int = +1,
     *,
     open_df: pd.DataFrame | None = None,
     price_df: pd.DataFrame | None = None,
@@ -448,34 +578,24 @@ def quintile_backtest(
         or getattr(CONFIG.backtest, "rebalance_mode", "every_n_days")
     ).lower()
     exec_cfg = _resolve_execution(execution)
+    if factor_direction not in {-1, 1}:
+        raise ValueError(
+            "factor_direction must be fixed ex ante as +1 or -1; choosing "
+            "direction from the completed backtest would introduce look-ahead bias."
+        )
 
     # 选择持有期收益矩阵
-    if exec_cfg["timing"] == "next_open":
-        if open_df is None or open_df.empty:
-            raise ValueError(
-                "execution.timing=next_open requires open_df/open.parquet. "
-                "Rebuild the universe with `python scripts/run_mvp.py --update --only-universe <UNIVERSE>`."
-            )
-        else:
-            # open-to-open：r_t 表示「t 日开盘 → t+1 日开盘」的收益。
-            # 为了让外部统一按"调仓日 d 的持仓在 d+1 开始计收益"的逻辑工作，
-            # 我们仍把这个收益登记在 t+1（pct_change 的天然行为）：
-            #   open[t+1]/open[t]-1 → 登记在 t+1
-            # 这样 assign_held = assign.shift(1) 时：
-            #   d 日决策 → d+1 日 assign_held=Q_g → d+1 日的 open-to-open 收益
-            #     = open[d+1]/open[d]-1 ≈ "d 日收盘后到 d+1 日开盘" 部分 + "d+1 日 open 到 d+2 日 open"——
-            #   实际上 pct_change 给的是 (open[t]-open[t-1])/open[t-1]，登记在 t。
-            #   即 r_d+1 = open[d+1]/open[d] - 1，仍归属"持有 [d open, d+1 open] 区间"，
-            #   而我们要的是"d+1 开盘买入后持有"，也就是 r_d+2 = open[d+2]/open[d+1] - 1。
-            #   所以需要 shift(-1) 让收益对齐到"持有起始日"——即把 t+1 行的收益挪到 t 行，
-            #   然后 assign_held=assign.shift(1)，d+1 行使用 d 决策的持仓。
-            # 简单起见：对 open_df.pct_change() 做完后 shift(-1) 就把"r_d+1"挪到了 d 行，
-            # 再用 assign_held = assign.shift(1) 实现 "d 决策→d+1 持仓→使用 d+1 开盘到 d+2 开盘的收益"。
-            #   ↳ 在 d+1 行：assign_held=Q（d 决策），收益=shift 后的 r_d+2=open[d+2]/open[d+1]-1。✓
-            o2o_raw = _compute_open_to_open_returns(open_df)
-            held_returns = o2o_raw.shift(-1)
-    else:
-        held_returns = returns_df
+    if open_df is None or open_df.empty:
+        raise ValueError(
+            "execution.timing=next_open requires open prices from a published "
+            "market-data version. Run `python scripts/run_data_pipeline.py update "
+            "--universe <UNIVERSE>` first."
+        )
+    # At row d+1, assign.shift(1) contains the decision made at d. Moving the
+    # open[d+2]/open[d+1] return to row d+1 attributes the return to the
+    # holding interval that starts at the executable d+1 open.
+    o2o_raw = _compute_open_to_open_returns(open_df)
+    held_returns = o2o_raw.shift(-1)
 
     # 对齐索引与列
     common_dates = factor_df.index.intersection(held_returns.index)
@@ -519,13 +639,14 @@ def quintile_backtest(
         step_days=rebalance_days,
     )
 
-    # 各组日收益（等权，毛收益）
+    # 各组日收益（严格等权，不因缺失收益事后重分配权重）
     group_cols = [f"Q{g}" for g in range(1, n_groups + 1)]
-    gross_ret = pd.DataFrame(np.nan, index=common_dates, columns=group_cols)
-    for g in range(1, n_groups + 1):
-        mask = (assign_held == g)
-        r_masked = r.where(mask)
-        gross_ret[f"Q{g}"] = r_masked.mean(axis=1)
+    gross_ret = _strict_equal_weight_group_returns(
+        r,
+        assign_held,
+        n_groups=n_groups,
+        timing=exec_cfg["timing"],
+    )
     gross_ret = gross_ret.dropna(how="all")
 
     # 摩擦扣减：逐票目标权重变化 × 单边成本，再汇总到组级收益。
@@ -557,10 +678,7 @@ def quintile_backtest(
     # Long-Short
     top, bot = f"Q{n_groups}", "Q1"
     raw_ls = group_ret[top] - group_ret[bot]
-    if factor_direction == 0:
-        direction = +1 if raw_ls.mean() >= 0 else -1
-    else:
-        direction = int(np.sign(factor_direction)) or 1
+    direction = int(factor_direction)
     ls = raw_ls * direction
     ls.name = "LongShort"
     top_returns = group_ret[top].rename(top)
@@ -631,6 +749,12 @@ def quintile_backtest(
         benchmark_nav=benchmark_nav,
         excess_returns=excess.dropna(),
         execution_cost_bps_per_year=cost_bps_per_year,
+        gross_group_returns=gross_ret,
+        cost_returns=cost_df,
+        effective_returns=r,
+        held_assignment=assign_held,
+        tradable_mask=tradable_mask,
+        rebalance_dates=rebal_dates,
     )
 
 

@@ -4,8 +4,6 @@ Point-in-time universe membership support.
 Expected membership files:
   data/pit_universes/<UNIVERSE>.parquet
   data/pit_universes/<UNIVERSE>.csv
-  data/processed/<UNIVERSE>/membership.parquet
-  data/processed/<UNIVERSE>/membership.csv
 
 Required columns: date, ticker
 Optional active column: active / in_universe / is_member. Missing means active=True.
@@ -14,6 +12,7 @@ snapshot on or before that date is used.
 """
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any
@@ -21,6 +20,14 @@ from typing import Any
 import pandas as pd
 
 from src.config import CONFIG, PROJECT_ROOT
+from src.data.universe_ids import LEGACY_US_ACTIVE, US_LIQUID_5M
+from src.utils.identifiers import (
+    InvalidResourceId,
+    canonical_ticker,
+    safe_path_component,
+)
+
+_MEMBERSHIP_FROM_CONFIG = object()
 
 
 @dataclass
@@ -32,6 +39,7 @@ class PITDiagnostics:
     first_snapshot: str | None
     last_snapshot: str | None
     warning: str | None = None
+    source_sha256: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -46,14 +54,56 @@ def _membership_dir() -> Path:
     return p if p.is_absolute() else PROJECT_ROOT / p
 
 
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 def _candidate_paths(universe: str) -> list[Path]:
-    u = universe.upper()
+    u = safe_path_component(
+        str(universe).upper(),
+        label="universe",
+    )
     return [
         _membership_dir() / f"{u}.parquet",
         _membership_dir() / f"{u}.csv",
-        PROJECT_ROOT / "data" / "processed" / u / "membership.parquet",
-        PROJECT_ROOT / "data" / "processed" / u / "membership.csv",
     ]
+
+
+def point_in_time_required(
+    universe: str,
+    *,
+    strict: bool | None = None,
+) -> bool:
+    """Return whether a named universe must have historical membership."""
+    name = str(universe).strip().upper()
+    if name == LEGACY_US_ACTIVE:
+        name = US_LIQUID_5M
+    try:
+        settings = CONFIG.universe.point_in_time
+        static_universes = {
+            str(value).strip().upper()
+            for value in getattr(settings, "static_universes", [])
+        }
+        required_universes = {
+            str(value).strip().upper()
+            for value in getattr(settings, "required_universes", [])
+        }
+    except Exception:
+        static_universes = {"MAG7"}
+        required_universes = {"SP500", "US_LIQUID_5M"}
+    if name.startswith("WATCHLIST:") or name in static_universes:
+        return False
+    if name in required_universes:
+        return True
+    # With an explicit allowlist, unknown/custom universes are treated as
+    # intentional static sets. Without one, strict retains its old meaning.
+    if required_universes:
+        return False
+    return bool(strict)
 
 
 def find_membership_file(universe: str) -> Path | None:
@@ -96,17 +146,42 @@ def load_point_in_time_membership(universe: str) -> tuple[pd.DataFrame | None, P
             active_col = c
             break
     out = df[["date", "ticker"] + ([active_col] if active_col else [])].copy()
-    out["date"] = pd.to_datetime(out["date"])
-    out["ticker"] = out["ticker"].astype(str).str.strip().str.upper()
+    out["date"] = pd.to_datetime(out["date"], errors="coerce", utc=True)
+    if out["date"].isna().any() or out["ticker"].isna().any():
+        raise ValueError(
+            f"PIT membership file {path} contains empty/invalid date or ticker"
+        )
+    out["date"] = out["date"].dt.tz_convert(None).dt.normalize()
+    try:
+        out["ticker"] = out["ticker"].map(canonical_ticker)
+    except InvalidResourceId as exc:
+        raise ValueError(
+            f"PIT membership file {path} contains an invalid ticker"
+        ) from exc
     if active_col:
         out["active"] = _parse_bool_series(out[active_col])
-        out = out.drop(columns=[active_col])
+        if active_col != "active":
+            out = out.drop(columns=[active_col])
     else:
         out["active"] = True
-    out = out.dropna(subset=["date", "ticker"]).drop_duplicates(
-        subset=["date", "ticker"],
-        keep="last",
-    )
+    duplicates = out.duplicated(subset=["date", "ticker"], keep=False)
+    if duplicates.any():
+        conflicting = (
+            out.loc[duplicates]
+            .groupby(["date", "ticker"])["active"]
+            .nunique()
+            .gt(1)
+        )
+        if conflicting.any():
+            sample = [
+                f"{pd.Timestamp(date).date()}:{ticker}"
+                for date, ticker in conflicting[conflicting].index[:10]
+            ]
+            raise ValueError(
+                f"PIT membership file {path} has conflicting duplicate rows: "
+                f"{sample}"
+            )
+        out = out.drop_duplicates(subset=["date", "ticker"], keep="last")
     return out.sort_values(["date", "ticker"]).reset_index(drop=True), path
 
 
@@ -116,11 +191,52 @@ def build_membership_mask(
     universe: str,
     *,
     required: bool = False,
+    membership_override: pd.DataFrame | None | object = _MEMBERSHIP_FROM_CONFIG,
+    membership_source: str | None = None,
+    membership_source_sha256: str | None = None,
 ) -> tuple[pd.DataFrame | None, PITDiagnostics]:
-    membership, path = load_point_in_time_membership(universe)
-    if membership is None or path is None:
+    if membership_override is _MEMBERSHIP_FROM_CONFIG:
+        membership, path = load_point_in_time_membership(universe)
+        source = str(path) if path is not None else None
+        source_sha256 = (
+            _file_sha256(path)
+            if path is not None and path.exists()
+            else None
+        )
+    else:
+        membership = (
+            membership_override.copy()
+            if isinstance(membership_override, pd.DataFrame)
+            else None
+        )
+        source = membership_source
+        source_sha256 = membership_source_sha256
+        if membership is not None:
+            missing = {"date", "ticker", "active"} - set(membership.columns)
+            if missing:
+                raise ValueError(
+                    f"PIT membership override is missing columns: {sorted(missing)}"
+                )
+            membership["date"] = pd.to_datetime(
+                membership["date"], errors="coerce"
+            ).dt.normalize()
+            membership["ticker"] = membership["ticker"].map(canonical_ticker)
+            membership["active"] = _parse_bool_series(membership["active"])
+            if membership[["date", "ticker"]].isna().any().any():
+                raise ValueError(
+                    "PIT membership override contains invalid date or ticker"
+                )
+            membership = (
+                membership.drop_duplicates(
+                    ["date", "ticker"], keep="last"
+                )
+                .sort_values(["date", "ticker"])
+                .reset_index(drop=True)
+            )
+
+    if membership is None:
         warning = (
-            f"No point-in-time membership file found for {universe}; "
+            f"No point-in-time membership snapshot found for {universe}; "
             "using current/static universe constituents."
         )
         if required:
@@ -128,7 +244,7 @@ def build_membership_mask(
         return None, PITDiagnostics(
             applied=False,
             required=required,
-            source=None,
+            source=source,
             snapshots=0,
             first_snapshot=None,
             last_snapshot=None,
@@ -136,19 +252,67 @@ def build_membership_mask(
         )
 
     cols = pd.Index([str(c).upper() for c in columns], name="ticker")
+    if cols.has_duplicates:
+        duplicates = sorted(set(cols[cols.duplicated()].tolist()))
+        raise ValueError(
+            f"Factor/price matrix has duplicate tickers after normalization: "
+            f"{duplicates[:10]}"
+        )
+    matrix_index = pd.DatetimeIndex(pd.to_datetime(index)).sort_values()
+    if matrix_index.empty:
+        raise ValueError("Cannot build PIT mask for an empty date index")
+    if matrix_index.has_duplicates:
+        raise ValueError("Cannot build PIT mask for duplicate dates")
     snapshots = pd.DatetimeIndex(sorted(membership["date"].dropna().unique()))
     if snapshots.empty:
-        raise ValueError(f"PIT membership file {path} contains no snapshots")
+        raise ValueError(
+            f"PIT membership {source or universe} contains no snapshots"
+        )
+    first_date = pd.Timestamp(matrix_index.min())
+    last_date = pd.Timestamp(matrix_index.max())
+    baseline_position = snapshots.searchsorted(first_date, side="right") - 1
+    if baseline_position < 0:
+        raise ValueError(
+            f"PIT membership {source or universe} starts at "
+            f"{pd.Timestamp(snapshots.min()).date()}, after backtest start "
+            f"{first_date.date()}; historical membership is unknown"
+        )
 
     active_by_date: dict[pd.Timestamp, set[str]] = {}
     for dt, sub in membership.groupby("date"):
         active_by_date[pd.Timestamp(dt)] = set(sub.loc[sub["active"], "ticker"])
 
-    mask = pd.DataFrame(False, index=pd.DatetimeIndex(index), columns=columns)
+    relevant_snapshots = snapshots[
+        (snapshots >= snapshots[baseline_position])
+        & (snapshots <= last_date)
+    ]
+    active_tickers: set[str] = set()
+    empty_snapshots: list[str] = []
+    for snapshot_date in relevant_snapshots:
+        active = active_by_date.get(pd.Timestamp(snapshot_date), set())
+        if not active:
+            empty_snapshots.append(
+                pd.Timestamp(snapshot_date).strftime("%Y-%m-%d")
+            )
+        active_tickers.update(active)
+    if empty_snapshots:
+        raise ValueError(
+            f"PIT membership {source or universe} has empty complete snapshots: "
+            f"{empty_snapshots[:10]}"
+        )
+    matrix_tickers = set(cols)
+    missing_tickers = sorted(active_tickers - matrix_tickers)
+    if missing_tickers:
+        raise ValueError(
+            f"PIT membership for {universe} contains "
+            f"{len(missing_tickers)} historically active tickers absent from "
+            "the factor/price matrix. Rebuild data for the union of historical "
+            f"constituents. Sample: {missing_tickers[:20]}"
+        )
+
+    mask = pd.DataFrame(False, index=matrix_index, columns=columns)
     for dt in mask.index:
         pos = snapshots.searchsorted(pd.Timestamp(dt), side="right") - 1
-        if pos < 0:
-            continue
         active = active_by_date.get(pd.Timestamp(snapshots[pos]), set())
         active_cols = [c for c, upper in zip(columns, cols) if upper in active]
         if active_cols:
@@ -157,10 +321,11 @@ def build_membership_mask(
     return mask, PITDiagnostics(
         applied=True,
         required=required,
-        source=str(path),
+        source=source,
         snapshots=len(snapshots),
         first_snapshot=pd.Timestamp(snapshots.min()).strftime("%Y-%m-%d"),
         last_snapshot=pd.Timestamp(snapshots.max()).strftime("%Y-%m-%d"),
+        source_sha256=source_sha256,
     )
 
 
@@ -190,6 +355,7 @@ def apply_point_in_time_mask(
 
 __all__ = [
     "PITDiagnostics",
+    "point_in_time_required",
     "find_membership_file",
     "load_point_in_time_membership",
     "build_membership_mask",

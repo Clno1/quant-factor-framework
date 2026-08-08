@@ -7,6 +7,7 @@ lxml>=4.9.0            # Wikipedia 表格解析
 pandas>=2.0.0
 numpy>=1.24.0
 pyarrow>=14.0.0        # Parquet 读写
+duckdb>=1.4.0,<2.0     # 版本目录、质量门禁与只读研究查询
 pyyaml>=6.0            # 配置加载
 
 # ========== 科学计算 ==========
@@ -27,3 +28,4 @@ python-multipart>=0.0.9
 # ========== 工具 ==========
 tqdm>=4.66.0           # 进度条
 exchange-calendars==4.13.2  # XNYS 交易日、提前收盘与 DST（group/premarket/refresh，固定版本）
+websockets>=12.0       # FMP WebSocket entitlement 探针

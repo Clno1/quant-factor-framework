@@ -1,0 +1,32 @@
+[Unit]
+Description=Quant intraday momentum monitor (shadow, no Discord)
+Wants=network-online.target
+After=network-online.target quant-us-daily-refresh.service
+StartLimitIntervalSec=30min
+StartLimitBurst=4
+
+[Service]
+Type=simple
+User=quant
+Group=quant
+WorkingDirectory=/opt/quant
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/quant
+EnvironmentFile=/etc/quant/intraday-momentum-monitor.env
+ExecStartPre=/opt/quant/.venv/bin/python -c "import exchange_calendars, sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
+ExecStart=/opt/quant/.venv/bin/python /opt/quant/scripts/run_intraday_momentum_monitor.py --env-file /etc/quant/intraday-momentum-monitor.env --shadow
+Restart=on-failure
+RestartSec=2min
+TimeoutStartSec=7h
+TimeoutStopSec=30s
+MemoryMax=768M
+CPUQuota=100%
+Nice=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

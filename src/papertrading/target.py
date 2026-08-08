@@ -8,8 +8,13 @@ import pandas as pd
 
 from src.backtest.adhoc import adhoc_compose
 from src.backtest.composer import compose_factor
+from src.backtest.quintile import build_tradable_mask
 from src.config import CONFIG
-from src.data import load_wide_tables
+from src.data.access import load_published_bundle
+from src.data.pit import build_membership_mask, point_in_time_required
+from src.data.universe_ids import watchlist_snapshot_data_universe
+from src.factors import get_factor
+from src.factors.publication import validate_factor_research_publication
 from src.strategies.definition import StrategyDefinition
 from src.utils.date_utils import resolve_date_range
 
@@ -27,6 +32,16 @@ class TargetResult:
     tickers_used: list[str] = field(default_factory=list)
     tickers_missing: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    market_returns: pd.DataFrame = field(default_factory=pd.DataFrame)
+    composite: pd.DataFrame = field(default_factory=pd.DataFrame)
+    membership_mask: pd.DataFrame = field(default_factory=pd.DataFrame)
+    tradable_mask: pd.DataFrame = field(default_factory=pd.DataFrame)
+    factor_raw: dict[str, pd.DataFrame] = field(default_factory=dict)
+    factor_clean: dict[str, pd.DataFrame] = field(default_factory=dict)
+    factor_inputs: dict[str, pd.DataFrame] = field(default_factory=dict)
+    factor_contributions: dict[str, pd.DataFrame] = field(default_factory=dict)
+    pit_diagnostics: dict[str, Any] = field(default_factory=dict)
+    data_contract: dict[str, Any] = field(default_factory=dict)
 
 
 def _watchlist_tickers(snapshot: dict[str, Any] | None) -> list[str]:
@@ -127,26 +142,75 @@ def generate_target_weights(
     warnings: list[str] = []
     tickers_used: list[str] = []
     tickers_missing: list[str] = []
+    factor_ids = [component.factor_id for component in strategy.components]
     if universe.startswith("watchlist:"):
         tickers = _watchlist_tickers(watchlist_snapshot)
         if not tickers:
             raise ValueError("模拟盘 watchlist 快照为空，无法生成目标仓位")
+        snapshot = watchlist_snapshot or {}
+        data_universe = watchlist_snapshot_data_universe(snapshot)
+        bundle = load_published_bundle(
+            requested_universe=universe,
+            data_universe=data_universe,
+            tickers=tickers,
+            start=start_iso,
+            end=end_iso,
+            require_open=True,
+            exact_universe=True,
+            factor_ids=factor_ids,
+        )
         adhoc = adhoc_compose(
             components=strategy.components,
             tickers=tickers,
             start=start_iso,
             end=end_iso,
+            wide=bundle.wide,
         )
         composite = adhoc.composite
         prices = adhoc.prices
         open_prices = adhoc.open_prices
         volumes = adhoc.volumes
+        market_returns = adhoc.returns
         normalized = adhoc.normalized_weights
+        factor_raw = adhoc.factor_raw
+        factor_clean = adhoc.factor_clean
+        factor_inputs = adhoc.factor_inputs
+        factor_contributions = adhoc.factor_contributions
         tickers_used = adhoc.tickers_used
         tickers_missing = adhoc.tickers_missing
         warnings.extend(adhoc.warnings)
+        membership_mask, pit_result = build_membership_mask(
+            composite.index,
+            composite.columns,
+            universe=data_universe,
+            required=True,
+            membership_override=bundle.membership,
+            membership_source=f"duckdb:{bundle.version.version_id}:membership",
+            membership_source_sha256=(
+                bundle.version.membership_checksum_sha256
+            ),
+        )
+        if membership_mask is None:
+            raise ValueError(
+                f"Published custom universe {data_universe} has no membership"
+            )
+        pit_diagnostics = pit_result.to_dict()
+        pit_diagnostics["warning"] = (
+            "This account uses one frozen custom watchlist for all dates; "
+            "it is a fixed-basket universe, not a reconstructed index."
+        )
+        warnings.append(pit_diagnostics["warning"])
     else:
         universe = universe.upper()
+        bundle = load_published_bundle(
+            requested_universe=universe,
+            data_universe=universe,
+            start=start_iso,
+            end=end_iso,
+            require_open=True,
+            factor_ids=factor_ids,
+            require_factor_publication=True,
+        )
         comp = compose_factor(
             components=strategy.components,
             universe=universe,
@@ -155,7 +219,7 @@ def generate_target_weights(
         )
         composite = comp.composite
         normalized = comp.normalized_weights
-        wide = load_wide_tables(universe=universe, require_open=False)
+        wide = bundle.wide
         prices = wide.get("adj_close")
         if prices is None or prices.empty:
             prices = wide.get("close")
@@ -167,9 +231,70 @@ def generate_target_weights(
         volumes = wide.get("volume")
         if volumes is None:
             volumes = pd.DataFrame()
+        market_returns = wide.get("returns")
+        if market_returns is None:
+            market_returns = prices.pct_change(fill_method=None)
+        factor_raw = dict(comp.factor_raw)
+        factor_clean = comp.factor_clean
+        factor_inputs = comp.factor_inputs
+        factor_contributions = comp.factor_contributions
+        for component in strategy.components:
+            factor_id = component.factor_id
+            if factor_id not in factor_raw:
+                factor_raw[factor_id] = get_factor(factor_id).compute_from_wide(
+                    wide
+                ).reindex(index=composite.index, columns=composite.columns)
+        pit_required = point_in_time_required(
+            universe,
+            strict=bool(
+                getattr(
+                    CONFIG.backtest,
+                    "require_point_in_time_universe",
+                    False,
+                )
+            ),
+        )
+        membership_mask, pit_result = build_membership_mask(
+            composite.index,
+            composite.columns,
+            universe,
+            required=pit_required,
+            membership_override=bundle.membership,
+            membership_source=f"duckdb:{bundle.version.version_id}:membership",
+            membership_source_sha256=(
+                bundle.version.membership_checksum_sha256
+            ),
+        )
+        pit_diagnostics = pit_result.to_dict()
+        if membership_mask is None:
+            membership_mask = pd.DataFrame(
+                True,
+                index=composite.index,
+                columns=composite.columns,
+            )
+        if pit_result.warning:
+            warnings.append(pit_result.warning)
         tickers_used = list(composite.columns)
+        validate_factor_research_publication(
+            universe,
+            version=bundle.version,
+            factor_ids=factor_ids,
+            publication_id=bundle.contract.factor_publication_id,
+        )
 
-    decision_ts, row = _latest_row_at_or_before(composite, asof)
+    tradable_mask = build_tradable_mask(
+        index=composite.index,
+        columns=composite.columns,
+        returns_df=market_returns,
+        price_df=prices,
+        open_df=open_prices,
+        volume_df=volumes,
+        # At decision time tomorrow's open is unknown. Orders may remain pending
+        # until it arrives, so future open availability must not affect ranking.
+        timing="close",
+    )
+    eligible_composite = composite.where(membership_mask & tradable_mask)
+    decision_ts, row = _latest_row_at_or_before(eligible_composite, asof)
     targets, effective, top = _build_targets(
         row,
         prices=prices,
@@ -190,6 +315,16 @@ def generate_target_weights(
         tickers_used=tickers_used,
         tickers_missing=tickers_missing,
         warnings=warnings,
+        market_returns=market_returns,
+        composite=composite,
+        membership_mask=membership_mask,
+        tradable_mask=tradable_mask,
+        factor_raw=factor_raw,
+        factor_clean=factor_clean,
+        factor_inputs=factor_inputs,
+        factor_contributions=factor_contributions,
+        pit_diagnostics=pit_diagnostics,
+        data_contract=bundle.contract.to_dict(),
     )
 
 

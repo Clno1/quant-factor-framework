@@ -29,6 +29,11 @@ from fastapi.templating import Jinja2Templates
 
 from src.analysis import compute_single_stock_factors
 from src.config import CONFIG
+from src.utils.identifiers import (
+    InvalidResourceId,
+    canonical_ticker,
+    safe_path_component,
+)
 from src.visualization import (
     fig_to_json,
     plot_drawdown_plotly,
@@ -234,9 +239,18 @@ def _confidence_detail(conf: dict | None, checks_df: pd.DataFrame | None) -> dic
 def _resolve_universe(requested: str | None) -> str:
     """规范化 universe 参数：未指定则取配置默认。"""
     if requested:
-        return requested.upper()
+        try:
+            return safe_path_component(
+                requested.upper(),
+                label="universe",
+            )
+        except InvalidResourceId as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     try:
-        return str(CONFIG.universes.default).upper()
+        return safe_path_component(
+            str(CONFIG.universes.default).upper(),
+            label="universe",
+        )
     except AttributeError:
         return DEFAULT_UNIVERSE
 
@@ -531,9 +545,10 @@ def backtest_detail(
 @router.get("/stock", response_class=HTMLResponse)
 def stock_search(request: Request, ticker: str = Query(...)):
     """支持顶部搜索框：/stock?ticker=INTC -> 跳到 /stock/INTC。"""
-    ticker = (ticker or "").strip().upper()
-    if not ticker:
-        raise HTTPException(status_code=400, detail="ticker is required")
+    try:
+        ticker = canonical_ticker(ticker)
+    except InvalidResourceId as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return RedirectResponse(url=f"/stock/{ticker}", status_code=302)
 
 
@@ -544,7 +559,10 @@ def stock_detail(
     universe: str | None = Query(None),
 ):
     universe = _resolve_universe(universe)
-    ticker = ticker.upper().strip()
+    try:
+        ticker = canonical_ticker(ticker)
+    except InvalidResourceId as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     res = compute_single_stock_factors(ticker, reference_universe=universe)
 
     # 时序图：每个因子一条线（双 Y 轴：左轴动量/反转/换手率值域较大，右轴波动率较小）
@@ -703,6 +721,10 @@ def api_factor_confidence(name: str, universe: str | None = Query(None)):
 @router.get("/api/stock/{ticker}")
 def api_stock(ticker: str, universe: str | None = Query(None)):
     universe = _resolve_universe(universe)
+    try:
+        ticker = canonical_ticker(ticker)
+    except InvalidResourceId as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     res = compute_single_stock_factors(ticker, reference_universe=universe)
     ts = res.factor_ts
     payload = {

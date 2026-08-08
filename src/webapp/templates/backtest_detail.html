@@ -6,6 +6,7 @@
     <span class="badge">{{ task.universe }}</span>
     <span id="status-badge" class="status-pill status-{{ task.status }}">
         {% if task.status == 'pending' %}待执行
+        {% elif task.status == 'waiting_for_data' %}等待行情
         {% elif task.status == 'running' %}运行中
         {% elif task.status == 'success' %}成功
         {% elif task.status == 'failed' %}失败
@@ -29,17 +30,28 @@
     {% endif %}
 </div>
 
+<div class="toolbar-row">
+    <a class="btn" href="/backtests">返回回测任务</a>
+    <a class="btn primary" href="/backtests/{{ task.id }}/decisions">查看决策回放</a>
+</div>
+
 {% if is_running %}
 <section id="running-panel" class="chart-panel" style="text-align:center; padding: 40px 20px;">
     <div class="spinner"></div>
-    <div style="margin-top: 16px; color: var(--text-1); font-size: 15px;">
+    <div id="running-message" style="margin-top: 16px; color: var(--text-1); font-size: 15px;">
+        {% if task.status == 'waiting_for_data' %}
+        正在等待统一行情服务补齐并发布数据...
+        {% elif task.status == 'pending' %}
+        回测已进入执行队列...
+        {% else %}
         回测运行中...
+        {% endif %}
     </div>
     <div id="running-elapsed" class="mono" style="color: var(--text-2); margin-top: 8px;">
         耗时：0 秒
     </div>
     <div style="color: var(--text-2); margin-top: 12px; font-size: 12px;">
-        页面会自动刷新，请勿关闭。
+        页面会自动更新状态。
     </div>
 </section>
 {% endif %}
@@ -139,6 +151,7 @@
                 <th>因子 ID</th>
                 <th>中文名</th>
                 <th>分类</th>
+                <th>预设方向</th>
                 <th style="text-align:right;">权重</th>
             </tr>
         </thead>
@@ -148,7 +161,11 @@
                 <td class="mono">{{ c.factor_id }}</td>
                 <td>{{ c.display_name }}</td>
                 <td><span class="factor-cat-badge">{{ c.category }}</span></td>
-                <td class="mono" style="text-align:right;">{{ "%.4f"|format(c.weight) }}</td>
+                <td class="mono">{% if c.direction > 0 %}+1{% else %}-1{% endif %}</td>
+                <td class="mono" style="text-align:right;">
+                    {{ "%.4f"|format(c.weight) }}
+                    {% if c.direction_mismatch %}<span class="badge amber">与预设相反</span>{% endif %}
+                </td>
             </tr>
             {% endfor %}
         </tbody>

@@ -22,12 +22,16 @@
             <label class="factor-row" data-fid="{{ f.id }}">
                 <input type="checkbox" class="factor-check" value="{{ f.id }}"
                        data-name="{{ f.display_name }}"
-                       data-category="{{ f.category }}">
+                       data-category="{{ f.category }}"
+                       data-direction="{{ f.direction }}">
                 <div class="factor-row-main">
                     <div class="factor-row-line1">
                         <span class="factor-id mono">{{ f.id }}</span>
                         <span class="factor-row-name">{{ f.display_name }}</span>
                         <span class="factor-cat-badge">{{ f.category }}</span>
+                        <span class="factor-cat-badge">
+                            {% if f.direction > 0 %}+1 正向{% else %}-1 负向{% endif %}
+                        </span>
                     </div>
                     <div class="factor-row-line2">{{ f.description }}</div>
                 </div>

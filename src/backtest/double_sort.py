@@ -39,32 +39,80 @@ def _assign_independent(
     )
     control_assign = pd.DataFrame(np.nan, index=dates, columns=factor_df.columns)
     factor_assign = pd.DataFrame(np.nan, index=dates, columns=factor_df.columns)
+    current_control = pd.Series(np.nan, index=factor_df.columns)
+    current_factor = pd.Series(np.nan, index=factor_df.columns)
+    rebalance_set = set(rebal_dates)
 
-    for dt in rebal_dates:
-        valid = (
-            control_df.loc[dt].notna()
-            & factor_df.loc[dt].notna()
-            & tradable_mask.loc[dt].reindex(factor_df.columns).fillna(False)
+    for dt in dates:
+        if dt in rebalance_set:
+            current_control = pd.Series(np.nan, index=factor_df.columns)
+            current_factor = pd.Series(np.nan, index=factor_df.columns)
+            valid = (
+                control_df.loc[dt].notna()
+                & factor_df.loc[dt].notna()
+                & tradable_mask.loc[dt]
+                .reindex(factor_df.columns)
+                .fillna(False)
+            )
+            if int(valid.sum()) >= max(n_control, n_factor):
+                try:
+                    c_labels = pd.qcut(
+                        control_df.loc[dt, valid].rank(method="first"),
+                        q=n_control,
+                        labels=list(range(1, n_control + 1)),
+                    )
+                    f_labels = pd.qcut(
+                        factor_df.loc[dt, valid].rank(method="first"),
+                        q=n_factor,
+                        labels=list(range(1, n_factor + 1)),
+                    )
+                except ValueError:
+                    c_labels = None
+                    f_labels = None
+                if c_labels is not None and f_labels is not None:
+                    current_control.loc[c_labels.index] = (
+                        c_labels.astype(int).values
+                    )
+                    current_factor.loc[f_labels.index] = (
+                        f_labels.astype(int).values
+                    )
+        control_assign.loc[dt] = current_control
+        factor_assign.loc[dt] = current_factor
+
+    return control_assign, factor_assign, rebal_dates
+
+
+def _strict_cell_return(
+    returns: pd.DataFrame,
+    held: pd.DataFrame,
+    *,
+    label: str,
+) -> pd.Series:
+    held_count = held.sum(axis=1)
+    available_count = (held & returns.notna()).sum(axis=1)
+    incomplete = (held_count > 0) & (available_count < held_count)
+    if len(returns.index):
+        final_date = pd.Timestamp(returns.index[-1])
+        incomplete &= ~(
+            (pd.DatetimeIndex(returns.index) == final_date)
+            & (available_count == 0)
         )
-        if int(valid.sum()) < max(n_control, n_factor):
-            continue
-        try:
-            c_labels = pd.qcut(
-                control_df.loc[dt, valid].rank(method="first"),
-                q=n_control,
-                labels=list(range(1, n_control + 1)),
-            )
-            f_labels = pd.qcut(
-                factor_df.loc[dt, valid].rank(method="first"),
-                q=n_factor,
-                labels=list(range(1, n_factor + 1)),
-            )
-        except ValueError:
-            continue
-        control_assign.loc[dt, c_labels.index] = c_labels.astype(int).values
-        factor_assign.loc[dt, f_labels.index] = f_labels.astype(int).values
-
-    return control_assign.ffill(), factor_assign.ffill(), rebal_dates
+    if incomplete.any():
+        bad_date = pd.Timestamp(incomplete.index[incomplete][0])
+        missing = held.loc[bad_date] & returns.loc[bad_date].isna()
+        raise ValueError(
+            "Missing return for held double-sort securities; refusing "
+            f"renormalization: date={bad_date.date()} cell={label} "
+            f"tickers={list(returns.columns[missing])[:10]}"
+        )
+    weights = held.astype(float).div(
+        held_count.replace(0, np.nan),
+        axis=0,
+    )
+    values = (returns * weights).sum(axis=1, min_count=1)
+    return values.where(
+        (held_count > 0) & (available_count == held_count)
+    ).dropna()
 
 
 def double_sort_backtest(
@@ -72,6 +120,7 @@ def double_sort_backtest(
     control_df: pd.DataFrame,
     returns_df: pd.DataFrame,
     *,
+    factor_direction: int = +1,
     n_control: int = 5,
     n_factor: int = 5,
     rebalance_days: int | None = None,
@@ -92,13 +141,15 @@ def double_sort_backtest(
         or getattr(CONFIG.backtest, "rebalance_mode", "every_n_days")
     ).lower()
     exec_cfg = _resolve_execution(execution)
+    if factor_direction not in {-1, 1}:
+        raise ValueError(
+            "factor_direction must be fixed ex ante as +1 or -1"
+        )
 
     if exec_cfg["timing"] == "next_open":
         if open_df is None or open_df.empty:
             raise ValueError("double_sort_backtest requires open_df for next_open.")
-        held_returns = open_df.pct_change().shift(-1)
-    else:
-        held_returns = returns_df
+        held_returns = open_df.pct_change(fill_method=None).shift(-1)
 
     common_dates = factor_df.index.intersection(control_df.index).intersection(
         held_returns.index
@@ -142,15 +193,32 @@ def double_sort_backtest(
         for j in range(1, n_factor + 1):
             name = f"C{i}_F{j}"
             mask = (control_held == i) & (factor_held == j)
-            cell_returns[name] = r.where(mask).mean(axis=1).dropna()
+            cell_returns[name] = _strict_cell_return(
+                r,
+                mask,
+                label=name,
+            )
 
     spreads = []
     for i in range(1, n_control + 1):
         hi = cell_returns.get(f"C{i}_F{n_factor}", pd.Series(dtype="float64"))
         lo = cell_returns.get(f"C{i}_F1", pd.Series(dtype="float64"))
         spreads.append((hi - lo).rename(f"C{i}_spread"))
-    factor_returns = pd.concat(spreads, axis=1).mean(axis=1).dropna()
-    factor_returns.name = "DoubleSortHighMinusLow"
+    spread_frame = pd.concat(spreads, axis=1)
+    available_spreads = spread_frame.notna().sum(axis=1)
+    partial_spreads = (available_spreads > 0) & (
+        available_spreads < n_control
+    )
+    if partial_spreads.any():
+        bad_date = pd.Timestamp(partial_spreads.index[partial_spreads][0])
+        raise ValueError(
+            "Double-sort control-bucket spread is partially missing; "
+            f"refusing renormalization: date={bad_date.date()}"
+        )
+    factor_returns = spread_frame.mean(axis=1).where(
+        available_spreads == n_control
+    ).dropna() * int(factor_direction)
+    factor_returns.name = "DoubleSortOrientedSpread"
     factor_nav = (1.0 + factor_returns.fillna(0)).cumprod()
     factor_nav.name = "DoubleSortNAV"
 
@@ -164,6 +232,7 @@ def double_sort_backtest(
         config={
             "n_control": n_control,
             "n_factor": n_factor,
+            "factor_direction": int(factor_direction),
             "rebalance_days": rebalance_days,
             "rebalance_mode": rebalance_mode,
             "execution": exec_cfg,

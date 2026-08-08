@@ -1,66 +1,83 @@
-"""Persistence for internal paper trading accounts."""
+"""SQLite persistence for internal paper-trading accounts and ledgers."""
 from __future__ import annotations
 
-import shutil
+from contextlib import contextmanager
 from pathlib import Path
+import shutil
+import threading
 from typing import Any
 
 import pandas as pd
 
 from src.config import CONFIG, PROJECT_ROOT
 from src.papertrading.definition import now_iso
-from src.utils.io import atomic_save_json, ensure_dir, load_json, read_parquet, write_parquet
+from src.storage import app_database
+from src.utils.identifiers import canonical_uuid
+from src.utils.io import ensure_dir
 from src.utils.logger import get_logger
 
+
 log = get_logger(__name__)
-
-
 _OUT_DIR = (
     Path(CONFIG.webapp.output_dir)
     if Path(CONFIG.webapp.output_dir).is_absolute()
     else PROJECT_ROOT / CONFIG.webapp.output_dir
 )
+# The directory now holds only decision-replay artifacts and process lock files.
 PAPER_ROOT: Path = _OUT_DIR / "papertrading"
-_INDEX_PATH: Path = PAPER_ROOT / "_index.json"
+_ACCOUNT_LOCKS: dict[str, threading.RLock] = {}
+_ACCOUNT_LOCKS_GUARD = threading.Lock()
+_RECORD_KIND = "paper_account"
+
+
+def _database():
+    return app_database(output_dir=PAPER_ROOT.parent)
 
 
 def account_dir(account_id: str) -> Path:
-    d = PAPER_ROOT / account_id
-    ensure_dir(d)
-    return d
+    """Return the directory reserved for non-OLTP account artifacts."""
+    account_id = canonical_uuid(account_id, label="account_id")
+    directory = PAPER_ROOT / account_id
+    ensure_dir(directory)
+    return directory
 
 
-def _account_json_path(account_id: str) -> Path:
-    return PAPER_ROOT / account_id / "account.json"
+@contextmanager
+def account_run_lock(account_id: str):
+    """Serialize one account across Web threads and worker processes."""
+    account_id = canonical_uuid(account_id, label="account_id")
+    with _ACCOUNT_LOCKS_GUARD:
+        thread_lock = _ACCOUNT_LOCKS.setdefault(account_id, threading.RLock())
+    with thread_lock:
+        lock_path = account_dir(account_id) / ".run.lock"
+        stream = lock_path.open("a+b")
+        try:
+            try:
+                import fcntl
 
+                fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+            except ImportError:
+                pass
+            yield
+        finally:
+            try:
+                import fcntl
 
-def _load_index() -> list[dict[str, Any]]:
-    if not _INDEX_PATH.exists():
-        return []
-    try:
-        data = load_json(_INDEX_PATH)
-    except Exception as e:  # noqa: BLE001
-        log.warning("papertrading _index.json corrupted, rebuilding. error=%s", e)
-        return _rebuild_index()
-    if isinstance(data, dict):
-        data = data.get("accounts", [])
-    return list(data or [])
-
-
-def _save_index(entries: list[dict[str, Any]]) -> None:
-    ensure_dir(PAPER_ROOT)
-    atomic_save_json(entries, _INDEX_PATH)
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+            except ImportError:
+                pass
+            stream.close()
 
 
 def _universe_label(account: dict[str, Any]) -> str:
     universe = str(account.get("universe") or "")
-    snap = account.get("watchlist_snapshot") or {}
-    if universe.startswith("watchlist:") and snap:
-        return str(snap.get("name") or universe)
+    snapshot = account.get("watchlist_snapshot") or {}
+    if universe.startswith("watchlist:") and snapshot:
+        return str(snapshot.get("name") or universe)
     return universe
 
 
-def _account_summary(account: dict[str, Any]) -> dict[str, Any]:
+def _summary(account: dict[str, Any]) -> dict[str, Any]:
     strategy = account.get("strategy_snapshot") or {}
     return {
         "id": account.get("id"),
@@ -81,128 +98,110 @@ def _account_summary(account: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _rebuild_index() -> list[dict[str, Any]]:
-    entries: list[dict[str, Any]] = []
-    if not PAPER_ROOT.exists():
-        return entries
-    for d in PAPER_ROOT.iterdir():
-        if not d.is_dir():
-            continue
-        p = d / "account.json"
-        if not p.exists():
-            continue
-        try:
-            account = load_json(p)
-            entries.append(_account_summary(account))
-        except Exception as e:  # noqa: BLE001
-            log.warning("Skip broken paper account dir %s: %s", d, e)
-    entries.sort(key=lambda x: x.get("created_at", ""), reverse=True)
-    _save_index(entries)
-    return entries
-
-
-def _upsert_index(account: dict[str, Any]) -> None:
-    aid = account.get("id")
-    if not aid:
-        return
-    entries = [e for e in _load_index() if e.get("id") != aid]
-    entries.insert(0, _account_summary(account))
-    _save_index(entries)
-
-
 def create_account(account: dict[str, Any]) -> dict[str, Any]:
-    aid = str(account.get("id") or "")
-    if not aid:
-        raise ValueError("account.id is required")
-    d = account_dir(aid)
-    if (d / "account.json").exists():
-        raise ValueError(f"Paper account already exists: {aid}")
-    atomic_save_json(account, d / "account.json")
-    _upsert_index(account)
-    log.info("Paper account created: id=%s name=%r", aid, account.get("name"))
+    account_id = canonical_uuid(account.get("id"), label="account_id")
+    account["id"] = account_id
+    if _database().get_record(_RECORD_KIND, account_id) is not None:
+        raise ValueError(f"Paper account already exists: {account_id}")
+    _database().put_record(
+        _RECORD_KIND,
+        account_id,
+        account,
+        _summary(account),
+        create_only=True,
+    )
+    log.info("Paper account created: id=%s name=%r", account_id, account.get("name"))
     return account
 
 
 def load_account(account_id: str) -> dict[str, Any] | None:
-    p = _account_json_path(account_id)
-    if not p.exists():
-        return None
-    return load_json(p)
+    account_id = canonical_uuid(account_id, label="account_id")
+    return _database().get_record(_RECORD_KIND, account_id)
 
 
 def update_account(account_id: str, patch: dict[str, Any]) -> dict[str, Any]:
+    account_id = canonical_uuid(account_id, label="account_id")
     account = load_account(account_id)
     if account is None:
         raise FileNotFoundError(f"Paper account not found: {account_id}")
     account.update(patch)
     account["updated_at"] = now_iso()
-    atomic_save_json(account, _account_json_path(account_id))
-    _upsert_index(account)
+    _database().put_record(
+        _RECORD_KIND,
+        account_id,
+        account,
+        _summary(account),
+    )
     return account
 
 
 def list_accounts() -> list[dict[str, Any]]:
-    entries = _load_index()
-    if not entries and PAPER_ROOT.exists() and any(PAPER_ROOT.iterdir()):
-        entries = _rebuild_index()
-    return entries
+    return _database().list_summaries(_RECORD_KIND)
 
 
 def delete_account(account_id: str) -> bool:
-    d = PAPER_ROOT / account_id
-    if not d.exists():
+    account_id = canonical_uuid(account_id, label="account_id")
+    if _database().get_record(_RECORD_KIND, account_id) is None:
         return False
-    shutil.rmtree(d, ignore_errors=True)
-    entries = [e for e in _load_index() if e.get("id") != account_id]
-    _save_index(entries)
-    log.info("Paper account deleted: id=%s", account_id)
-    return True
-
-
-def _read_df(path: Path) -> pd.DataFrame:
-    if not path.exists():
-        return pd.DataFrame()
-    try:
-        return read_parquet(path)
-    except Exception as e:  # noqa: BLE001
-        log.warning("Failed reading %s: %s", path, e)
-        return pd.DataFrame()
+    with account_run_lock(account_id):
+        deleted = _database().delete_record(_RECORD_KIND, account_id)
+    directory = PAPER_ROOT / account_id
+    if directory.exists():
+        shutil.rmtree(directory)
+    if deleted:
+        log.info("Paper account deleted: id=%s", account_id)
+    return deleted
 
 
 def load_table(account_id: str, name: str) -> pd.DataFrame:
-    return _read_df(account_dir(account_id) / f"{name}.parquet")
+    account_id = canonical_uuid(account_id, label="account_id")
+    frame = _database().get_frame(_RECORD_KIND, account_id, name)
+    return frame if frame is not None else pd.DataFrame()
 
 
-def save_table(account_id: str, name: str, df: pd.DataFrame) -> None:
-    write_parquet(df, account_dir(account_id) / f"{name}.parquet")
+def save_table(account_id: str, name: str, frame: pd.DataFrame) -> None:
+    account_id = canonical_uuid(account_id, label="account_id")
+    _database().put_frame(_RECORD_KIND, account_id, name, frame)
 
 
-def append_table(account_id: str, name: str, rows: list[dict[str, Any]]) -> pd.DataFrame:
+def append_table(
+    account_id: str,
+    name: str,
+    rows: list[dict[str, Any]],
+) -> pd.DataFrame:
     existing = load_table(account_id, name)
-    if rows:
-        new_df = pd.DataFrame(rows)
-        out = pd.concat([existing, new_df], ignore_index=True) if not existing.empty else new_df
-    else:
-        out = existing
-    if not out.empty:
-        save_table(account_id, name, out)
-    return out
+    if not rows:
+        return existing
+    incoming = pd.DataFrame(rows)
+    output = (
+        pd.concat([existing, incoming], ignore_index=True)
+        if not existing.empty
+        else incoming
+    )
+    save_table(account_id, name, output)
+    return output
 
 
 def load_account_artifacts(account_id: str) -> dict[str, pd.DataFrame]:
     return {
-        "positions": load_table(account_id, "positions"),
-        "orders": load_table(account_id, "orders"),
-        "fills": load_table(account_id, "fills"),
-        "equity_curve": load_table(account_id, "equity_curve"),
-        "target_weights": load_table(account_id, "target_weights"),
-        "runs": load_table(account_id, "runs"),
+        name: load_table(account_id, name)
+        for name in (
+            "positions",
+            "orders",
+            "fills",
+            "equity_curve",
+            "target_weights",
+            "target_history",
+            "position_history",
+            "runs",
+        )
     }
 
 
 __all__ = [
     "PAPER_ROOT",
     "account_dir",
+    "account_run_lock",
     "create_account",
     "delete_account",
     "list_accounts",

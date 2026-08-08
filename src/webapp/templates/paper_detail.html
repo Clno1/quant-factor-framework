@@ -18,13 +18,18 @@
 
 <div class="toolbar-row">
     <button class="btn primary" id="run-btn" onclick="runPaper('{{ account.id }}')">运行一次</button>
+    <a class="btn" href="/paper/{{ account.id }}/decisions">查看决策回放</a>
     <a class="btn" href="/paper/new?strategy_id={{ account.strategy_id }}">新建同策略模拟盘</a>
     <button class="btn danger" onclick="deletePaper('{{ account.id }}', '{{ account.name }}')">删除模拟盘</button>
 </div>
 
 {% if account.last_error %}
-<div class="empty" style="border-color: rgba(255,82,82,0.28);">
-    <p class="neg">上次运行失败：{{ account.last_error }}</p>
+{% set _waiting = account.last_error.startswith('WAITING_FOR_DATA:') %}
+<div class="empty" style="border-color: {% if _waiting %}rgba(255,179,0,0.35){% else %}rgba(255,82,82,0.28){% endif %};">
+    <p class="{% if not _waiting %}neg{% endif %}">
+        {% if _waiting %}等待行情：{% else %}上次运行失败：{% endif %}
+        {{ account.last_error.replace('WAITING_FOR_DATA:', '') }}
+    </p>
 </div>
 {% endif %}
 
@@ -56,6 +61,14 @@
     <div class="metric-card">
         <span>最近估值日</span>
         <strong class="mono">{{ account.last_mark_date or '—' }}</strong>
+    </div>
+    <div class="metric-card">
+        <span>行情版本</span>
+        <strong class="mono" title="{{ (account.data_contract or {}).dataset_version_id or '' }}">
+            {% if account.data_contract and account.data_contract.dataset_version_id %}
+            {{ account.data_contract.dataset_version_id[:8] }}
+            {% else %}—{% endif %}
+        </strong>
     </div>
 </section>
 

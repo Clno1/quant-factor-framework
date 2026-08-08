@@ -61,10 +61,10 @@ Worker 使用 `exchange-calendars` 的 `XNYS` 日历二次校验：
 
 ### 4.1 数据范围
 
-盘前摘要不调用 `run_live_alert_scan()`，也不把盘前 batch quote 拼成正式日线。它读取
-`data/raw/ohlcv/<TICKER>.parquet` 中已经完成的 `T-1` 日线，并复用现有
-`src.breakouts.scanner.evaluate_daily_setup` 算法。worker 只读取 refresh 任务已经写好的
-universe/日线缓存，绝不在 09:20 发送窗口内临时请求 FMP 或刷新股票池。
+盘前摘要不调用 `run_live_alert_scan()`，也不把盘前 batch quote 拼成正式日线。它通过
+`MarketDataReader` 读取 `US_LIQUID_5M` 已发布版本中完成的 `T-1` 日线，并复用现有
+`src.breakouts.scanner.evaluate_daily_setup` 算法。证券属性仍读取 refresh 任务写入并带
+manifest 的 `data/raw/universe/us_active.parquet`；发送窗口内不会临时请求 FMP 或刷新股票池。
 
 股票池步骤：
 

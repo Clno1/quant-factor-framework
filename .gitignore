@@ -11,6 +11,7 @@ dist/
 
 # Virtual Env
 .venv/
+.venv-worker/
 venv/
 env/
 ENV/
@@ -27,10 +28,14 @@ ENV/
 
 # Project data & logs (保留目录结构，忽略内容)
 data/raw/*
-data/processed/*
 data/cache/*
+data/catalog/*
+data/lake/*
+data/pit_universes/*
 !data/raw/.gitkeep
-!data/processed/.gitkeep
+!data/catalog/.gitkeep
+!data/lake/.gitkeep
+!data/pit_universes/.gitkeep
 data/reference/*
 data/pit_classifications/*
 data/theme_exposures/*
@@ -39,6 +44,7 @@ data/theme_exposures/*
 !data/theme_exposures/.gitkeep
 logs/*
 !logs/.gitkeep
+runlog
 
 # 输出缓存
 outputs/

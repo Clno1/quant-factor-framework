@@ -152,6 +152,48 @@ def get_sp500_constituents() -> pd.DataFrame:
     return df
 
 
+def get_historical_sp500_constituent_changes() -> pd.DataFrame:
+    """
+    Return FMP's S&P 500 addition/removal event history.
+
+    This endpoint does *not* return complete membership snapshots.  A row may
+    represent a paired replacement, an addition-only event, or a removal-only
+    event.  Snapshot reconstruction therefore lives in the market-regime
+    research domain, where the current constituent set and event consistency
+    can be validated together.
+    """
+    log.info("Fetching historical S&P 500 constituent changes from FMP ...")
+    data = _get("/historical-sp500-constituent")
+    if not isinstance(data, list) or not data:
+        raise RuntimeError(
+            "FMP historical-sp500-constituent returned empty / unexpected payload"
+        )
+
+    frame = pd.DataFrame(data)
+    required = {
+        "date",
+        "symbol",
+        "addedSecurity",
+        "removedTicker",
+        "removedSecurity",
+    }
+    missing = required - set(frame.columns)
+    if missing:
+        raise RuntimeError(
+            "FMP historical-sp500-constituent missing fields: "
+            f"{sorted(missing)}"
+        )
+    frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
+    if frame["date"].isna().any():
+        raise RuntimeError(
+            "FMP historical-sp500-constituent contains invalid effective dates"
+        )
+    return frame.sort_values(
+        ["date", "symbol", "removedTicker"],
+        ascending=[False, True, True],
+    ).reset_index(drop=True)
+
+
 def get_us_active_equities(
     *,
     min_current_dollar_volume: float = 0.0,
@@ -369,6 +411,66 @@ def get_historical_ohlcv(
     df.index.name = "date"
     df = df.dropna(how="all")
     return df if not df.empty else None
+
+
+def get_historical_ohlcv_complete(
+    symbol: str,
+    start: str,
+    end: str,
+    *,
+    dividend_adjusted: bool = True,
+    chunk_years: int = 10,
+) -> pd.DataFrame:
+    """
+    Strictly download a complete date range in bounded chunks.
+
+    FMP's stable EOD endpoint currently caps one response at 5,000 rows.  A
+    seemingly valid request for 1990-present can therefore begin around 2006
+    without an error.  This wrapper keeps each request comfortably below that
+    cap, merges the chunks, and fails when any requested chunk returns no data.
+
+    Callers should choose a start date on or after the instrument's inception.
+    A short gap for weekends/holidays is expected; an entirely empty chunk is
+    treated as a data-contract failure rather than silently skipped.
+    """
+    start_ts = pd.Timestamp(start).normalize()
+    end_ts = pd.Timestamp(end).normalize()
+    if pd.isna(start_ts) or pd.isna(end_ts) or start_ts > end_ts:
+        raise ValueError("start/end must define a valid inclusive date range")
+    if int(chunk_years) < 1:
+        raise ValueError("chunk_years must be positive")
+
+    frames: list[pd.DataFrame] = []
+    cursor = start_ts
+    while cursor <= end_ts:
+        chunk_end = min(
+            cursor + pd.DateOffset(years=int(chunk_years)) - pd.Timedelta(days=1),
+            end_ts,
+        )
+        frame = get_historical_ohlcv(
+            symbol,
+            cursor.strftime("%Y-%m-%d"),
+            chunk_end.strftime("%Y-%m-%d"),
+            dividend_adjusted=dividend_adjusted,
+        )
+        if frame is None or frame.empty:
+            raise RuntimeError(
+                f"FMP returned no {symbol} EOD data for requested chunk "
+                f"{cursor.date()}..{chunk_end.date()}"
+            )
+        if len(frame) >= 5_000:
+            raise RuntimeError(
+                f"FMP returned {len(frame)} rows for {symbol} in one chunk; "
+                "the response may be truncated. Reduce chunk_years."
+            )
+        frames.append(frame)
+        cursor = chunk_end + pd.Timedelta(days=1)
+
+    combined = pd.concat(frames).sort_index()
+    combined = combined.loc[~combined.index.duplicated(keep="last")]
+    if combined.empty or combined.index.has_duplicates:
+        raise RuntimeError(f"Unable to build a unique complete EOD series for {symbol}")
+    return combined
 
 
 def batch_historical_ohlcv(
@@ -596,9 +698,11 @@ def verify_ticker(ticker: str) -> dict[str, str] | None:
 __all__ = [
     "get_api_key",
     "get_sp500_constituents",
+    "get_historical_sp500_constituent_changes",
     "get_us_active_equities",
     "get_security_profile",
     "get_historical_ohlcv",
+    "get_historical_ohlcv_complete",
     "batch_historical_ohlcv",
     "get_batch_quotes",
     "get_exchange_market_hours",

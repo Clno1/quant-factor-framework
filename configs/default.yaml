@@ -14,13 +14,18 @@
 
 # 股票池
 universe:
-  # 旧字段（向后兼容，单一池场景）
-  name: "SP500"                    # 默认主池：用于 /stock/{ticker} 分位排名参考
   custom_tickers: []
   sp500_url: "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
   cache_days: 7
   point_in_time:
     membership_dir: "data/pit_universes"   # 可放 SP500.parquet/csv，至少包含 date,ticker
+    required_universes: [SP500, US_LIQUID_5M] # 动态成分池：缺历史快照或历史股票行情时拒绝回测
+    static_universes: [MAG7]                # 明确固定不变的研究池，不要求 PIT 文件
+    # 主多因子 PIT 使用固定起点，避免相对日期 "5Y" 每天前移后丢掉旧发布版本的基线快照。
+    # 1990 年宽基顶底研究仍使用 market_regime_research.point_in_time.start，
+    # 两条研究链不会共用或覆盖各自的诊断结论。
+    main_factor_start: "2020-01-01"
+    sp500_corrections: "configs/sp500_pit_corrections.yaml"
 
 # 多股票池配置（新版本，pipeline 会循环跑每一个）
 universes:
@@ -52,12 +57,112 @@ data:
     retry: 3                       # 失败重试次数（指数退避）
 
   raw_dir: "data/raw"
-  processed_dir: "data/processed"
-  chunk_size: 100                  # 进度条更新粒度（FMP 实际逐只请求）
-  sleep_between: 0.0               # Premium 套餐不需要节流（750 req/min）
-  max_workers: 1                   # 保留字段不使用
-  retry_times: 3                   # 下载失败重试次数
-  cache_days: 7                    # 本地缓存有效期（天），过期重新下载
+
+  # DuckDB 保存版本目录、质量结果和发布指针；大体量行情使用不可变 Parquet。
+  # 每日任务是唯一写入者，研究/回测/模拟盘只读取 published_versions。
+  foundation:
+    catalog_path: "data/catalog/quant.duckdb"
+    lake_dir: "data/lake"
+    close_delay_minutes: 120       # XNYS 正式收盘后等待 FMP 日线稳定
+    overlap_calendar_days: 21      # 增量更新时回看，吸收复权与供应商修订
+    min_latest_coverage: 0.98      # 目标交易日当前成分股行情覆盖率门槛
+    min_pit_daily_coverage: 0.95   # 历史每个 session 的 PIT 成分行情最低覆盖率
+    max_workers: 6                 # FMP 单票历史接口并发数
+    # 研究、网页回测和模拟盘禁止直接调用 FMP。
+    # 缺数通过 SQLite 请求队列交给唯一 MarketDataWriter 处理。
+    request_poll_seconds: 15
+    request_stale_minutes: 30
+    custom_universe_min_coverage: 1.0
+
+  # US_ACTIVE 是供应商当前快照；正式发布后使用语义更准确的名称。
+  liquid_universe:
+    name: "US_LIQUID_5M"
+    source_universe: "US_ACTIVE"
+    asset_type: "STOCK"
+    min_current_dollar_volume_m: 5.0
+    always_tickers: [QQQ, SPY, IWM]
+    initial_start: "180D"
+
+# 可变业务对象使用 SQLite；大型行情、因子和结果仍使用 DuckDB + Parquet。
+# SQLite 是唯一业务主存储；旧 JSON/Parquet 仅保留为只读归档。
+storage:
+  sqlite_path: "outputs/quant_app.sqlite3"
+
+# 大盘顶底研究。该模块先生成可审计研究产物，不直接驱动页面或交易。
+# 完整模式强制使用 point-in-time 成分股；缺失时只能显式运行 --core-only。
+market_regime_research:
+  enabled: true
+  primary_symbol: "^GSPC"          # 顶底标签基准；纳指作为并行特征，不混用标签
+  end: "today"
+  raw_dir: "data/raw/market_regime"
+  output_dir: "outputs/market_regime_research"
+
+  # start 应从标的上市/可得日起设置。FMP 单次最多约 5000 行，代码会分段下载并校验。
+  instruments:
+    - {symbol: "^GSPC", start: "1990-01-01", kind: "index"}
+    - {symbol: "^NDX",  start: "1990-01-01", kind: "index"}
+    - {symbol: "SPY",   start: "1993-01-29", kind: "etf"}
+    - {symbol: "QQQ",   start: "1999-03-10", kind: "etf"}
+    - {symbol: "IWM",   start: "2000-05-26", kind: "etf"}
+    - {symbol: "HYG",   start: "2007-04-11", kind: "etf"}
+    - {symbol: "LQD",   start: "2002-07-30", kind: "etf"}
+
+  point_in_time:
+    universe: "SP500"
+    start: "1990-01-01"
+    strict: true
+    min_snapshot_members: 450      # 含多股类和临时过渡，不能机械要求正好 500
+    max_snapshot_members: 550
+
+  labels:
+    horizons: [5, 20, 60]
+    volatility_window: 20
+    high_lookback: 252
+    top_near_high_pct: 0.03
+    bottom_min_drawdown_pct: 0.10
+    bottom_drawdown_quantile: 0.20
+    bottom_quantile_lookback: 1260
+    minimum_history: 252
+    barrier_vol_multiplier: 1.0
+    minimum_barrier_pct: 0.02
+
+  features:
+    moving_average_windows: [20, 50, 200]
+    realized_volatility_windows: [20, 60]
+    correlation_window: 60
+    correlation_min_members: 30
+    momentum_lookback: 252
+    momentum_skip: 21              # 12-1 动量，跳过最近约一个月
+    momentum_quantile: 0.10
+    min_cross_section_members: 30
+
+  # 有效性筛选。2022 年起的数据封存，不参与候选发现或参数选择。
+  screening:
+    candidate_registry: "configs/market_regime_screening_candidates.yaml"
+    holdout_start: "2022-01-01"
+    first_validation_start: "1996-01-01"
+    validation_years: 2
+    minimum_train_years: 5
+    embargo_sessions: 60            # 与最长标签窗口相同，阻断跨 fold 的未来收益泄漏
+    minimum_train_rows: 252
+    minimum_validation_rows: 40
+    minimum_train_positives: 10
+    minimum_validation_positives: 2
+    minimum_fold_count: 3
+    minimum_event_episodes: 30
+    minimum_regime_eras: 3
+    minimum_feature_coverage: 0.95
+    direction_consistency: 0.75
+    fdr_q: 0.10
+    winsor_lower_quantile: 0.01
+    winsor_upper_quantile: 0.99
+    signal_quantile: 0.90
+    ridge_penalty: 0.0001
+    calibration_bins: 10
+    bootstrap_iterations: 1000
+    bootstrap_block_rows: 60        # 目标标签有效状态中的连续观测；不是 60 个固定日历交易日
+    random_seed: 20260802
+    scan_unregistered: true          # 未登记特征保留探索记录，但不能进入正式短名单
 
 # 动量交易提醒
 # Discord Webhook 等密钥只从环境变量或 .env.local 读取，不写在这里。
@@ -72,6 +177,9 @@ momentum_alerts:
     min_return_20d: 10.0           # 盘前宽筛，给盘中上涨留出进入严格筛选的空间
     min_adr_20d: 4.5
     min_current_dollar_volume_m: 5.0
+
+  daily_data:
+    min_exact_coverage: 0.80       # 必须精确截至上一 XNYS 交易日，否则关闭信号
     min_avg_dollar_volume_m: 10.0
     max_symbols: 600
   strict_scan:
@@ -90,6 +198,50 @@ momentum_alerts:
     max_rows: 10
     mention_levels: ["READY", "BREAKOUT", "OPENING_RANGE_BREAK"]
     send_empty_digest: false
+
+# 独立盘中动量监控。当前只允许 shadow；不会从这里开启 Discord 或自动下单。
+intraday_momentum_monitor:
+  enabled: false
+  asset_types:
+    include_etfs: false
+
+  universe:
+    name: US_ACTIVE
+    max_symbols: 600
+    refresh_minutes: 5
+    active_max_symbols: 40
+    active_hard_limit: 60
+    quote_chunk_size: 100
+
+  broad_scan:
+    min_return_20d: 10.0
+    min_adr_20d: 4.5
+    min_current_dollar_volume_m: 5.0
+
+  strict_scan:
+    min_return_20d: 20.0
+    min_adr_20d: 6.0
+    min_dollar_volume_m: 10.0
+    min_avg_dollar_volume_m: 10.0
+
+  bars:
+    interval_minutes: 1
+    stale_after_seconds: 90
+    preload_bars: 60
+
+  opening_range:
+    windows: [5, 15]              # 仅影子观测；正式触发仍保留既有 60/30 分钟语义
+
+  runtime:
+    max_concurrent_requests: 4
+    heartbeat_seconds: 30
+    poll_offset_seconds: 8
+    exact_confirm_cooldown_seconds: 50
+    timezone: America/New_York
+
+  notifications:
+    cooldown_minutes: 20
+    send_empty: false
 
 # 美股开盘前双频道日报。Webhook 密钥只允许来自环境变量或 .env.local。
 # 这是单向编排层；因子、回测、模拟盘、alerts 和 group_analytics 均不依赖它。
@@ -125,7 +277,7 @@ preprocessing:
   winsorize_n: 3                   # MAD 倍数
   standardize: true                # 是否做 Z-score 标准化
   neutralize_industry: true        # 默认开启行业中性化，剥离 sector 暴露后再做最终 Z-score
-  neutralize_mcap: false           # 需要真实历史 data/processed/<UNIVERSE>/market_cap.parquet；缺数据时不要假打开
+  neutralize_mcap: false           # 需要真实 PIT 市值序列；当前发布版本尚未提供，不能用当前市值制造未来信息
   neutralize_min_obs: 30
 
 # 单因子 IC 分析
@@ -194,21 +346,22 @@ backtest:
   transaction_cost: 0.0005         # （已废弃，由 execution.commission_bps 替代）
   risk_free_rate: 0.0              # 年化无风险利率（计算 Sharpe 用）
   trading_days_per_year: 252
-  require_point_in_time_universe: false    # true 时没有 PIT 成分股快照则拒绝回测
+  require_point_in_time_universe: true     # 对 point_in_time.required_universes 强制 PIT 校验
 
   # 成交模型（v3 新增）：让回测尽量接近实盘可达上限
   execution:
-    timing: "next_open"            # next_open（推荐，T+1 开盘成交）/ close（旧行为，T 日收盘成交）
+    timing: "next_open"            # 强制 T+1 开盘成交；同日 close 成交已禁用
     portfolio_value: 100000        # 回测用来把权重交易换算成估算股数/订单金额；模拟盘用账户现金
     fee_model: "ibkr_us_pro_fixed" # simple_bps / ibkr_us_pro_fixed / ibkr_us_pro_tiered / ibkr_us_lite
     slippage_model: "volume_share" # constant_bps / volume_share / none
-    slippage_bps: 5                # 兼容旧任务；constant_bps 或缺成交量时使用
+    slippage_bps: 5                # 兼容旧任务；仅供 constant_bps 模型使用
     commission_bps: 2              # 兼容旧任务；simple_bps 费率
     min_open_coverage: 0.95        # next_open 下 open 价格矩阵最低非空覆盖率
     slippage:
-      fallback_bps: 5              # volume 缺失时使用
+      fallback_bps: 5              # 底层模型兼容值；标准回测/模拟盘缺成交量会直接失败
       spread_bps: 2                # 近似半价差/开盘冲击基础成本
       volume_limit: 0.025          # 参考 Zipline/QuantConnect，单根 bar 可成交量上限 2.5%
+      adv_window: 20               # T+1 开盘只能使用截至 T 日的过去 20 日平均成交量
       price_impact: 0.10           # impact = price_impact * min(qty/volume, volume_limit)^2
     fees:
       simple_bps: 2
@@ -241,7 +394,8 @@ backtest:
       include_pass_through: true
       exchange_fee_bps: 0.0        # 路由/交易所相关 maker-taker 先设 0，后续接真实路由后细分
 
-  # 调仓日可交易过滤。规则在 T 日决策时应用；next_open 模式额外要求 T+1 开盘价可用。
+  # 调仓日可交易过滤。全部规则只使用 T 日收盘前已知数据；
+  # T+1 开盘价由成交引擎在执行阶段强制校验。
   tradability:
     enabled: true
     min_price: 1.0
@@ -249,7 +403,6 @@ backtest:
     dollar_volume_window: 20
     min_valid_return_lookback: 20
     min_valid_return_ratio: 0.67
-    require_next_open: true
 
 # 当前启用因子（与研报 8 因子对齐）
 factors:
@@ -271,7 +424,7 @@ logging:
 
 # Web 服务
 webapp:
-  host: "0.0.0.0"                  # 0.0.0.0 允许手机访问
+  host: "127.0.0.1"                # 对外监听必须配置 QUANT_WEB_AUTH_USER/PASSWORD
   port: 18823
   reload: false
   title: "量化研究平台"

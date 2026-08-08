@@ -2,11 +2,17 @@
 from __future__ import annotations
 
 from datetime import datetime
+import math
 from typing import Any
 from uuid import uuid4
 
 from src.execution import resolve_execution_config
 from src.strategies.definition import StrategyDefinition
+from src.utils.identifiers import (
+    InvalidResourceId,
+    canonical_uuid,
+    safe_path_component,
+)
 
 
 class PaperTradingValidationError(ValueError):
@@ -85,14 +91,33 @@ def create_account_payload(
         initial_cash = float(initial_cash)
     except (TypeError, ValueError) as e:
         raise PaperTradingValidationError(f"初始资金必须是数字: {e}") from e
-    if initial_cash <= 0:
+    if not math.isfinite(initial_cash) or initial_cash <= 0:
         raise PaperTradingValidationError("初始资金必须大于 0")
     n_groups = int(n_groups)
     top_group = int(top_group)
-    if n_groups < 1:
-        raise PaperTradingValidationError("n_groups 必须大于等于 1")
-    if top_group < 1:
-        raise PaperTradingValidationError("top_group 必须大于等于 1")
+    if not 1 <= n_groups <= 20:
+        raise PaperTradingValidationError("n_groups 必须在 [1, 20] 内")
+    if not 1 <= top_group <= n_groups:
+        raise PaperTradingValidationError("top_group 必须在 [1, n_groups] 内")
+    rebalance_mode = str(rebalance_mode or "").strip().lower()
+    if rebalance_mode not in {
+        "every_n_days", "month_end", "monthly", "week_end", "weekly",
+    }:
+        raise PaperTradingValidationError("rebalance_mode 非法")
+    try:
+        if str(universe).lower().startswith("watchlist:"):
+            watchlist_id = canonical_uuid(
+                str(universe).split(":", 1)[1],
+                label="watchlist_id",
+            )
+            universe = f"watchlist:{watchlist_id}"
+        else:
+            universe = safe_path_component(
+                str(universe).upper(),
+                label="universe",
+            )
+    except InvalidResourceId as exc:
+        raise PaperTradingValidationError(str(exc)) from exc
 
     strategy.validate()
     account_id = str(uuid4())
@@ -119,6 +144,8 @@ def create_account_payload(
         "last_mark_date": None,
         "last_error": None,
         "diagnostics": None,
+        "data_contract": None,
+        "data_request_id": None,
         "schema_version": 1,
     }
 

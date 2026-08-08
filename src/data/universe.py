@@ -170,18 +170,15 @@ def list_universe_names() -> list[str]:
     return ["SP500", "US_ACTIVE"] + sorted(_BUILTIN_UNIVERSES.keys())
 
 
-def get_universe(name: str | None = None, force_refresh: bool = False) -> pd.DataFrame:
+def get_universe(name: str, force_refresh: bool = False) -> pd.DataFrame:
     """
     返回指定股票池 DataFrame：ticker / name / sector / sub_industry。
 
     Parameters
     ----------
-    name : str | None
+    name : str
         股票池名（"SP500" / "MAG7" / "CUSTOM"）。
-        若 None，则从配置 CONFIG.universe.name 读取（向后兼容旧调用）。
     """
-    if name is None:
-        name = str(CONFIG.universe.name)
     name = name.upper()
 
     if name == "CUSTOM":
@@ -210,12 +207,4 @@ def get_universe(name: str | None = None, force_refresh: bool = False) -> pd.Dat
     )
 
 
-def get_sector_map(name: str | None = None) -> pd.Series:
-    """返回 ticker -> sector 的映射 Series。"""
-    df = get_universe(name=name)
-    if "sector" not in df.columns:
-        return pd.Series(dtype="object", name="sector")
-    return df.set_index("ticker")["sector"]
-
-
-__all__ = ["get_universe", "get_sector_map", "list_universe_names"]
+__all__ = ["get_universe", "list_universe_names"]

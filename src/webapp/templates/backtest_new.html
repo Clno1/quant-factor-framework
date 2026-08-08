@@ -91,8 +91,8 @@
         <summary>高级选项 · 成交模型</summary>
         <div class="form-advanced-body">
             <div class="form-hint" style="margin-bottom: 12px;">
-                让回测尽量接近实盘可达上限。<b>next_open</b>（推荐）= T 日决策，T+1 开盘价成交；
-                <b>close</b> = T 日收盘价立刻成交（理论上限，未来函数性偏差）。
+                信号在 T 日收盘后完成，统一于 T+1 开盘成交。系统不允许使用已经观察到的
+                T 日收盘价成交。
                 默认使用 <b>{{ default_exec.fee_model }}</b> 费用模型和 <b>{{ default_exec.slippage_model }}</b> 滑点模型，
                 并在每次调仓时按逐票权重、估算股数、成交价和费用明细扣减。
             </div>
@@ -104,9 +104,6 @@
                     <select id="exec-timing" class="form-input">
                         <option value="next_open" {% if default_exec.timing == 'next_open' %}selected{% endif %}>
                             next_open · T+1 开盘价（推荐）
-                        </option>
-                        <option value="close" {% if default_exec.timing == 'close' %}selected{% endif %}>
-                            close · T 日收盘价（理论上限）
                         </option>
                     </select>
                 </div>

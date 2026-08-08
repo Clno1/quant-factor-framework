@@ -1,0 +1,30 @@
+[Unit]
+Description=Publish main-factor research from validated daily bars (root deployment)
+After=quant-market-data.service
+StartLimitIntervalSec=6h
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/home/projects/quant
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONPATH=/home/projects/quant
+Environment=MPLCONFIGDIR=/home/projects/quant/data/cache/matplotlib
+ExecStartPre=/home/projects/quant/.venv-worker/bin/python -c "import duckdb, exchange_calendars, matplotlib, sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
+ExecStart=/home/projects/quant/.venv-worker/bin/python /home/projects/quant/scripts/run_factor_research.py
+TimeoutStartSec=5h
+Restart=on-failure
+RestartSec=30min
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/projects/quant/data /home/projects/quant/outputs /home/projects/quant/logs
+ReadWritePaths=-/home/projects/quant/runlog
+
+[Install]
+WantedBy=multi-user.target

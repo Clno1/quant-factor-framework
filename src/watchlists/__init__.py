@@ -8,7 +8,7 @@ Watchlist 是一批带权重的股票集合：
 支持：
   - CRUD（允许同名，按 UUID 唯一）
   - 编辑（改名、增减 ticker、改权重）
-  - 老回测通过 strategy_snapshot/watchlist_snapshot 冻结保护
+  - 回测通过 strategy_snapshot/watchlist_snapshot 冻结保护
 """
 from src.watchlists.definition import (
     WatchlistDefinition,

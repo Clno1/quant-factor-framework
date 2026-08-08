@@ -2,7 +2,7 @@
 
 This package implements a local FMP-driven simulation account. It is not a
 broker paper account; orders, fills, positions, and PnL are simulated and
-persisted under ``outputs/papertrading``.
+persisted transactionally in the application SQLite database.
 """
 
 from src.papertrading.definition import PaperTradingValidationError

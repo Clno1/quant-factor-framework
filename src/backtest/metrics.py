@@ -105,7 +105,12 @@ def information_ratio(excess_ret: pd.Series) -> float:
 
 
 def beta_to_benchmark(strategy_ret: pd.Series, benchmark_ret: pd.Series) -> float:
-    pair = pd.concat([strategy_ret, benchmark_ret], axis=1, keys=["s", "b"]).dropna()
+    pair = pd.concat(
+        [strategy_ret, benchmark_ret],
+        axis=1,
+        keys=["s", "b"],
+        sort=False,
+    ).dropna()
     if pair.empty:
         return np.nan
     var_b = pair["b"].var(ddof=1)
@@ -120,7 +125,10 @@ def relative_performance_summary(
 ) -> dict:
     """Benchmark-relative metrics for daily strategy and benchmark returns."""
     pair = pd.concat(
-        [strategy_ret, benchmark_ret], axis=1, keys=["strategy", "benchmark"]
+        [strategy_ret, benchmark_ret],
+        axis=1,
+        keys=["strategy", "benchmark"],
+        sort=False,
     ).dropna()
     if pair.empty:
         return {

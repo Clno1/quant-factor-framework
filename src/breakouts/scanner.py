@@ -1,24 +1,19 @@
-"""Daily momentum-breakout scanner built on the repository OHLCV cache."""
+"""Daily momentum-breakout scanner built on published market-data versions."""
 from __future__ import annotations
 
 from collections import Counter
 from dataclasses import asdict, dataclass
-from datetime import timedelta
 import math
-from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 import numpy as np
 import pandas as pd
 
-from src.config import PROJECT_ROOT
-from src.utils.io import read_parquet, write_parquet
+from src.data.foundation import DataFoundationError, MarketDataReader
+from src.data.universe_ids import US_LIQUID_5M, resolve_market_data_universe
 from src.utils.logger import get_logger
 
 log = get_logger(__name__)
-
-_DAILY_CACHE_DIR = PROJECT_ROOT / "data" / "raw" / "ohlcv"
-
 
 @dataclass(frozen=True)
 class BreakoutFilters:
@@ -61,10 +56,8 @@ def _normalize_daily(frame: pd.DataFrame) -> pd.DataFrame:
     out = frame.copy()
     out.index = pd.to_datetime(out.index, errors="coerce")
     out = out.loc[~out.index.isna()].sort_index()
-    # The breakout scanner only consumes the five base columns, but this cache
-    # is shared with the multi-factor pipeline, which requires adj_close.  Keep
-    # it whenever it is present instead of destructively narrowing the Parquet
-    # schema during a daily append.
+    # Keep adjusted close from the published version even though the breakout
+    # calculation currently consumes only the five base OHLCV columns.
     preserved = [*required, "adj_close"] if "adj_close" in out.columns else required
     for col in preserved:
         out[col] = pd.to_numeric(out[col], errors="coerce")
@@ -73,52 +66,77 @@ def _normalize_daily(frame: pd.DataFrame) -> pd.DataFrame:
     return out[preserved]
 
 
-def _daily_cache_path(ticker: str) -> Path:
-    return _DAILY_CACHE_DIR / f"{ticker.upper().strip()}.parquet"
-
-
-def load_daily_frame(ticker: str) -> pd.DataFrame:
-    path = _daily_cache_path(ticker)
-    if not path.exists():
-        return pd.DataFrame()
+def load_daily_frames(
+    tickers: Iterable[str],
+    *,
+    data_universe: str = US_LIQUID_5M,
+    dataset_version_id: str | None = None,
+) -> dict[str, pd.DataFrame]:
+    """Load all requested symbols from one immutable published version."""
+    normalized = list(
+        dict.fromkeys(
+            str(ticker).strip().upper()
+            for ticker in tickers
+            if str(ticker).strip()
+        )
+    )
+    resolved = resolve_market_data_universe(data_universe)
     try:
-        return _normalize_daily(read_parquet(path))
-    except Exception as exc:  # noqa: BLE001
-        log.warning("Cannot read breakout daily cache %s: %s", path, exc)
-        return pd.DataFrame()
+        bars = MarketDataReader().load_bars(
+            resolved,
+            tickers=normalized,
+            version=dataset_version_id,
+        )
+    except DataFoundationError as exc:
+        log.warning("Published breakout data unavailable for %s: %s", resolved, exc)
+        return {}
+
+    frames: dict[str, pd.DataFrame] = {}
+    for ticker, group in bars.groupby("ticker", sort=False):
+        frame = (
+            group.set_index("date")[
+                ["open", "high", "low", "close", "adj_close", "volume"]
+            ]
+            .sort_index()
+        )
+        normalized_frame = _normalize_daily(frame)
+        if not normalized_frame.empty:
+            frames[str(ticker).upper()] = normalized_frame
+    return frames
+
+
+def load_daily_frame(
+    ticker: str,
+    *,
+    data_universe: str = US_LIQUID_5M,
+    dataset_version_id: str | None = None,
+) -> pd.DataFrame:
+    ticker = ticker.upper().strip()
+    return load_daily_frames(
+        [ticker],
+        data_universe=data_universe,
+        dataset_version_id=dataset_version_id,
+    ).get(ticker, pd.DataFrame())
 
 
 def refresh_daily_frame(
     ticker: str,
     *,
     end: str | pd.Timestamp,
+    data_universe: str = US_LIQUID_5M,
+    dataset_version_id: str | None = None,
 ) -> tuple[pd.DataFrame, str]:
-    """Refresh only one symbol through ``end`` and merge it into the daily cache."""
+    """Return published data and report whether it covers ``end``."""
     ticker = ticker.upper().strip()
     target = pd.Timestamp(end).normalize()
-    cached = load_daily_frame(ticker)
+    cached = load_daily_frame(
+        ticker,
+        data_universe=data_universe,
+        dataset_version_id=dataset_version_id,
+    )
     if not cached.empty and pd.Timestamp(cached.index.max()).normalize() >= target:
-        return cached, "cache"
-    try:
-        from src.data.fmp import get_historical_ohlcv
-
-        if cached.empty:
-            start = target - timedelta(days=180)
-        else:
-            start = pd.Timestamp(cached.index.max()).normalize() - timedelta(days=10)
-        incoming = get_historical_ohlcv(
-            ticker,
-            start.strftime("%Y-%m-%d"),
-            target.strftime("%Y-%m-%d"),
-            dividend_adjusted=True,
-        )
-        if incoming is not None and not incoming.empty:
-            combined = _merge_daily_cache(cached, incoming)
-            write_parquet(combined, _daily_cache_path(ticker))
-            return combined, "live-cache"
-    except Exception as exc:  # noqa: BLE001
-        log.warning("Cannot refresh %s daily breakout cache: %s", ticker, exc)
-    return cached, "cache-fallback" if not cached.empty else "unavailable"
+        return cached, "published"
+    return cached, "published-stale" if not cached.empty else "unavailable"
 
 
 def _latest_covered_date(
@@ -318,11 +336,16 @@ def scan_breakouts(
     asof: str | pd.Timestamp | None = None,
     names: Mapping[str, str] | None = None,
     sectors: Mapping[str, str] | None = None,
+    data_universe: str = US_LIQUID_5M,
+    dataset_version_id: str | None = None,
 ) -> dict[str, Any]:
     filters = (filters or BreakoutFilters()).normalized()
     normalized_tickers = list(dict.fromkeys(str(t).strip().upper() for t in tickers if str(t).strip()))
-    frames = {ticker: load_daily_frame(ticker) for ticker in normalized_tickers}
-    frames = {ticker: frame for ticker, frame in frames.items() if not frame.empty}
+    frames = load_daily_frames(
+        normalized_tickers,
+        data_universe=data_universe,
+        dataset_version_id=dataset_version_id,
+    )
     decision_date = _latest_covered_date(frames, asof)
 
     rows: list[dict[str, Any]] = []
@@ -370,19 +393,10 @@ def scan_breakouts(
         "setup_count": sum(row["setup_qualified"] for row in rows),
         "stale_tickers": stale,
         "missing_tickers": insufficient,
+        "data_universe": resolve_market_data_universe(data_universe),
+        "dataset_version_id": dataset_version_id,
         "rows": rows,
     }
-
-
-def _merge_daily_cache(existing: pd.DataFrame, incoming: pd.DataFrame) -> pd.DataFrame:
-    if existing.empty:
-        return incoming.sort_index()
-    if incoming.empty:
-        return existing.sort_index()
-    # A live refresh must not revise bars that already produced a displayed
-    # scan. FMP can restate older OHLC values, so only append missing dates.
-    combined = pd.concat([existing, incoming])
-    return _normalize_daily(combined.loc[~combined.index.duplicated(keep="first")])
 
 
 def load_market_regime(
@@ -390,29 +404,22 @@ def load_market_regime(
     asof: str | pd.Timestamp,
     symbol: str = "QQQ",
     fetch_missing: bool = True,
+    data_universe: str = US_LIQUID_5M,
+    dataset_version_id: str | None = None,
 ) -> dict[str, Any]:
     """Evaluate the Qullamaggie market filter on daily QQQ/IWM data."""
     symbol = symbol.upper().strip()
     target = pd.Timestamp(asof).normalize()
-    frame = load_daily_frame(symbol)
+    frame = load_daily_frame(
+        symbol,
+        data_universe=data_universe,
+        dataset_version_id=dataset_version_id,
+    )
     covered = not frame.empty and pd.Timestamp(frame.index.max()).normalize() >= target
 
-    if fetch_missing and not covered:
-        try:
-            from src.data.fmp import get_historical_ohlcv
-
-            start = (target - timedelta(days=180)).strftime("%Y-%m-%d")
-            incoming = get_historical_ohlcv(
-                symbol,
-                start,
-                target.strftime("%Y-%m-%d"),
-                dividend_adjusted=True,
-            )
-            if incoming is not None and not incoming.empty:
-                frame = _merge_daily_cache(frame, incoming)
-                write_parquet(frame, _daily_cache_path(symbol))
-        except Exception as exc:  # noqa: BLE001
-            log.warning("Cannot refresh %s market regime: %s", symbol, exc)
+    # Kept in the public signature because callers decide whether stale data is
+    # acceptable. Missing bars are fulfilled only by the centralized writer.
+    del fetch_missing, covered
 
     frame = _normalize_daily(frame)
     frame = frame.loc[frame.index <= target]
@@ -451,6 +458,7 @@ __all__ = [
     "BreakoutFilters",
     "evaluate_daily_setup",
     "load_daily_frame",
+    "load_daily_frames",
     "load_market_regime",
     "refresh_daily_frame",
     "scan_breakouts",

@@ -67,6 +67,60 @@ def _nested_get(d: dict[str, Any], path: str, default: Any) -> Any:
     return cur
 
 
+def _nested_set(d: dict[str, Any], path: str, value: Any) -> None:
+    parts = path.split(".")
+    current = d
+    for part in parts[:-1]:
+        child = current.get(part)
+        if not isinstance(child, dict):
+            child = {}
+            current[part] = child
+        current = child
+    current[parts[-1]] = value
+
+
+def _validated_number(
+    cfg: dict[str, Any],
+    path: str,
+    *,
+    default: float,
+    minimum: float = 0.0,
+    maximum: float | None = None,
+    strictly_positive: bool = False,
+) -> float:
+    raw = _nested_get(cfg, path, default)
+    try:
+        value = float(default if raw is None else raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"execution.{path} must be numeric") from exc
+    if not math.isfinite(value):
+        raise ValueError(f"execution.{path} must be finite")
+    if strictly_positive and value <= minimum:
+        raise ValueError(f"execution.{path} must be greater than {minimum}")
+    if not strictly_positive and value < minimum:
+        raise ValueError(f"execution.{path} must be at least {minimum}")
+    if maximum is not None and value > maximum:
+        raise ValueError(f"execution.{path} must be at most {maximum}")
+    _nested_set(cfg, path, value)
+    return value
+
+
+def _validated_bool(cfg: dict[str, Any], path: str, *, default: bool) -> bool:
+    raw = _nested_get(cfg, path, default)
+    if isinstance(raw, bool):
+        value = raw
+    elif isinstance(raw, int) and raw in {0, 1}:
+        value = bool(raw)
+    elif isinstance(raw, str) and raw.strip().casefold() in {
+        "true", "false", "1", "0",
+    }:
+        value = raw.strip().casefold() in {"true", "1"}
+    else:
+        raise ValueError(f"execution.{path} must be boolean")
+    _nested_set(cfg, path, value)
+    return value
+
+
 def resolve_execution_config(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
     """Resolve task/account execution config against global defaults."""
     defaults = _plain_dict(getattr(CONFIG.backtest, "execution", {}))
@@ -81,6 +135,7 @@ def resolve_execution_config(overrides: dict[str, Any] | None = None) -> dict[st
             "fallback_bps": 5.0,
             "spread_bps": 2.0,
             "volume_limit": 0.025,
+            "adv_window": 20,
             "price_impact": 0.10,
         },
         "fees": {
@@ -131,9 +186,92 @@ def resolve_execution_config(overrides: dict[str, Any] | None = None) -> dict[st
         raise ValueError(f"Unknown fee_model={cfg['fee_model']!r}")
     if cfg["slippage_model"] not in ALLOWED_SLIPPAGE_MODELS:
         raise ValueError(f"Unknown slippage_model={cfg['slippage_model']!r}")
-    cfg["slippage_bps"] = float(cfg.get("slippage_bps") or 0.0)
-    cfg["commission_bps"] = float(cfg.get("commission_bps") or 0.0)
-    cfg["portfolio_value"] = float(cfg.get("portfolio_value") or 100000.0)
+
+    _validated_number(
+        cfg,
+        "portfolio_value",
+        default=100000.0,
+        strictly_positive=True,
+    )
+    for path, default in (
+        ("slippage_bps", 0.0),
+        ("commission_bps", 0.0),
+        ("slippage.fallback_bps", 0.0),
+        ("slippage.spread_bps", 0.0),
+        ("slippage.price_impact", 0.0),
+        ("fees.simple_bps", 0.0),
+        ("fees.exchange_fee_bps", 0.0),
+        ("fees.ibkr_us_pro_fixed.per_share", 0.0),
+        ("fees.ibkr_us_pro_fixed.min_per_order", 0.0),
+        ("fees.ibkr_us_pro_fixed.max_pct_trade_value", 0.0),
+        ("fees.ibkr_us_pro_tiered.per_share", 0.0),
+        ("fees.ibkr_us_pro_tiered.min_per_order", 0.0),
+        ("fees.ibkr_us_pro_tiered.max_pct_trade_value", 0.0),
+        ("fees.ibkr_us_lite.per_share", 0.0),
+        ("fees.ibkr_us_lite.min_per_order", 0.0),
+        ("fees.ibkr_us_lite.max_pct_trade_value", 0.0),
+        ("fees.regulatory.sec_sell_rate", 0.0),
+        ("fees.regulatory.finra_taf_per_share", 0.0),
+        ("fees.regulatory.finra_taf_cap", 0.0),
+        ("fees.regulatory.finra_cat_per_share", 0.0),
+        ("fees.clearing.nscc_dtc_per_share", 0.0),
+        ("fees.clearing.nscc_dtc_cap_pct_trade_value", 0.0),
+        ("fees.pass_through.nyse_rate_on_commission", 0.0),
+        ("fees.pass_through.finra_rate_on_commission", 0.0),
+    ):
+        if path.endswith(("max_pct_trade_value", "cap_pct_trade_value")):
+            maximum = 1.0
+        elif path in {
+            "slippage_bps",
+            "commission_bps",
+            "slippage.fallback_bps",
+            "slippage.spread_bps",
+            "fees.simple_bps",
+            "fees.exchange_fee_bps",
+        }:
+            maximum = 1000.0
+        else:
+            maximum = None
+        _validated_number(
+            cfg,
+            path,
+            default=default,
+            maximum=maximum,
+        )
+    _validated_number(
+        cfg,
+        "slippage.volume_limit",
+        default=0.025,
+        maximum=1.0,
+    )
+    _validated_number(
+        cfg,
+        "min_open_coverage",
+        default=0.95,
+        maximum=1.0,
+    )
+    if "min_order_value" in cfg:
+        _validated_number(
+            cfg,
+            "min_order_value",
+            default=0.0,
+        )
+    adv_window = _validated_number(
+        cfg,
+        "slippage.adv_window",
+        default=20.0,
+        strictly_positive=True,
+    )
+    if not float(adv_window).is_integer():
+        raise ValueError("execution.slippage.adv_window must be an integer")
+    _nested_set(cfg, "slippage.adv_window", int(adv_window))
+    for path in (
+        "fees.include_regulatory",
+        "fees.include_cat",
+        "fees.include_clearing",
+        "fees.include_pass_through",
+    ):
+        _validated_bool(cfg, path, default=True)
     return cfg
 
 
@@ -171,8 +309,22 @@ def calculate_slippage_bps(
                 "participation_rate": 0.0,
                 "impact_bps": fallback_bps,
             }
-        volume_limit = float(_nested_get(execution, "slippage.volume_limit", 0.025) or 0.025)
-        price_impact = float(_nested_get(execution, "slippage.price_impact", 0.10) or 0.10)
+        volume_limit_value = _nested_get(
+            execution,
+            "slippage.volume_limit",
+            0.025,
+        )
+        price_impact_value = _nested_get(
+            execution,
+            "slippage.price_impact",
+            0.10,
+        )
+        volume_limit = float(
+            0.025 if volume_limit_value is None else volume_limit_value
+        )
+        price_impact = float(
+            0.10 if price_impact_value is None else price_impact_value
+        )
         spread_bps = float(_nested_get(execution, "slippage.spread_bps", 0.0) or 0.0)
         participation = qty / vol
         capped_participation = min(max(participation, 0.0), max(volume_limit, 0.0))
@@ -186,6 +338,31 @@ def calculate_slippage_bps(
 
     # Unknown model: be conservative and use the legacy bps fallback.
     return {"model": "fallback_constant_bps", "slippage_bps": fallback_bps, "participation_rate": 0.0, "impact_bps": fallback_bps}
+
+
+def max_volume_fill_quantity(
+    *,
+    requested_quantity: float,
+    volume: float | None,
+    execution: dict[str, Any],
+) -> float:
+    """Return the maximum quantity allowed by the configured volume share."""
+    requested = max(0.0, abs(float(requested_quantity or 0.0)))
+    model = str(execution.get("slippage_model") or "").lower()
+    if model != "volume_share":
+        return requested
+    try:
+        reference_volume = float(volume) if volume is not None else 0.0
+    except (TypeError, ValueError):
+        reference_volume = 0.0
+    if not math.isfinite(reference_volume) or reference_volume <= 0:
+        # A volume-share model cannot prove liquidity without a volume
+        # reference. Returning zero makes callers reject or defer the fill
+        # instead of silently treating the cap as unlimited.
+        return 0.0
+    limit_value = _nested_get(execution, "slippage.volume_limit", 0.025)
+    volume_limit = float(0.025 if limit_value is None else limit_value)
+    return min(requested, max(0.0, reference_volume * volume_limit))
 
 
 def _commission_with_cap(
@@ -297,8 +474,14 @@ def calculate_execution(
 ) -> dict[str, Any]:
     """Calculate fill price, slippage cost, and fees for one order."""
     side = str(side or "").upper()
-    qty = abs(float(quantity or 0.0))
+    qty = float(quantity or 0.0)
     raw = float(raw_price or 0.0)
+    if side not in {"BUY", "SELL"}:
+        raise ValueError("side must be BUY or SELL")
+    if not math.isfinite(qty) or not math.isfinite(raw) or qty < 0 or raw <= 0:
+        raise ValueError(
+            "quantity must be finite and non-negative; raw_price must be positive"
+        )
     slip = calculate_slippage_bps(
         side=side,
         quantity=qty,
@@ -307,6 +490,10 @@ def calculate_execution(
         execution=execution,
     )
     slip_bps = float(slip["slippage_bps"])
+    if not math.isfinite(slip_bps) or slip_bps < 0 or slip_bps >= 10000:
+        raise ValueError(
+            "calculated slippage must be finite and below 10000 bps"
+        )
     sign = 1.0 if side == "BUY" else -1.0
     fill_price = raw * (1.0 + sign * slip_bps / 10000.0)
     slippage_cost = qty * raw * slip_bps / 10000.0

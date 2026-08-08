@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
+import math
 from typing import Any
 from uuid import uuid4
 
@@ -85,6 +86,14 @@ class StrategyDefinition:
                 raise StrategyValidationError(f"因子 {c.factor_id} 权重不能为空")
             if not isinstance(c.weight, (int, float)):
                 raise StrategyValidationError(f"因子 {c.factor_id} 权重必须为数字")
+            if not math.isfinite(float(c.weight)):
+                raise StrategyValidationError(
+                    f"因子 {c.factor_id} 权重必须是有限数字"
+                )
+            if abs(float(c.weight)) <= 0.0:
+                raise StrategyValidationError(
+                    f"因子 {c.factor_id} 权重不能为 0；不使用的因子应删除"
+                )
         total_abs = sum(abs(c.weight) for c in self.components)
         if total_abs <= 0:
             raise StrategyValidationError("权重不能全部为 0")

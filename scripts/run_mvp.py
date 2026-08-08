@@ -8,8 +8,8 @@ Multi-Factor Quant pipeline 一键脚本（支持多股票池）。
   Web 页面大部分时候只是读取这些 outputs，不会在每次打开页面时重新计算因子。
 
 步骤（对每个启用的股票池循环执行）：
-  1. 抓取股票池成分股（本地缓存）
-  2. 下载日线 OHLCV（本地 Parquet 缓存）
+  1. 绑定一个已经通过质量门禁的 DuckDB/Parquet 行情版本
+  2. 读取该版本冻结的 OHLCV 与 PIT/成员快照
   3. 构建宽表（adj_close / returns / sector ...）
   4. 对每个启用因子：
      a. 计算因子值
@@ -24,7 +24,7 @@ Multi-Factor Quant pipeline 一键脚本（支持多股票池）。
     python scripts/run_mvp.py --no-web              # 不启动 Web
     python scripts/run_mvp.py --serve-only          # 只启 Web
     python scripts/run_mvp.py --only-universe MAG7  # 只跑 MAG7
-    python scripts/run_mvp.py --universe 20         # smoke test：SP500 取前 20 只
+    python scripts/run_mvp.py --only-universe MAG7 --universe 5  # 静态池 smoke test
 
 推荐阅读顺序：
   main() -> run_pipeline() -> run_pipeline_for_universe()
@@ -36,6 +36,8 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+
+import pandas as pd
 
 # 直接运行 `python scripts/run_mvp.py` 时，Python 默认只把 scripts/
 # 放进 import 搜索路径。这里手动把项目根目录加入 sys.path，
@@ -51,10 +53,22 @@ from src.analysis import (  # noqa: E402
     ic_summary,
 )
 from src.backtest import double_sort_backtest, quintile_backtest  # noqa: E402
+from src.backtest.quintile import build_tradable_mask  # noqa: E402
 from src.config import CONFIG  # noqa: E402
-from src.data import build_wide_tables, get_universe  # noqa: E402
+from src.data import build_wide_tables  # noqa: E402
+from src.data.foundation import MarketDataReader  # noqa: E402
+from src.data.pit import (  # noqa: E402
+    build_membership_mask,
+    point_in_time_required,
+)
 from src.factors import FACTOR_REGISTRY, get_factor  # noqa: E402
+from src.factors.artifacts import save_factor_matrix_bundle  # noqa: E402
+from src.factors.publication import (  # noqa: E402
+    dataset_version_provenance,
+    publish_factor_research,
+)
 from src.preprocessing import preprocess_factor  # noqa: E402
+from src.utils.file_lock import file_lock  # noqa: E402
 from src.utils.logger import get_logger  # noqa: E402
 from src.visualization.plots_mpl import (  # noqa: E402
     plot_drawdown_mpl,
@@ -67,7 +81,6 @@ from src.webapp.results_store import (  # noqa: E402
     factor_dir,
     save_factor_artifacts,
     save_factor_confidence_artifacts,
-    save_factor_values,
 )
 
 log = get_logger("run_mvp")
@@ -80,17 +93,16 @@ def parse_args() -> argparse.Namespace:
     这个函数只负责把用户在终端输入的选项翻译成 args 对象，不做任何业务计算。
     例如：
       --serve-only  只启动网页，不重新计算因子/回测
-      --update      强制刷新数据，并且不启动网页
-      --universe 20 只取每个股票池前 20 只股票做快速烟测
+      --update      用最新已发布数据重算研究产物，并且不启动网页
+      --universe 5  只截取静态股票池做快速烟测；动态 PIT 股票池禁止截断
     """
     p = argparse.ArgumentParser(description="Run Multi-Factor Quant pipeline.")
     p.add_argument("--no-web", action="store_true", help="不启动 Web 服务，只跑计算")
     p.add_argument("--serve-only", action="store_true", help="跳过计算，直接启动 Web")
-    p.add_argument("--force-refresh", action="store_true", help="强制刷新数据")
     p.add_argument("--update", action="store_true",
-                   help="快捷指令：刷新到今天（等价于 --force-refresh + --no-web）")
+                   help="快捷指令：用最新发布数据重算研究（等价于 --no-web）")
     p.add_argument("--universe", type=int, default=None,
-                   help="smoke test：仅取每个池的前 N 只股票")
+                   help="smoke test：仅截取静态池前 N 只；动态 PIT 池禁止使用")
     p.add_argument("--only-universe", default=None,
                    help="只跑指定股票池（如 MAG7 / SP500）")
     p.add_argument("--host", default=None, help="覆盖 Web host")
@@ -102,23 +114,12 @@ def _enabled_universes() -> list[str]:
     """
     从配置中读出要跑哪些股票池。
 
-    新配置使用：
-      CONFIG.universes.enabled = ["SP500", "MAG7"]
-    老配置只有：
-      CONFIG.universe.name = "SP500"
-
-    这里保留老配置 fallback，是为了让旧配置文件也能继续运行。
+    配置使用 ``CONFIG.universes.enabled``，空列表属于配置错误。
     """
-    universes = getattr(CONFIG, "universes", None)
-    if universes is not None:
-        try:
-            lst = list(universes.enabled or [])
-            if lst:
-                return [str(u).upper() for u in lst]
-        except AttributeError:
-            pass
-    # fallback 老配置
-    return [str(CONFIG.universe.name).upper()]
+    values = [str(value).upper() for value in CONFIG.universes.enabled]
+    if not values:
+        raise ValueError("universes.enabled must contain at least one universe")
+    return values
 
 
 def _min_stocks_for(n_universe: int) -> int:
@@ -138,22 +139,13 @@ def _min_stocks_for(n_universe: int) -> int:
 
 
 def _factor_confidence_enabled() -> bool:
-    """
-    判断是否启用因子置信评估。
-
-    新配置里有 CONFIG.factor_confidence.enabled。
-    如果用户还在用旧配置，没有这个字段，则默认启用，保证新功能可见。
-    """
-    try:
-        return bool(CONFIG.factor_confidence.enabled)
-    except AttributeError:
-        return True
+    """Return the required factor-confidence publication switch."""
+    return bool(CONFIG.factor_confidence.enabled)
 
 
 def run_pipeline_for_universe(
     universe: str,
     universe_limit: int | None = None,
-    force_refresh: bool = False,
 ) -> None:
     """
     跑完“一个股票池”的全部离线研究流程。
@@ -163,9 +155,6 @@ def run_pipeline_for_universe(
         股票池名称，例如 SP500 / MAG7。
       universe_limit:
         只取前 N 只股票，通常用于 smoke test，不用于正式研究。
-      force_refresh:
-        是否忽略本地缓存，重新拉取/重建行情数据。
-
     这个函数是本脚本最重要的函数。它的输出不是 return 值，而是写入：
       outputs/universes/<UNIVERSE>/factors/<FACTOR>/
     后续 Web 页面、策略融合、回测任务都会依赖这些产物。
@@ -174,12 +163,42 @@ def run_pipeline_for_universe(
     log.info("# Universe: %s", universe)
     log.info("#" * 70)
 
-    # 1) 取得股票池成分股。
-    #    get_universe 会优先读缓存；force_refresh=True 时会重新抓取。
-    uni = get_universe(name=universe, force_refresh=force_refresh)
+    pit_required = point_in_time_required(
+        universe,
+        strict=bool(
+            getattr(
+                CONFIG.backtest,
+                "require_point_in_time_universe",
+                False,
+            )
+        ),
+    )
+    membership_kwargs: dict = {}
+
+    # 1) 取得与行情同版本的股票池和 PIT 快照。研究端不访问网络，
+    #    因而不会把“今天的成分股”错误地配到“昨天的数据版本”上。
+    reader = MarketDataReader()
+    data_version = reader.require_latest(universe)
+    data_provenance = dataset_version_provenance(data_version)
+    current_members = reader.load_universe(universe, current_only=True)
+    all_version_members = reader.load_universe(universe, current_only=False)
+    if universe_limit and pit_required:
+        raise ValueError(
+            f"Strict PIT universe {universe} cannot be published with "
+            "--universe N because historical constituents would be truncated"
+        )
     if universe_limit:
-        uni = uni.head(universe_limit)
-    tickers = uni["ticker"].tolist()
+        tickers = current_members.head(universe_limit)["ticker"].astype(str).tolist()
+    else:
+        tickers = all_version_members["ticker"].astype(str).tolist()
+    membership_kwargs = {
+        "membership_override": reader.load_membership(
+            universe,
+            version=data_version,
+        ),
+        "membership_source": data_version.membership_path,
+        "membership_source_sha256": data_version.membership_checksum_sha256,
+    }
     log.info("[%s] Universe size: %d tickers", universe, len(tickers))
 
     # 2) 把每只股票的 OHLCV 日线行情整理成“宽表”：
@@ -187,7 +206,7 @@ def run_pipeline_for_universe(
     #      columns = ticker
     #    wide["adj_close"]、wide["open"]、wide["returns"] 都是这种形状。
     #    后续因子、IC、回测都围绕这些宽表计算。
-    wide = build_wide_tables(tickers=tickers, universe=universe, force=force_refresh)
+    wide = build_wide_tables(tickers=tickers, universe=universe)
     adj_close = wide["adj_close"]
     returns = wide["returns"]
     log.info("[%s] adj_close shape=%s, returns shape=%s",
@@ -197,11 +216,43 @@ def run_pipeline_for_universe(
         log.error("[%s] No price data available, skip.", universe)
         return
 
+    membership_mask, pit_diagnostics = build_membership_mask(
+        adj_close.index,
+        adj_close.columns,
+        universe,
+        required=pit_required,
+        **membership_kwargs,
+    )
+    if membership_mask is None:
+        membership_mask = pd.DataFrame(
+            True,
+            index=adj_close.index,
+            columns=adj_close.columns,
+        )
+    base_tradable_mask = build_tradable_mask(
+        index=adj_close.index,
+        columns=adj_close.columns,
+        returns_df=returns,
+        price_df=adj_close,
+        open_df=wide.get("open"),
+        volume_df=wide.get("volume"),
+        timing="next_open",
+    ) & membership_mask
+    log.info(
+        "[%s] PIT membership: %s",
+        universe,
+        pit_diagnostics.to_dict(),
+    )
+
     enabled = list(CONFIG.factors.enabled)
     log.info("[%s] Enabled factors: %s", universe, enabled)
     if not enabled:
-        log.warning("No factors enabled in config. Exiting.")
-        return
+        raise ValueError("No factors enabled in config")
+    missing_factors = sorted(set(enabled) - set(FACTOR_REGISTRY))
+    if missing_factors:
+        raise ValueError(
+            f"Enabled factors are not registered: {missing_factors}"
+        )
 
     min_stocks = _min_stocks_for(adj_close.shape[1])
     log.info("[%s] IC min_stocks (adaptive) = %d", universe, min_stocks)
@@ -224,10 +275,13 @@ def run_pipeline_for_universe(
         # 4) 计算原始因子值。
         #    输入是 wide 行情宽表；输出仍然是 date x ticker 的 DataFrame。
         #    例如 MOM_12M 会用 adj_close 计算 12 个月动量。
-        raw = factor.compute_from_wide(wide)
+        raw = factor.compute_from_wide(wide).reindex(
+            index=membership_mask.index,
+            columns=membership_mask.columns,
+        )
+        raw = raw.where(membership_mask)
         log.info("Raw factor shape=%s, non-NaN coverage=%.2f%%",
                  raw.shape, 100 * raw.notna().mean().mean())
-
         # 5) 预处理因子。
         #    典型步骤：去极值、可选行业/市值中性化、最终横截面 Z-score。
         #    后续 IC 和回测使用 clean，而不是 raw。
@@ -238,9 +292,28 @@ def run_pipeline_for_universe(
         )
         log.info("Preprocessed shape=%s", clean.shape)
 
-        # 落盘因子原始值矩阵（用于策略合成 composer 读取）
-        save_factor_values(fname, clean, universe=universe)
-        log.info("[%s] factor_values.parquet saved for %s", universe, fname)
+        # raw + clean 必须作为同一代原子发布；composer 会校验 manifest
+        # 和两个文件的 SHA-256，拒绝新旧文件混用。
+        save_factor_matrix_bundle(
+            fname,
+            raw=raw,
+            clean=clean,
+            universe=universe,
+            provenance={
+                "factor_module": factor.__class__.__module__,
+                "factor_class": factor.__class__.__qualname__,
+                "factor_parameters": dict(vars(factor)),
+                "factor_direction": factor.direction,
+                "preprocessing": dict(CONFIG.preprocessing),
+                "point_in_time_universe": pit_diagnostics.to_dict(),
+                "data_foundation": data_provenance,
+            },
+        )
+        log.info(
+            "[%s] verified raw/clean factor bundle saved for %s",
+            universe,
+            fname,
+        )
 
         # 6) 计算单因子 IC。
         #    IC 使用 factor_t 对齐未来 N 日收益，避免使用未来信息。
@@ -266,6 +339,7 @@ def run_pipeline_for_universe(
             open_df=wide.get("open"),
             price_df=wide.get("adj_close"),
             volume_df=wide.get("volume"),
+            tradable_mask=base_tradable_mask,
         )
 
         # If point-in-time market cap is available, persist a size-controlled
@@ -279,10 +353,12 @@ def run_pipeline_for_universe(
                 clean,
                 mcap,
                 returns,
+                factor_direction=factor.direction,
                 rebalance_mode=str(getattr(CONFIG.backtest, "rebalance_mode", "every_n_days")),
                 open_df=wide.get("open"),
                 price_df=wide.get("adj_close"),
                 volume_df=wide.get("volume"),
+                tradable_mask=base_tradable_mask,
             )
             fdir = factor_dir(fname, universe=universe)
             ds.factor_returns.to_frame("returns").to_parquet(
@@ -363,6 +439,18 @@ def run_pipeline_for_universe(
                 art.report.get("summary", {}).get("q_value"),
             )
 
+    publication_path = publish_factor_research(
+        universe=universe,
+        version=data_version,
+        factor_ids=enabled,
+    )
+    log.info(
+        "[%s] Research publication committed for data version %s: %s",
+        universe,
+        data_version.version_id,
+        publication_path,
+    )
+
     log.info("=" * 60)
     log.info("[%s] Pipeline finished. Outputs in: outputs/universes/%s/factors/",
              universe, universe)
@@ -370,7 +458,6 @@ def run_pipeline_for_universe(
 
 def run_pipeline(
     universe_limit: int | None = None,
-    force_refresh: bool = False,
     only_universe: str | None = None,
 ) -> list[str]:
     """
@@ -396,7 +483,17 @@ def run_pipeline(
     failures: list[str] = []
     for uni in universes:
         try:
-            run_pipeline_for_universe(uni, universe_limit=universe_limit, force_refresh=force_refresh)
+            lock_path = (
+                PROJECT_ROOT
+                / "data"
+                / "catalog"
+                / f"factor-research-{uni}.lock"
+            )
+            with file_lock(lock_path):
+                run_pipeline_for_universe(
+                    uni,
+                    universe_limit=universe_limit,
+                )
         except Exception as e:  # noqa: BLE001
             log.exception("[%s] Pipeline failed: %s", uni, e)
             failures.append(uni)
@@ -411,9 +508,12 @@ def serve_web(host: str | None = None, port: int | None = None) -> None:
     网页读取的是 outputs/ 中已经生成好的产物。
     """
     import uvicorn
+    from src.webapp.security import validate_web_exposure
+
     h = host or CONFIG.webapp.host
     p = int(port or CONFIG.webapp.port)
     reload = bool(CONFIG.webapp.reload)
+    validate_web_exposure(h)
     log.info("Starting FastAPI on http://%s:%d (手机浏览器可访问局域网 IP)", h, p)
     uvicorn.run("src.webapp.app:app", host=h, port=p, reload=reload)
 
@@ -428,14 +528,12 @@ def main() -> int:
       3. 如果不是 --no-web，就启动 Web
     """
     args = parse_args()
-    # --update 是 --force-refresh + --no-web 的快捷写法
+    # 数据摄取由 scripts/run_data_pipeline.py 负责；这里仅重算研究产物。
     if args.update:
-        args.force_refresh = True
         args.no_web = True
     if not args.serve_only:
         failures = run_pipeline(
             universe_limit=args.universe,
-            force_refresh=args.force_refresh,
             only_universe=args.only_universe,
         )
         if failures:

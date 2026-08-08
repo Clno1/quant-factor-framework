@@ -43,6 +43,7 @@
                     <td>
                         <span class="status-pill status-{{ t.status }}">
                             {% if t.status == 'pending' %}待执行
+                            {% elif t.status == 'waiting_for_data' %}等待行情
                             {% elif t.status == 'running' %}运行中
                             {% elif t.status == 'success' %}成功
                             {% elif t.status == 'failed' %}失败

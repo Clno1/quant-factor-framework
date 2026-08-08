@@ -1,10 +1,10 @@
-"""CLI-side adapters for current FMP classification and local EOD data.
+"""CLI-side adapters for current FMP classification and published EOD data.
 
 The FMP adapter calls the FMP client directly; it never calls ``get_universe``
 and therefore cannot inherit that function's Wikipedia fallback.  Its cache is
 an immutable group-owned snapshot with a required provenance sidecar.  The EOD
-adapter only reads the repository's shared ``data/raw/ohlcv`` Parquet files and
-has no network path, which keeps Web requests artifact-only.
+adapter reads quality-approved versions through :class:`MarketDataReader` and
+has no network or legacy-file fallback.
 """
 from __future__ import annotations
 
@@ -20,10 +20,11 @@ import tempfile
 from typing import Any, Callable
 from uuid import uuid4
 
-import numpy as np
 import pandas as pd
 
 from src.config import CONFIG, PROJECT_ROOT
+from src.data.foundation import DataFoundationError, MarketDataReader
+from src.data.universe_ids import US_LIQUID_5M
 
 from .classification import (
     ClassificationValidationError,
@@ -56,8 +57,8 @@ class UncertifiedClassificationCacheError(GroupAnalyticsError):
     stage = "classification"
 
 
-class LocalMarketDataError(GroupAnalyticsError):
-    code = "LOCAL_MARKET_DATA_ERROR"
+class PublishedMarketDataError(GroupAnalyticsError):
+    code = "PUBLISHED_MARKET_DATA_ERROR"
     stage = "load_market_data"
 
 
@@ -700,99 +701,64 @@ class FMPCurrentClassificationProvider:
             ) from None
 
 
-def _default_raw_ohlcv_root() -> Path:
-    configured = Path(str(CONFIG.data.raw_dir))
-    root = configured if configured.is_absolute() else PROJECT_ROOT / configured
-    return root / "ohlcv"
+def _published_path(value: str) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else PROJECT_ROOT / path
 
 
-def _default_market_cap_path() -> Path:
-    configured = Path(str(CONFIG.data.processed_dir))
-    root = configured if configured.is_absolute() else PROJECT_ROOT / configured
-    return root / "SP500" / "market_cap.parquet"
-
-
-class LocalEODMarketDataProvider:
-    """Read shared local OHLCV caches without downloading or mutating them."""
+class PublishedEODMarketDataProvider:
+    """Read immutable market versions without downloading or mutating them."""
 
     def __init__(
         self,
         *,
-        raw_ohlcv_root: str | Path | None = None,
-        market_cap_path: str | Path | None = None,
+        reader: MarketDataReader | None = None,
+        universe: str = "SP500",
+        benchmark_universe: str = US_LIQUID_5M,
     ) -> None:
-        self.raw_ohlcv_root = Path(raw_ohlcv_root) if raw_ohlcv_root is not None else _default_raw_ohlcv_root()
-        self.market_cap_path = (
-            Path(market_cap_path)
-            if market_cap_path is not None
-            else _default_market_cap_path()
-        )
+        self.reader = reader or MarketDataReader()
+        self.universe = str(universe).upper()
+        self.benchmark_universe = str(benchmark_universe).upper()
         self.last_diagnostics: dict[str, Any] = {}
 
-    def _path(self, symbol: str) -> Path:
-        ticker = normalize_ticker(symbol)
-        path = self.raw_ohlcv_root / f"{ticker}.parquet"
-        try:
-            path.resolve().relative_to(self.raw_ohlcv_root.resolve())
-        except ValueError as exc:
-            raise LocalMarketDataError(f"Unsafe local ticker path: {symbol!r}") from exc
-        return path
+    @staticmethod
+    def _normalize_bars(frame: pd.DataFrame, *, source: str) -> pd.DataFrame:
+        required = {"date", "ticker", "adj_close", "volume"}
+        missing = sorted(required - set(frame.columns))
+        if missing:
+            raise PublishedMarketDataError(
+                f"Published {source} bars are missing required columns",
+                details={"missing_columns": missing},
+            )
+        out = frame.copy()
+        out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.normalize()
+        out["ticker"] = out["ticker"].map(normalize_ticker)
+        if out["date"].isna().any():
+            raise PublishedMarketDataError(
+                f"Published {source} bars contain invalid sessions"
+            )
+        if out.duplicated(["date", "ticker"]).any():
+            raise PublishedMarketDataError(
+                f"Published {source} bars contain duplicate date/ticker rows"
+            )
+        out["adj_close"] = pd.to_numeric(out["adj_close"], errors="coerce")
+        out["volume"] = pd.to_numeric(out["volume"], errors="coerce")
+        return out.sort_values(["date", "ticker"]).reset_index(drop=True)
 
     @staticmethod
-    def _read_one(path: Path, ticker: str) -> pd.DataFrame:
-        try:
-            frame = pd.read_parquet(path)
-        except Exception as exc:  # noqa: BLE001
-            raise LocalMarketDataError(
-                f"Unable to read local OHLCV cache for {ticker}",
-                details={"path": str(path)},
-            ) from exc
-        if "date" in frame.columns and isinstance(frame.index, pd.RangeIndex):
-            frame = frame.set_index("date")
-        if "adj_close" not in frame.columns:
-            raise LocalMarketDataError(
-                f"Local OHLCV cache for {ticker} has no adj_close column",
-                details={"path": str(path), "columns": list(frame.columns)},
-            )
-        index = pd.to_datetime(frame.index, errors="coerce")
-        if index.isna().any():
-            raise LocalMarketDataError(f"Local OHLCV cache for {ticker} has invalid dates")
-        if index.tz is not None:
-            index = index.tz_convert("America/New_York").tz_localize(None)
-        index = index.normalize()
-        if index.has_duplicates:
-            raise LocalMarketDataError(f"Local OHLCV cache for {ticker} has duplicate sessions")
-        out = pd.DataFrame(index=index)
-        out["adj_close"] = pd.to_numeric(frame["adj_close"].to_numpy(), errors="coerce")
-        out["volume"] = (
-            pd.to_numeric(frame["volume"].to_numpy(), errors="coerce")
-            if "volume" in frame.columns
-            else np.nan
-        )
-        out.index.name = "date"
-        return out.sort_index()
-
-    def _read_market_cap(self, symbols: list[str]) -> tuple[pd.DataFrame | None, Path | None]:
-        if self.market_cap_path is None or not self.market_cap_path.exists():
-            return None, None
-        try:
-            frame = pd.read_parquet(self.market_cap_path)
-        except Exception as exc:  # noqa: BLE001
-            raise LocalMarketDataError(
-                "Unable to read optional market-cap matrix",
-                details={"path": str(self.market_cap_path)},
-            ) from exc
-        frame.columns = [normalize_ticker(column) for column in frame.columns]
-        if frame.columns.has_duplicates:
-            raise LocalMarketDataError("market-cap matrix has duplicate ticker columns")
-        index = pd.to_datetime(frame.index, errors="coerce")
-        if index.isna().any() or index.has_duplicates:
-            raise LocalMarketDataError("market-cap matrix has invalid or duplicate sessions")
-        if index.tz is not None:
-            index = index.tz_convert("America/New_York").tz_localize(None)
-        frame.index = index.normalize()
-        frame = frame.apply(pd.to_numeric, errors="coerce").sort_index().reindex(columns=symbols)
-        return frame, self.market_cap_path
+    def _wide(
+        bars: pd.DataFrame,
+        *,
+        field: str,
+        columns: list[str],
+        index: pd.DatetimeIndex,
+    ) -> pd.DataFrame:
+        if bars.empty:
+            return pd.DataFrame(index=index, columns=columns, dtype=float)
+        matrix = bars.pivot(index="date", columns="ticker", values=field)
+        matrix.index.name = "date"
+        matrix.columns.name = None
+        return matrix.reindex(index=index, columns=columns).astype(float)
 
     def snapshot(
         self,
@@ -801,49 +767,105 @@ class LocalEODMarketDataProvider:
         benchmark: str,
         force: bool = False,
     ) -> EODMarketSnapshot:
-        # ``force`` deliberately does not download: this adapter is local-only.
+        # ``force`` cannot bypass the published pointer or trigger a download.
         del force
-        normalized = list(dict.fromkeys(normalize_ticker(symbol) for symbol in symbols))
+        normalized = list(
+            dict.fromkeys(normalize_ticker(symbol) for symbol in symbols)
+        )
         benchmark = normalize_ticker(benchmark)
-        frames: dict[str, pd.DataFrame] = {}
-        input_paths: list[Path] = []
-        missing: list[str] = []
-        for ticker in [*normalized, benchmark]:
-            if ticker in frames:
-                continue
-            path = self._path(ticker)
-            if not path.exists():
-                missing.append(ticker)
-                continue
-            frames[ticker] = self._read_one(path, ticker)
-            input_paths.append(path)
+        try:
+            version = self.reader.require_latest(self.universe)
+            bars = self._normalize_bars(
+                self.reader.load_bars(
+                    self.universe,
+                    tickers=normalized,
+                    version=version,
+                ),
+                source=self.universe,
+            )
+            benchmark_version = version
+            if benchmark in set(bars["ticker"].astype(str)):
+                benchmark_bars = bars.loc[bars["ticker"].eq(benchmark)].copy()
+            else:
+                benchmark_version = self.reader.require_latest(
+                    self.benchmark_universe
+                )
+                benchmark_bars = self._normalize_bars(
+                    self.reader.load_bars(
+                        self.benchmark_universe,
+                        tickers=[benchmark],
+                        version=benchmark_version,
+                    ),
+                    source=self.benchmark_universe,
+                )
+        except DataFoundationError as exc:
+            raise PublishedMarketDataError(
+                "A required published market-data version is unavailable",
+                details={
+                    "universe": self.universe,
+                    "benchmark_universe": self.benchmark_universe,
+                    "error_type": type(exc).__name__,
+                },
+            ) from None
 
-        all_dates = pd.DatetimeIndex([])
-        for frame in frames.values():
-            all_dates = all_dates.union(pd.DatetimeIndex(frame.index))
-        all_dates = all_dates.sort_values()
-        adj_close = pd.DataFrame(index=all_dates, columns=normalized, dtype=float)
-        volume = pd.DataFrame(index=all_dates, columns=normalized, dtype=float)
-        for ticker in normalized:
-            frame = frames.get(ticker)
-            if frame is not None:
-                adj_close[ticker] = frame["adj_close"].reindex(all_dates)
-                volume[ticker] = frame["volume"].reindex(all_dates)
-        benchmark_frame = pd.DataFrame(index=all_dates, columns=[benchmark], dtype=float)
-        if benchmark in frames:
-            benchmark_frame[benchmark] = frames[benchmark]["adj_close"].reindex(all_dates)
-        market_cap, market_cap_path = self._read_market_cap(normalized)
-        if market_cap_path is not None:
-            input_paths.append(market_cap_path)
+        all_dates = pd.DatetimeIndex(
+            sorted(
+                set(pd.DatetimeIndex(bars["date"]))
+                | set(pd.DatetimeIndex(benchmark_bars["date"]))
+            ),
+            name="date",
+        )
+        adj_close = self._wide(
+            bars,
+            field="adj_close",
+            columns=normalized,
+            index=all_dates,
+        )
+        volume = self._wide(
+            bars,
+            field="volume",
+            columns=normalized,
+            index=all_dates,
+        )
+        benchmark_frame = self._wide(
+            benchmark_bars,
+            field="adj_close",
+            columns=[benchmark],
+            index=all_dates,
+        )
+        loaded = set(bars["ticker"].astype(str))
+        benchmark_loaded = benchmark in set(
+            benchmark_bars["ticker"].astype(str)
+        )
+        input_paths = [
+            _published_path(version.bars_path),
+            _published_path(version.universe_path),
+        ]
+        if benchmark_version.version_id != version.version_id:
+            input_paths.extend(
+                [
+                    _published_path(benchmark_version.bars_path),
+                    _published_path(benchmark_version.universe_path),
+                ]
+            )
         self.last_diagnostics = {
-            "provider": "LOCAL_SHARED_RAW_OHLCV",
+            "provider": "PUBLISHED_MARKET_DATA",
             "network_access": False,
-            "raw_ohlcv_root": str(self.raw_ohlcv_root),
+            "universe": self.universe,
+            "dataset_version_id": version.version_id,
+            "dataset_target_session": version.target_session.isoformat(),
+            "dataset_bars_sha256": version.checksum_sha256,
             "symbols_requested": len(normalized),
-            "symbols_loaded": sum(ticker in frames for ticker in normalized),
-            "missing_symbols": sorted(set(missing)),
+            "symbols_loaded": len(set(normalized) & loaded),
+            "missing_symbols": sorted(set(normalized) - loaded),
             "benchmark": benchmark,
-            "benchmark_loaded": benchmark in frames,
+            "benchmark_loaded": benchmark_loaded,
+            "benchmark_universe": benchmark_version.universe,
+            "benchmark_dataset_version_id": benchmark_version.version_id,
+            "benchmark_target_session": (
+                benchmark_version.target_session.isoformat()
+            ),
+            "benchmark_bars_sha256": benchmark_version.checksum_sha256,
             "source_max_date": (
                 all_dates.max().date().isoformat() if len(all_dates) else None
             ),
@@ -852,7 +874,9 @@ class LocalEODMarketDataProvider:
             adj_close=adj_close,
             volume=volume,
             benchmark_adj_close=benchmark_frame,
-            market_cap=market_cap,
+            # Current market cap is not a PIT series. The counting-unit logic
+            # will use trailing dollar volume instead of introducing look-ahead.
+            market_cap=None,
             input_paths=input_paths,
         )
 
@@ -860,7 +884,7 @@ class LocalEODMarketDataProvider:
 __all__ = [
     "ClassificationSourceError",
     "FMPCurrentClassificationProvider",
-    "LocalEODMarketDataProvider",
-    "LocalMarketDataError",
+    "PublishedEODMarketDataProvider",
+    "PublishedMarketDataError",
     "UncertifiedClassificationCacheError",
 ]
