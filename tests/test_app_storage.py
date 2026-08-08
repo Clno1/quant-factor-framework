@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from unittest.mock import Mock
 
 import pandas as pd
 
+from src.data.request_worker import process_pending_data_requests
 from src.storage import (
     DATA_REQUEST_FAILED,
     DATA_REQUEST_PENDING,
     DATA_REQUEST_RUNNING,
+    DATA_REQUEST_SUCCESS,
     AppDatabase,
 )
 
@@ -106,3 +109,38 @@ def test_stale_running_data_request_is_requeued(tmp_path):
     current = database.get_data_request(request.request_id)
     assert current is not None
     assert current.status == DATA_REQUEST_PENDING
+
+
+def test_pending_request_worker_publishes_and_finishes_transaction(tmp_path):
+    database = AppDatabase(tmp_path / "app.sqlite3")
+    request = database.enqueue_data_request(
+        data_universe="WATCHLIST_TEST",
+        payload={
+            "universe_records": [{"ticker": "AAA"}],
+            "tickers": ["AAA"],
+            "initial_start": "2025-01-01",
+        },
+        consumer_kind="backtest",
+        consumer_id="task-one",
+    )
+    result = Mock()
+    result.to_dict.return_value = {"version_id": "version-one"}
+    result.version.version_id = "version-one"
+    writer = Mock()
+    writer.update_universe.return_value = result
+
+    processed = process_pending_data_requests(
+        limit=1,
+        database=database,
+        writer=writer,
+    )
+
+    assert len(processed) == 1
+    assert processed[0].status == DATA_REQUEST_SUCCESS
+    current = database.get_data_request(request.request_id)
+    assert current is not None
+    assert current.status == DATA_REQUEST_SUCCESS
+    assert current.attempts == 1
+    assert writer.update_universe.call_args.kwargs[
+        "derive_membership_from_bars"
+    ] is True

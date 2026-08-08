@@ -121,13 +121,11 @@ def process_pending_data_requests(
     if recovery["requeued"] or recovery["failed"]:
         log.warning("Recovered stale data requests: %s", recovery)
     requests = database.claim_data_requests(limit=limit)
-    reader = MarketDataReader(catalog=writer.catalog)
     return [
         process_data_request(
             request,
             database=database,
             writer=writer,
-            reader=reader,
         )
         for request in requests
     ]
