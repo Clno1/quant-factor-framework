@@ -1368,6 +1368,11 @@ class MarketDataWriter:
                     if not previous.empty
                     else {}
                 )
+                previous_min = (
+                    previous.groupby("ticker")["date"].min().to_dict()
+                    if not previous.empty
+                    else {}
+                )
                 fetcher = self._fetcher()
                 max_workers = max(
                     1,
@@ -1380,8 +1385,18 @@ class MarketDataWriter:
 
                 def fetch_one(ticker: str) -> tuple[str, pd.DataFrame]:
                     ticker_last = previous_max.get(ticker)
+                    ticker_first = previous_min.get(ticker)
                     fetch_start = start
-                    if ticker_last is not None and not pd.isna(ticker_last):
+                    history_already_covers_start = (
+                        ticker_first is not None
+                        and not pd.isna(ticker_first)
+                        and pd.Timestamp(ticker_first).normalize() <= start
+                    )
+                    if (
+                        history_already_covers_start
+                        and ticker_last is not None
+                        and not pd.isna(ticker_last)
+                    ):
                         fetch_start = max(
                             start,
                             pd.Timestamp(ticker_last)

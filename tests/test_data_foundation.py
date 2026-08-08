@@ -256,6 +256,40 @@ class DataFoundationTests(unittest.TestCase):
                 second.version.version_id,
             )
 
+    def test_incremental_version_backfills_an_earlier_requested_start(self):
+        requested_starts: list[str] = []
+        target_dates = ["2026-07-20"]
+
+        def fetcher(ticker: str, start: str, end: str) -> pd.DataFrame:
+            requested_starts.append(start)
+            return _bars(ticker, target_dates)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, writer, reader = self._components(root, fetcher)
+            writer.update_universe(
+                "TEST",
+                target_session="2026-07-20",
+                universe_frame=_universe(),
+                initial_start="2026-07-20",
+            )
+
+            requested_starts.clear()
+            target_dates[:] = ["2026-01-02", "2026-07-20", "2026-07-21"]
+            writer.update_universe(
+                "TEST",
+                target_session="2026-07-21",
+                universe_frame=_universe(),
+                initial_start="2026-01-02",
+            )
+
+            self.assertEqual(len(requested_starts), 2)
+            self.assertEqual(set(requested_starts), {"2026-01-02"})
+            self.assertEqual(
+                reader.load_bars("TEST")["date"].min(),
+                pd.Timestamp("2026-01-02"),
+            )
+
     def test_reader_can_bind_an_exact_historical_version(self):
         target_dates = ["2026-07-20"]
 
