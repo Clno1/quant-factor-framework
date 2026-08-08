@@ -23,6 +23,20 @@ def _imports(path: Path) -> set[str]:
     return found
 
 
+def _registered_paths(app) -> list[str]:
+    pending = list(app.routes)
+    paths: list[str] = []
+    while pending:
+        route = pending.pop()
+        path = getattr(route, "path", None)
+        if path is not None:
+            paths.append(path)
+        original_router = getattr(route, "original_router", None)
+        if original_router is not None:
+            pending.extend(original_router.routes)
+    return paths
+
+
 class BreakoutIsolationTests(unittest.TestCase):
     def test_breakout_domain_does_not_import_factor_or_web_domains(self):
         forbidden = (
@@ -112,7 +126,7 @@ class BreakoutIsolationTests(unittest.TestCase):
     def test_composition_root_registers_each_breakout_route_once(self):
         from src.webapp.app import create_app
 
-        paths = [route.path for route in create_app().routes]
+        paths = _registered_paths(create_app())
         expected = {
             "/breakouts",
             "/breakouts/{ticker}",

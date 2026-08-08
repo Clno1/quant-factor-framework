@@ -21,6 +21,20 @@ def _imports(path: Path) -> set[str]:
     return found
 
 
+def _registered_paths(app) -> set[str]:
+    pending = list(app.routes)
+    paths: set[str] = set()
+    while pending:
+        route = pending.pop()
+        path = getattr(route, "path", None)
+        if path is not None:
+            paths.add(path)
+        original_router = getattr(route, "original_router", None)
+        if original_router is not None:
+            pending.extend(original_router.routes)
+    return paths
+
+
 class GroupAnalyticsIsolationTests(unittest.TestCase):
     def test_default_config_disables_group_analytics(self):
         self.assertFalse(bool(CONFIG.group_analytics.enabled))
@@ -52,7 +66,7 @@ class GroupAnalyticsIsolationTests(unittest.TestCase):
     def test_disabled_app_does_not_register_group_routes(self):
         from src.webapp.app import create_app
 
-        paths = {route.path for route in create_app().routes}
+        paths = _registered_paths(create_app())
         self.assertNotIn("/group-analytics", paths)
         self.assertFalse(any(path.startswith("/api/group-analytics") for path in paths))
 
@@ -66,7 +80,7 @@ class GroupAnalyticsIsolationTests(unittest.TestCase):
                 "GROUP_ANALYTICS_WEB_ENABLED": "true",
             },
         ):
-            writer_off_paths = {route.path for route in create_app().routes}
+            writer_off_paths = _registered_paths(create_app())
         self.assertNotIn("/group-analytics", writer_off_paths)
 
         with mock.patch.dict(
@@ -76,7 +90,7 @@ class GroupAnalyticsIsolationTests(unittest.TestCase):
                 "GROUP_ANALYTICS_WEB_ENABLED": "true",
             },
         ):
-            enabled_paths = {route.path for route in create_app().routes}
+            enabled_paths = _registered_paths(create_app())
         self.assertIn("/group-analytics", enabled_paths)
         self.assertIn("/api/group-analytics/heat", enabled_paths)
 
