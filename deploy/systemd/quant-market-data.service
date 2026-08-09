@@ -17,7 +17,7 @@ ExecStartPre=/opt/quant/.venv/bin/python -c "import duckdb, exchange_calendars, 
 # PIT failure is recorded but does not prevent independent static universes
 # from publishing. The update command still fails SP500 closed and exits nonzero.
 ExecStartPre=-/opt/quant/.venv/bin/python /opt/quant/scripts/run_data_pipeline.py pit --env-file /etc/quant/market-data.env
-ExecStart=/opt/quant/.venv/bin/python /opt/quant/scripts/run_data_pipeline.py update --universe SP500 --universe MAG7 --workers 6 --env-file /etc/quant/market-data.env
+ExecStart=/opt/quant/.venv/bin/python /opt/quant/scripts/run_data_pipeline.py update --universe SP500 --universe NASDAQ100 --universe MAG7 --workers 6 --env-file /etc/quant/market-data.env
 TimeoutStartSec=5h
 Restart=on-failure
 RestartSec=30min

@@ -1,5 +1,5 @@
 [Unit]
-Description=Quant intraday momentum monitor (shadow, no Discord)
+Description=Quant intraday momentum monitor (automatic gated Discord promotion)
 Wants=network-online.target
 After=network-online.target quant-us-daily-refresh.service
 StartLimitIntervalSec=30min
@@ -14,7 +14,7 @@ Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH=/opt/quant
 EnvironmentFile=/etc/quant/intraday-momentum-monitor.env
 ExecStartPre=/opt/quant/.venv/bin/python -c "import exchange_calendars, sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
-ExecStart=/opt/quant/.venv/bin/python /opt/quant/scripts/run_intraday_momentum_monitor.py --env-file /etc/quant/intraday-momentum-monitor.env --shadow
+ExecStart=/opt/quant/.venv/bin/python /opt/quant/scripts/run_intraday_momentum_monitor.py --env-file /etc/quant/intraday-momentum-monitor.env --auto
 Restart=on-failure
 RestartSec=2min
 TimeoutStartSec=7h

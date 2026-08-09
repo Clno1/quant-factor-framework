@@ -1,6 +1,6 @@
 # 文档导航
 
-更新日期：2026-08-08
+更新日期：2026-08-09
 
 不要按文件名字母顺序硬读。建议按下面路径进入。
 
@@ -14,6 +14,10 @@
 
 ## 多因子研究
 
+- [`research_universe_redesign_requirements.md`](research_universe_redesign_requirements.md)：研究池、目标池、跨池因子结论、NASDAQ100 和网页改版需求基线。
+- [`research_universe_redesign_implementation.md`](research_universe_redesign_implementation.md)：本次改造的代码落地、当前阻断、正式发布门槛和 SG 上线顺序。
+- [`factor_data_explorer_requirements.md`](factor_data_explorer_requirements.md)：按日期截面和单股历史查询 raw、clean、单因子排名的产品与数据契约。
+- [`factor_data_explorer_implementation.md`](factor_data_explorer_implementation.md)：查询服务、API、页面、严格版本门禁、本地验收与 SG 上线条件。
 - [`factor_preprocessing.md`](factor_preprocessing.md)：raw、去极值、中性化和 z-score。
 - [`factor_confidence.md`](factor_confidence.md)：IC、ICIR、统计置信和稳定性。
 - [`point_in_time_universe.md`](point_in_time_universe.md)：PIT 股票池契约。
@@ -35,6 +39,7 @@
 ## 独立研究域
 
 - [`momentum_breakout_summary.md`](momentum_breakout_summary.md)：日线动量突破总览。
+- [`momentum_breakout_data_flow.md`](momentum_breakout_data_flow.md)：从定时入口到版本日线、分钟确认和 SQLite 的完整代码线路。
 - [`premarket_discord.md`](premarket_discord.md)：盘前摘要数据闸门和 outbox。
 - [`intraday_momentum_monitor_design.md`](intraday_momentum_monitor_design.md)：分钟 shadow 监控设计。
 - [`market_turning_signals_research.md`](market_turning_signals_research.md)：大盘顶底研究方案。

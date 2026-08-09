@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+
+{% block content %}
+<header class="factor-research-header">
+    <div>
+        <div class="factor-kicker">{{ factor.category }}</div>
+        <h1 class="page-title">{{ factor.display_name }} <span class="title-code">{{ factor.id }}</span></h1>
+        <p class="factor-formula mono">{{ factor.formula }}</p>
+    </div>
+    <div class="inline-actions">
+        <a class="btn" href="/research/factor-data?mode=snapshot&amp;universe=SP500&amp;factor={{ factor.id }}&amp;date=latest">查看因子数据</a>
+        <span class="research-verdict verdict-{{ assessment.verdict|lower }}" title="系统代码：{{ assessment.verdict }}">{{ research_label(assessment.verdict) }}</span>
+    </div>
+</header>
+
+<nav class="research-section-tabs" aria-label="因子研究章节">
+    <a href="#overview">概览</a>
+    <a href="#cross">跨池比较</a>
+    <a href="#predictive">预测力</a>
+    <a href="#stability">稳定性</a>
+    <a href="#economic">经济意义</a>
+    <a href="#tradability">可交易性</a>
+    <a href="#quality">数据质量</a>
+</nav>
+
+<section id="overview" class="research-section">
+    <h2>概览</h2>
+    <p>{{ factor.description }}</p>
+    <dl class="research-definition-grid">
+        <div><dt>跨池结论</dt><dd>{{ research_text(assessment.summary) }}</dd></div>
+        <div><dt>适用范围</dt><dd>{{ assessment.market_scope }}</dd></div>
+        <div><dt>范围限制</dt><dd>{{ assessment.market_limit }}</dd></div>
+        <div><dt>方向</dt><dd>{{ factor_direction_label(factor.direction) }}</dd></div>
+        <div><dt>最新研究日</dt><dd class="mono">{{ assessment.target_session or '—' }}</dd></div>
+        <div><dt>输入数据</dt><dd>{% for input in factor.inputs %}{{ factor_input_label(input) }}{% if not loop.last %}、{% endif %}{% endfor %}</dd></div>
+        <div><dt>去极值</dt><dd>{{ preprocessing_method_label(preprocessing.winsorize_method) }} · 阈值 {{ preprocessing.winsorize_n }}</dd></div>
+        <div><dt>截面 Z-score</dt><dd>{{ '开启' if preprocessing.standardize else '关闭' }}</dd></div>
+        <div><dt>行业中性化</dt><dd>{{ '开启' if preprocessing.neutralize_industry else '关闭' }}</dd></div>
+        <div><dt>市值中性化</dt><dd>{{ '开启' if preprocessing.neutralize_mcap else '关闭（等待严格 PIT 市值）' }}</dd></div>
+    </dl>
+</section>
+
+<section id="cross" class="research-section">
+    <h2>跨池比较</h2>
+    <div class="research-table-wrap">
+        <table class="data research-table">
+            <thead><tr><th>研究股票池</th><th>角色</th><th>单池结论</th><th>平均 IC</th><th>ICIR</th><th>t 统计量</th><th>q 值</th><th>有效交易日数</th><th>数据版本</th><th>研究版本</th></tr></thead>
+            <tbody>
+            {% for universe_id, item in assessment.universes.items() %}
+                <tr>
+                    {% set item_verdict = item.verdict or item.status or 'MISSING' %}
+                    <td><strong>{{ universe_label(universe_id) }}</strong></td>
+                    <td title="系统代码：{{ item.role }}">{{ research_label(item.role) }}</td>
+                    <td><span class="pool-verdict verdict-{{ item_verdict|lower }}" title="系统代码：{{ item_verdict }}">{{ research_label(item_verdict) }}</span></td>
+                    <td>{{ '%.4f'|format(item.ic_mean) if item.ic_mean is not none else '—' }}</td>
+                    <td>{{ '%.3f'|format(item.ic_ir) if item.ic_ir is not none else '—' }}</td>
+                    <td>{{ '%.2f'|format(item.t_stat) if item.t_stat is not none else '—' }}</td>
+                    <td>{{ '%.4f'|format(item.q_value) if item.q_value is not none else '—' }}</td>
+                    <td>{{ item.n_obs or '—' }}</td>
+                    <td class="mono compact-hash" title="{{ item.dataset_version_id or '' }}">{{ (item.dataset_version_id or '—')[:12] }}</td>
+                    <td class="mono compact-hash" title="{{ item.research_publication_id or '' }}">{{ (item.research_publication_id or '—')[:12] }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<section id="predictive" class="research-section metric-section">
+    <h2>预测力</h2>
+    <p class="cell-note">研究尾部尚未实现的前瞻收益不进入 IC 样本，也不记为失败。</p>
+    {% for universe_id, item in assessment.universes.items() %}
+    <dl><dt>{{ universe_label(universe_id) }}</dt><dd>平均 IC {{ '%.4f'|format(item.ic_mean) if item.ic_mean is not none else '—' }} · ICIR {{ '%.3f'|format(item.ic_ir) if item.ic_ir is not none else '—' }} · q 值 {{ '%.4f'|format(item.q_value) if item.q_value is not none else '—' }}</dd></dl>
+    {% endfor %}
+</section>
+
+<section id="stability" class="research-section metric-section">
+    <h2>稳定性</h2>
+    <p>完整月度、滚动与子区间检查可进入单池研究详情查看。</p>
+    <div class="inline-actions">
+        <a class="btn" href="/factor/{{ factor.id }}?universe=SP500">标普500研究详情</a>
+        <a class="btn" href="/factor/{{ factor.id }}?universe=NASDAQ100">纳斯达克100研究详情</a>
+    </div>
+</section>
+
+<section id="economic" class="research-section metric-section">
+    <h2>经济意义</h2>
+    {% for universe_id, item in assessment.universes.items() %}
+    <dl><dt>{{ universe_label(universe_id) }}</dt><dd>扣费后多空年化收益 {{ '%.2f%%'|format(item.long_short_ann_return * 100) if item.long_short_ann_return is not none else '—' }} · 夏普比率 {{ '%.3f'|format(item.long_short_sharpe) if item.long_short_sharpe is not none else '—' }}</dd></dl>
+    {% endfor %}
+</section>
+
+<section id="tradability" class="research-section metric-section">
+    <h2>可交易性</h2>
+    {% for universe_id, item in assessment.universes.items() %}
+    <dl><dt>{{ universe_label(universe_id) }}</dt><dd>年化交易成本 {{ '%.1f 个基点'|format(item.cost_bps_per_year_avg) if item.cost_bps_per_year_avg is not none else '—' }}</dd></dl>
+    {% endfor %}
+</section>
+
+<section id="quality" class="research-section metric-section">
+    <h2>数据质量</h2>
+    {% for universe_id, item in assessment.universes.items() %}
+    <dl><dt>{{ universe_label(universe_id) }}</dt><dd>{{ research_label(item.status) }} · 数据版本 <span class="mono">{{ (item.dataset_version_id or '—')[:12] }}</span> · 研究版本 <span class="mono">{{ (item.research_publication_id or '—')[:12] }}</span></dd></dl>
+    {% endfor %}
+</section>
+{% endblock %}

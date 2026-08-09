@@ -7,13 +7,15 @@ from typing import Any
 
 import pandas as pd
 
+from src.breakouts.daily_data import load_breakout_daily_dataset
 from src.breakouts.scan_cache import load_scan_cache, save_scan_cache
 from src.breakouts.scanner import (
     BreakoutFilters,
     load_market_regime,
     scan_breakouts,
 )
-from src.data.foundation import DataFoundationError, MarketDataReader
+from src.data.access import load_published_universe, resolve_published_version
+from src.data.foundation import DataFoundationError
 from src.data.universe_ids import (
     US_LIQUID_5M,
     resolve_market_data_universe,
@@ -78,6 +80,7 @@ def resolve_breakout_universe(
     raw: str | None,
     *,
     enabled_universes: Iterable[str],
+    dataset_version_id: str | None = None,
 ) -> dict[str, Any]:
     """Resolve a preset universe or Watchlist into scanner inputs."""
     universe = normalize_breakout_universe(raw)
@@ -98,7 +101,11 @@ def resolve_breakout_universe(
         }
         data_universe = watchlist_snapshot_data_universe(snapshot)
         try:
-            version = MarketDataReader().require_latest(data_universe)
+            published = load_published_universe(
+                requested_universe=universe,
+                data_universe=data_universe,
+                dataset_version_id=dataset_version_id,
+            )
         except DataFoundationError as exc:
             raise BreakoutApplicationError(
                 "该股票池的统一行情仍在准备中，请等待数据任务发布后再扫描"
@@ -111,7 +118,7 @@ def resolve_breakout_universe(
             "sectors": {},
             "current_dollar_volume": {},
             "data_universe": data_universe,
-            "dataset_version_id": version.version_id,
+            "dataset_version_id": published.version.version_id,
         }
 
     enabled = _normalized_enabled_universes(enabled_universes)
@@ -119,24 +126,20 @@ def resolve_breakout_universe(
         raise UnknownBreakoutUniverseError(f"未知股票池: {universe}")
 
     data_universe = resolve_market_data_universe(universe)
-    reader = MarketDataReader()
     try:
-        version = reader.require_latest(data_universe)
-        metadata = reader.load_universe(
-            data_universe,
-            current_only=True,
-            version=version,
+        published = load_published_universe(
+            requested_universe=universe,
+            data_universe=data_universe,
+            dataset_version_id=dataset_version_id,
         )
+        metadata = published.universe
     except DataFoundationError as exc:
         raise BreakoutApplicationError(
             f"{data_universe} 尚无已发布行情版本"
         ) from exc
-    tickers = metadata["ticker"].astype(str).str.upper().tolist()
-
     if not metadata.empty and "ticker" in metadata.columns:
         metadata["ticker"] = metadata["ticker"].astype(str).str.upper()
-        if not tickers:
-            tickers = metadata["ticker"].tolist()
+        tickers = metadata["ticker"].tolist()
         names = (
             metadata.set_index("ticker")
             .get("name", pd.Series(dtype="object"))
@@ -161,7 +164,7 @@ def resolve_breakout_universe(
         else:
             current_dollar_volume = {}
     else:
-        names, sectors, current_dollar_volume = {}, {}, {}
+        tickers, names, sectors, current_dollar_volume = [], {}, {}, {}
 
     return {
         "universe": universe,
@@ -171,7 +174,7 @@ def resolve_breakout_universe(
         "sectors": sectors,
         "current_dollar_volume": current_dollar_volume,
         "data_universe": data_universe,
-        "dataset_version_id": version.version_id,
+        "dataset_version_id": published.version.version_id,
     }
 
 
@@ -189,10 +192,13 @@ def build_breakout_scan(
     pivot_proximity: float,
     market_symbol: str,
     view: str,
+    dataset_version_id: str | None = None,
+    market_dataset_version_id: str | None = None,
 ) -> dict[str, Any]:
     context = resolve_breakout_universe(
         universe,
         enabled_universes=enabled_universes,
+        dataset_version_id=dataset_version_id,
     )
 
     filters = BreakoutFilters(
@@ -214,6 +220,28 @@ def build_breakout_scan(
             if ticker not in current_liquidity
             or float(current_liquidity[ticker]) >= filters.min_dollar_volume
         ]
+    market_ticker = market_symbol if market_symbol in {"QQQ", "IWM"} else "QQQ"
+    daily_tickers = list(scan_tickers)
+    if context["data_universe"] == US_LIQUID_5M:
+        daily_tickers = list(dict.fromkeys([*daily_tickers, market_ticker]))
+
+    try:
+        daily = load_breakout_daily_dataset(
+            requested_universe=context["universe"],
+            data_universe=context["data_universe"],
+            tickers=daily_tickers,
+            end=asof or None,
+            dataset_version_id=context["dataset_version_id"],
+            min_latest_coverage=(
+                1.0
+                if context["universe"].lower().startswith("watchlist:")
+                else 0.98
+            ),
+        )
+    except DataFoundationError as exc:
+        raise BreakoutApplicationError(
+            f"{context['data_universe']} 已发布版本不满足扫描数据契约"
+        ) from exc
 
     scan = scan_breakouts(
         scan_tickers,
@@ -223,6 +251,7 @@ def build_breakout_scan(
         sectors=context["sectors"],
         data_universe=context["data_universe"],
         dataset_version_id=context["dataset_version_id"],
+        frames=daily.frames,
     )
     all_rows = scan["rows"]
     normalized_view = view if view in {"all", "setup", "ready", "breakout"} else "all"
@@ -249,20 +278,42 @@ def build_breakout_scan(
     scan["universe_label"] = context["label"]
     scan["data_universe"] = context["data_universe"]
     scan["dataset_version_id"] = context["dataset_version_id"]
+    scan["data_contract"] = daily.contract.to_dict()
     scan["view"] = normalized_view
     scan["data_lag_days"] = max(
         0,
         (pd.Timestamp.now().normalize() - pd.Timestamp(scan["asof"])).days,
     )
-    market_version = MarketDataReader().require_latest(US_LIQUID_5M)
+    if daily.data_universe == US_LIQUID_5M and not daily.frame(market_ticker).empty:
+        market_daily = daily
+    else:
+        selected_market_version = (
+            daily.dataset_version_id
+            if daily.data_universe == US_LIQUID_5M
+            else market_dataset_version_id
+        )
+        try:
+            market_daily = load_breakout_daily_dataset(
+                requested_universe="MARKET_REGIME",
+                data_universe=US_LIQUID_5M,
+                tickers=[market_ticker],
+                end=scan["asof"],
+                dataset_version_id=selected_market_version,
+            )
+        except DataFoundationError as exc:
+            raise BreakoutApplicationError(
+                "市场过滤所需的 QQQ/IWM 发布行情不可用"
+            ) from exc
     scan["market"] = load_market_regime(
         asof=scan["asof"],
-        symbol=market_symbol if market_symbol in {"QQQ", "IWM"} else "QQQ",
+        symbol=market_ticker,
         fetch_missing=False,
         data_universe=US_LIQUID_5M,
-        dataset_version_id=market_version.version_id,
+        dataset_version_id=market_daily.dataset_version_id,
+        frame=market_daily.frame(market_ticker),
     )
-    scan["market_dataset_version_id"] = market_version.version_id
+    scan["market_dataset_version_id"] = market_daily.dataset_version_id
+    scan["market_data_contract"] = market_daily.contract.to_dict()
     return scan
 
 
@@ -285,6 +336,23 @@ def get_breakout_scan(
     """Return a cached scan or build it under a process-local lock."""
     normalized_universe = normalize_breakout_universe(universe)
     normalized_enabled = _normalized_enabled_universes(enabled_universes)
+    context = resolve_breakout_universe(
+        normalized_universe,
+        enabled_universes=normalized_enabled,
+    )
+    try:
+        market_version_id = (
+            context["dataset_version_id"]
+            if context["data_universe"] == US_LIQUID_5M
+            else resolve_published_version(
+                requested_universe="MARKET_REGIME",
+                data_universe=US_LIQUID_5M,
+            ).version_id
+        )
+    except DataFoundationError as exc:
+        raise BreakoutApplicationError(
+            "市场过滤所需的 QQQ/IWM 发布行情不可用"
+        ) from exc
     parameters = {
         "universe": normalized_universe,
         "asof": asof or "",
@@ -297,6 +365,8 @@ def get_breakout_scan(
         "pivot_proximity": float(pivot_proximity),
         "market_symbol": str(market_symbol).upper(),
         "view": view if view in {"all", "setup", "ready", "breakout"} else "all",
+        "dataset_version_id": context["dataset_version_id"],
+        "market_dataset_version_id": market_version_id,
     }
     is_watchlist = normalized_universe.lower().startswith("watchlist:")
     if not force and not is_watchlist:

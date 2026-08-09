@@ -41,6 +41,37 @@ def test_settings_reject_path_like_pit_universe(tmp_path):
         )
 
 
+def test_settings_isolate_market_regime_data_and_pit_publications(tmp_path):
+    config = _config()
+    config["market_regime_research"]["point_in_time"].update(
+        {
+            "data_universe": "SP500",
+            "publication_id": "SP500",
+        }
+    )
+
+    with pytest.raises(ValueError, match="must be isolated"):
+        load_market_regime_research_settings(
+            config,
+            raw_root=tmp_path / "raw",
+            output_root=tmp_path / "output",
+        )
+
+
+def test_settings_reject_path_like_market_regime_publication_id(tmp_path):
+    config = _config()
+    config["market_regime_research"]["point_in_time"]["publication_id"] = (
+        "../../escape"
+    )
+
+    with pytest.raises(ValueError, match="safe ASCII"):
+        load_market_regime_research_settings(
+            config,
+            raw_root=tmp_path / "raw",
+            output_root=tmp_path / "output",
+        )
+
+
 def test_settings_reject_invalid_rolling_windows(tmp_path):
     config = _config()
     config["market_regime_research"]["features"] = {

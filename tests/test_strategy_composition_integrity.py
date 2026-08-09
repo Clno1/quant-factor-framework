@@ -43,7 +43,7 @@ def test_composer_requires_every_factor_for_each_stock_date(monkeypatch):
     monkeypatch.setattr(
         composer,
         "_load_factor_bundle",
-        lambda factor_id, _universe: bundles[factor_id],
+        lambda factor_id, _universe, **_kwargs: bundles[factor_id],
     )
 
     result = composer.compose_factor(
@@ -56,6 +56,30 @@ def test_composer_requires_every_factor_for_each_stock_date(monkeypatch):
 
     assert pd.isna(result.composite.loc[dates[1], "B"])
     assert result.composite.loc[dates[1], ["A", "C"]].notna().all()
+
+
+def test_composer_rejects_factor_generation_change(monkeypatch):
+    index = pd.date_range("2026-01-05", periods=2, freq="B")
+    values = pd.DataFrame({"A": [1.0, 2.0]}, index=index)
+    monkeypatch.setattr(
+        composer,
+        "load_factor_matrix_bundle",
+        lambda _factor_id, universe: (
+            values,
+            values,
+            {"generation_id": "generation-new", "universe": universe},
+        ),
+    )
+
+    with pytest.raises(
+        composer.FactorDataMissingError,
+        match="Refusing a mixed-version run",
+    ):
+        composer.compose_factor(
+            [StrategyComponent("MOM_1M", 1.0)],
+            "TEST",
+            expected_generations={"MOM_1M": "generation-frozen"},
+        )
 
 
 def test_watchlist_rejects_non_finite_weight():

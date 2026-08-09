@@ -1,0 +1,28 @@
+schema_version: 1
+universes:
+  SP500:
+    role: PRIMARY
+    membership_type: PIT
+    benchmark: SPY
+    confidence_enabled: true
+    cross_universe_enabled: true
+    minimum_cross_section: 100
+    minimum_industry_coverage: 0.95
+
+  NASDAQ100:
+    role: SECONDARY
+    membership_type: PIT
+    benchmark: QQQ
+    confidence_enabled: true
+    cross_universe_enabled: true
+    minimum_cross_section: 60
+    minimum_industry_coverage: 0.95
+
+  MAG7:
+    role: REFERENCE
+    membership_type: STATIC
+    benchmark: QQQ
+    confidence_enabled: false
+    cross_universe_enabled: false
+    minimum_cross_section: 3
+    minimum_industry_coverage: 0.0

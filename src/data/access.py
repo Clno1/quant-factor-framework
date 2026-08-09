@@ -28,6 +28,7 @@ from src.storage import DataRequest, app_database
 from src.utils.identifiers import canonical_ticker, safe_path_component
 from src.utils.market_calendar import (
     latest_publishable_xnys_session,
+    xnys_session_on_or_after,
     xnys_session_on_or_before,
 )
 
@@ -73,6 +74,8 @@ class DataContract:
     factor_generations: dict[str, str]
     runtime_factor_id: str | None
     coverage: dict[str, Any]
+    universe_sha256: str | None = None
+    manifest_sha256: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -82,9 +85,30 @@ class DataContract:
 class PublishedDataBundle:
     version: DatasetVersion
     wide: dict[str, pd.DataFrame]
+    universe: pd.DataFrame
     membership: pd.DataFrame | None
+    membership_events: pd.DataFrame | None
     contract: DataContract
     publication: dict[str, Any] | None = None
+
+
+@dataclass
+class PublishedDailyDataBundle:
+    """Version-bound long-form daily data for non-factor consumers."""
+
+    version: DatasetVersion
+    bars: pd.DataFrame
+    universe: pd.DataFrame
+    membership: pd.DataFrame | None
+    contract: DataContract
+
+
+@dataclass
+class PublishedUniverseBundle:
+    """Frozen universe metadata and the version that owns it."""
+
+    version: DatasetVersion
+    universe: pd.DataFrame
 
 
 class MarketDataNotReadyError(DataFoundationError):
@@ -144,6 +168,103 @@ def _date_map(frame: pd.DataFrame, operation: str) -> dict[str, str]:
     }
 
 
+def resolve_published_version(
+    *,
+    requested_universe: str,
+    data_universe: str | None = None,
+    dataset_version_id: str | None = None,
+    reader: MarketDataReader | None = None,
+) -> DatasetVersion:
+    """Resolve one named version through the consumer access boundary."""
+    reader = reader or MarketDataReader()
+    selected_universe = safe_path_component(
+        str(data_universe or requested_universe).upper(),
+        label="data_universe",
+    )
+    try:
+        return (
+            reader.require_version(selected_universe, dataset_version_id)
+            if dataset_version_id
+            else reader.require_latest(selected_universe)
+        )
+    except DataFoundationError as exc:
+        raise MarketDataNotReadyError(
+            str(exc),
+            data_universe=selected_universe,
+        ) from exc
+
+
+def load_published_universe(
+    *,
+    requested_universe: str,
+    data_universe: str | None = None,
+    dataset_version_id: str | None = None,
+    reader: MarketDataReader | None = None,
+) -> PublishedUniverseBundle:
+    """Load frozen current-member metadata without reading the bars table."""
+    reader = reader or MarketDataReader()
+    version = resolve_published_version(
+        requested_universe=requested_universe,
+        data_universe=data_universe,
+        dataset_version_id=dataset_version_id,
+        reader=reader,
+    )
+    universe = reader.load_universe(
+        version.universe,
+        current_only=True,
+        version=version,
+    )
+    return PublishedUniverseBundle(version=version, universe=universe)
+
+
+def validate_daily_data_contract(
+    contract: DataContract | Mapping[str, Any],
+    *,
+    reader: MarketDataReader | None = None,
+) -> DatasetVersion:
+    """Verify that a persisted daily contract still names the same publication."""
+    payload = contract.to_dict() if isinstance(contract, DataContract) else dict(contract)
+    data_universe = str(payload.get("data_universe") or "").strip().upper()
+    version_id = str(payload.get("dataset_version_id") or "").strip()
+    schema_version = int(payload.get("schema_version") or 0)
+    if schema_version not in {1, 2} or not data_universe or not version_id:
+        raise MarketDataNotReadyError(
+            "Persisted daily data contract has an unsupported schema or missing identity",
+            data_universe=data_universe or "UNKNOWN",
+        )
+    version = resolve_published_version(
+        requested_universe=str(payload.get("requested_universe") or data_universe),
+        data_universe=data_universe,
+        dataset_version_id=version_id,
+        reader=reader,
+    )
+    expected = {
+        "dataset_run_id": version.run_id,
+        "target_session": version.target_session.isoformat(),
+        "bars_sha256": version.checksum_sha256,
+        "membership_sha256": version.membership_checksum_sha256,
+    }
+    if schema_version >= 2:
+        expected.update(
+            {
+                "universe_sha256": version.universe_checksum_sha256,
+                "manifest_sha256": version.manifest_checksum_sha256,
+            }
+        )
+    mismatches = [
+        key
+        for key, value in expected.items()
+        if payload.get(key) != value
+    ]
+    if mismatches:
+        raise MarketDataNotReadyError(
+            "Persisted daily data contract no longer matches its publication: "
+            f"{mismatches}",
+            data_universe=data_universe,
+        )
+    return version
+
+
 def inspect_coverage(
     reader: MarketDataReader,
     *,
@@ -156,12 +277,15 @@ def inspect_coverage(
     require_open: bool,
     exact_universe: bool,
     min_latest_coverage: float,
+    bars_start: str | pd.Timestamp | None = None,
+    allow_missing_tickers: bool = False,
 ) -> tuple[DataCoverage, pd.DataFrame]:
     requested = _normalize_tickers(tickers)
     expected_session = _expected_session(end)
     bars = reader.load_bars(
         data_universe,
         tickers=requested or None,
+        start=bars_start,
         end=expected_session,
         version=version,
     )
@@ -203,7 +327,7 @@ def inspect_coverage(
     failures: list[str] = []
     if bars.empty:
         failures.append("no_bars")
-    if missing:
+    if missing and not allow_missing_tickers:
         failures.append("missing_tickers")
     if membership_missing:
         failures.append("universe_membership_missing")
@@ -215,6 +339,16 @@ def inspect_coverage(
         failures.append("latest_session_coverage")
     if require_open and open_coverage < float(min_latest_coverage):
         failures.append("open_coverage")
+
+    if history_start is not None:
+        required_session = xnys_session_on_or_after(history_start)
+        version_start = (
+            pd.Timestamp(version.min_date).normalize()
+            if version.min_date is not None
+            else None
+        )
+        if version_start is None or version_start > required_session:
+            failures.append("insufficient_bar_history")
 
     membership_start: pd.Timestamp | None = None
     if exact_universe and history_start is not None:
@@ -298,6 +432,7 @@ def load_published_bundle(
     end: str | pd.Timestamp | None = None,
     require_open: bool = False,
     exact_universe: bool = False,
+    required_history_start: str | pd.Timestamp | None = None,
     factor_ids: Iterable[str] | None = None,
     require_factor_publication: bool = False,
     dataset_version_id: str | None = None,
@@ -329,11 +464,17 @@ def load_published_bundle(
         )
     )
     factors = list(dict.fromkeys(str(value) for value in (factor_ids or [])))
-    history_start = None
+    history_candidates: list[pd.Timestamp] = []
+    if required_history_start is not None:
+        history_candidates.append(pd.Timestamp(required_history_start).normalize())
     if start is not None and factors:
-        history_start = (
-            pd.Timestamp(start) - pd.Timedelta(days=DEFAULT_WARMUP_CALENDAR_DAYS)
-        ).normalize()
+        history_candidates.append(
+            (
+                pd.Timestamp(start)
+                - pd.Timedelta(days=DEFAULT_WARMUP_CALENDAR_DAYS)
+            ).normalize()
+        )
+    history_start = min(history_candidates) if history_candidates else None
     coverage, _ = inspect_coverage(
         reader,
         data_universe=selected_universe,
@@ -369,11 +510,17 @@ def load_published_bundle(
                 data_universe=selected_universe,
             ) from exc
 
-    load_start = None
+    load_start_candidates: list[pd.Timestamp] = []
     if start is not None:
-        load_start = (
-            pd.Timestamp(start) - pd.Timedelta(days=DEFAULT_WARMUP_CALENDAR_DAYS)
-        ).normalize()
+        load_start_candidates.append(
+            (
+                pd.Timestamp(start)
+                - pd.Timedelta(days=DEFAULT_WARMUP_CALENDAR_DAYS)
+            ).normalize()
+        )
+    if history_start is not None:
+        load_start_candidates.append(history_start)
+    load_start = min(load_start_candidates) if load_start_candidates else None
     wide = reader.load_wide_tables(
         selected_universe,
         tickers=tickers,
@@ -386,6 +533,15 @@ def load_published_bundle(
         selected_universe,
         version=version,
     )
+    membership_events = reader.load_membership_events(
+        selected_universe,
+        version=version,
+    )
+    universe_metadata = reader.load_universe(
+        selected_universe,
+        current_only=False,
+        version=version,
+    )
     factor_generations = {
         factor_id: str(payload.get("generation_id") or "")
         for factor_id, payload in (
@@ -394,7 +550,7 @@ def load_published_bundle(
         if factor_id in factors
     }
     contract = DataContract(
-        schema_version=1,
+        schema_version=2,
         requested_universe=requested_universe,
         data_universe=selected_universe,
         dataset_version_id=version.version_id,
@@ -414,13 +570,132 @@ def load_published_bundle(
             else runtime_factor_id(version=version, factor_ids=factors)
         ),
         coverage=coverage.to_dict(),
+        universe_sha256=version.universe_checksum_sha256,
+        manifest_sha256=version.manifest_checksum_sha256,
     )
     return PublishedDataBundle(
         version=version,
         wide=wide,
+        universe=universe_metadata,
         membership=membership,
+        membership_events=membership_events,
         contract=contract,
         publication=publication,
+    )
+
+
+def load_published_daily_data(
+    *,
+    requested_universe: str,
+    data_universe: str | None = None,
+    tickers: Iterable[str] | None = None,
+    start: str | pd.Timestamp | None = None,
+    end: str | pd.Timestamp | None = None,
+    require_open: bool = False,
+    exact_universe: bool = False,
+    required_history_start: str | pd.Timestamp | None = None,
+    dataset_version_id: str | None = None,
+    min_latest_coverage: float | None = None,
+    lookback_calendar_days: int | None = None,
+    include_membership: bool = False,
+    reader: MarketDataReader | None = None,
+) -> PublishedDailyDataBundle:
+    """Load one immutable daily version without constructing factor wide tables."""
+    reader = reader or MarketDataReader()
+    selected_universe = safe_path_component(
+        str(data_universe or requested_universe).upper(),
+        label="data_universe",
+    )
+    version = resolve_published_version(
+        requested_universe=requested_universe,
+        data_universe=selected_universe,
+        dataset_version_id=dataset_version_id,
+        reader=reader,
+    )
+    effective_start = start
+    if effective_start is None and lookback_calendar_days is not None:
+        days = int(lookback_calendar_days)
+        if days < 1:
+            raise ValueError("lookback_calendar_days must be positive")
+        anchor = min(
+            pd.Timestamp(version.target_session),
+            _expected_session(end),
+        )
+        effective_start = (anchor - pd.Timedelta(days=days)).normalize()
+
+    threshold = (
+        float(min_latest_coverage)
+        if min_latest_coverage is not None
+        else float(
+            _setting(
+                "custom_universe_min_coverage" if tickers else "min_latest_coverage",
+                1.0 if tickers else 0.98,
+            )
+        )
+    )
+    if not 0.0 <= threshold <= 1.0:
+        raise ValueError("min_latest_coverage must be between 0 and 1")
+    coverage, bars = inspect_coverage(
+        reader,
+        data_universe=selected_universe,
+        version=version,
+        tickers=tickers,
+        start=effective_start,
+        end=end,
+        history_start=required_history_start,
+        require_open=require_open,
+        exact_universe=exact_universe,
+        min_latest_coverage=threshold,
+        bars_start=effective_start,
+        allow_missing_tickers=threshold < 1.0,
+    )
+    if not coverage.passed:
+        raise MarketDataNotReadyError(
+            f"[{selected_universe}] published daily data does not satisfy the "
+            f"consumer contract: {list(coverage.failures)}",
+            data_universe=selected_universe,
+            coverage=coverage,
+        )
+
+    if effective_start is not None:
+        bars = bars.loc[
+            pd.to_datetime(bars["date"]).ge(pd.Timestamp(effective_start).normalize())
+        ].copy()
+    universe = reader.load_universe(
+        selected_universe,
+        current_only=True,
+        version=version,
+    )
+    membership = (
+        reader.load_membership(
+            selected_universe,
+            version=version,
+        )
+        if include_membership
+        else None
+    )
+    contract = DataContract(
+        schema_version=2,
+        requested_universe=requested_universe,
+        data_universe=selected_universe,
+        dataset_version_id=version.version_id,
+        dataset_run_id=version.run_id,
+        target_session=version.target_session.isoformat(),
+        bars_sha256=version.checksum_sha256,
+        membership_sha256=version.membership_checksum_sha256,
+        factor_publication_id=None,
+        factor_generations={},
+        runtime_factor_id=None,
+        coverage=coverage.to_dict(),
+        universe_sha256=version.universe_checksum_sha256,
+        manifest_sha256=version.manifest_checksum_sha256,
+    )
+    return PublishedDailyDataBundle(
+        version=version,
+        bars=bars.reset_index(drop=True),
+        universe=universe,
+        membership=membership,
+        contract=contract,
     )
 
 
@@ -440,7 +715,7 @@ def current_named_contract(
         factor_ids=factors,
     )
     return DataContract(
-        schema_version=1,
+        schema_version=2,
         requested_universe=universe,
         data_universe=universe,
         dataset_version_id=version.version_id,
@@ -456,6 +731,8 @@ def current_named_contract(
         },
         runtime_factor_id=None,
         coverage={},
+        universe_sha256=version.universe_checksum_sha256,
+        manifest_sha256=version.manifest_checksum_sha256,
     )
 
 
@@ -526,11 +803,17 @@ __all__ = [
     "DataContract",
     "DataCoverage",
     "MarketDataNotReadyError",
+    "PublishedDailyDataBundle",
     "PublishedDataBundle",
+    "PublishedUniverseBundle",
     "current_named_contract",
     "enqueue_market_data_request",
     "inspect_coverage",
+    "load_published_daily_data",
     "load_published_bundle",
+    "load_published_universe",
+    "resolve_published_version",
     "runtime_factor_id",
+    "validate_daily_data_contract",
     "watchlist_universe_frame",
 ]

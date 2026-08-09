@@ -54,9 +54,21 @@ def test_watchlist_store_blocks_traversal_and_preserves_concurrent_creates(
     with ThreadPoolExecutor(max_workers=2) as pool:
         list(pool.map(watchlist_store.create_watchlist, watchlists))
 
-    assert {row["id"] for row in watchlist_store.list_watchlists()} == {
+    rows = watchlist_store.list_watchlists()
+    assert {row["id"] for row in rows} == {
         watchlist.id for watchlist in watchlists
     }
+    assert all(row["universe_type"] == "TARGET" for row in rows)
+    assert all(row["ticker_revision_sha256"].startswith("sha256:") for row in rows)
+
+    activity = watchlist_store.record_ranking_activity(
+        watchlists[0].id,
+        strategy_id=str(uuid4()),
+        decision_date="2026-07-20",
+        data_contract={"dataset_version_id": "data-v1"},
+    )
+    assert activity["decision_date"] == "2026-07-20"
+    assert watchlist_store.load_ranking_activity(watchlists[0].id) == activity
     with pytest.raises(InvalidResourceId):
         watchlist_store.load_watchlist("../strategies")
 

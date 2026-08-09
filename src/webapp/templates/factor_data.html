@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+
+{% block head %}
+<script id="factor-data-initial-state" type="application/json">{{ initial_state|tojson }}</script>
+{% endblock %}
+
+{% block content %}
+<header class="factor-data-header">
+    <div>
+        <div class="factor-kicker">正式研究观测</div>
+        <h1 class="page-title">因子数据</h1>
+        <p class="page-meta">查看单个因子的原始值、清洗后数值及其在当天完整 PIT 股票池中的位置。</p>
+    </div>
+    <div id="factor-data-publication-status" class="factor-data-publication-status" aria-live="polite">正在检查正式研究发布</div>
+</header>
+
+<div class="factor-data-mode-row">
+    <div class="segmented-control" role="tablist" aria-label="因子数据视图">
+        <button class="segment is-active" type="button" role="tab" aria-selected="true" data-factor-mode="snapshot">日期截面</button>
+        <button class="segment" type="button" role="tab" aria-selected="false" data-factor-mode="history">单股历史</button>
+    </div>
+</div>
+
+<form id="factor-data-filters" class="factor-data-filters">
+    <label class="form-field">
+        <span class="form-label">研究股票池</span>
+        <select id="factor-data-universe" class="form-input" name="universe"></select>
+    </label>
+    <label class="form-field">
+        <span class="form-label">因子</span>
+        <select id="factor-data-factor" class="form-input" name="factor">
+            <option value="">请选择因子</option>
+        </select>
+    </label>
+
+    <div class="factor-mode-fields" data-visible-mode="snapshot">
+        <label class="form-field">
+            <span class="form-label">观测日期</span>
+            <div class="factor-date-stepper">
+                <button id="factor-date-previous" class="icon-btn" type="button" title="前一个正式观测日" aria-label="前一个正式观测日">‹</button>
+                <input id="factor-data-date" class="form-input mono" type="date" name="date">
+                <button id="factor-date-next" class="icon-btn" type="button" title="后一个正式观测日" aria-label="后一个正式观测日">›</button>
+            </div>
+        </label>
+        <label class="form-field factor-search-field">
+            <span class="form-label">股票搜索</span>
+            <input id="factor-data-ticker-search" class="form-input mono" type="search" name="ticker" placeholder="代码或公司名称" autocomplete="off">
+        </label>
+        <label class="form-field">
+            <span class="form-label">数据状态</span>
+            <select id="factor-data-status" class="form-input" name="status">
+                <option value="all">全部</option>
+                <option value="valid">有效</option>
+                <option value="not_pit_member">非当日成分</option>
+                <option value="raw_missing">原始值缺失</option>
+                <option value="clean_missing">清洗值缺失</option>
+            </select>
+        </label>
+    </div>
+
+    <div class="factor-mode-fields" data-visible-mode="history" hidden>
+        <label class="form-field factor-history-ticker">
+            <span class="form-label">股票代码</span>
+            <input id="factor-history-ticker" class="form-input mono" type="text" name="history_ticker" placeholder="例如 AAPL" autocomplete="off">
+        </label>
+        <label class="form-field">
+            <span class="form-label">开始日期</span>
+            <input id="factor-history-start" class="form-input mono" type="date" name="start">
+        </label>
+        <label class="form-field">
+            <span class="form-label">结束日期</span>
+            <input id="factor-history-end" class="form-input mono" type="date" name="end">
+        </label>
+        <div class="factor-range-shortcuts" aria-label="历史区间快捷选择">
+            <button type="button" class="btn small" data-history-range="3m">近 3 月</button>
+            <button type="button" class="btn small" data-history-range="1y">近 1 年</button>
+            <button type="button" class="btn small" data-history-range="3y">近 3 年</button>
+            <button type="button" class="btn small" data-history-range="all">全量</button>
+        </div>
+    </div>
+
+    <div class="factor-filter-actions">
+        <button class="btn primary" type="submit">查询</button>
+        <a id="factor-data-export" class="btn" href="#" download>下载 CSV</a>
+    </div>
+</form>
+
+<section id="factor-data-state" class="factor-data-state" aria-live="polite">
+    <strong>请选择研究股票池和因子</strong>
+    <span>页面只读取正式发布且通过完整性校验的数据。</span>
+</section>
+
+<div id="factor-data-results" hidden>
+    <section id="factor-snapshot-view" class="factor-data-view">
+        <div id="factor-snapshot-summary" class="factor-data-summary"></div>
+        <div class="factor-data-result-heading">
+            <div>
+                <h2>日期截面</h2>
+                <p id="factor-snapshot-count" class="page-meta"></p>
+            </div>
+            <span class="cell-note">排名始终基于完整 PIT 有效截面，搜索和分页不会改变分母。</span>
+        </div>
+        <div class="research-table-wrap factor-data-table-wrap">
+            <table class="data research-table factor-data-table">
+                <thead>
+                    <tr>
+                        <th><button type="button" data-factor-sort="rank">因子排名</button></th>
+                        <th>股票</th>
+                        <th>行业</th>
+                        <th><button type="button" data-factor-sort="raw">原始值 raw</button></th>
+                        <th><button type="button" data-factor-sort="clean">清洗后因子值 clean</button></th>
+                        <th>方向调整值</th>
+                        <th><button type="button" data-factor-sort="percentile">排名百分位</button></th>
+                        <th>分位组</th>
+                        <th>当日成分</th>
+                        <th>数据状态</th>
+                    </tr>
+                </thead>
+                <tbody id="factor-snapshot-body"></tbody>
+            </table>
+        </div>
+        <div class="factor-data-pagination">
+            <button id="factor-page-previous" class="btn small" type="button">上一页</button>
+            <span id="factor-page-label" class="mono"></span>
+            <button id="factor-page-next" class="btn small" type="button">下一页</button>
+        </div>
+    </section>
+
+    <section id="factor-history-view" class="factor-data-view" hidden>
+        <div id="factor-history-summary" class="factor-data-summary"></div>
+        <div class="factor-data-result-heading">
+            <div>
+                <h2>单股历史</h2>
+                <p id="factor-history-caption" class="page-meta"></p>
+            </div>
+            <div class="segmented-control factor-history-metrics" role="tablist" aria-label="历史图指标">
+                <button class="segment is-active" type="button" data-history-metric="raw">raw</button>
+                <button class="segment" type="button" data-history-metric="clean">clean</button>
+                <button class="segment" type="button" data-history-metric="rank">排名</button>
+                <button class="segment" type="button" data-history-metric="percentile">排名百分位</button>
+            </div>
+        </div>
+        <div id="factor-history-chart" class="factor-history-chart" aria-label="因子历史图"></div>
+        <div class="research-table-wrap factor-data-table-wrap">
+            <table class="data research-table factor-data-table">
+                <thead>
+                    <tr><th>日期</th><th>raw</th><th>clean</th><th>因子排名</th><th>百分位</th><th>分位组</th><th>PIT 成分</th><th>状态</th></tr>
+                </thead>
+                <tbody id="factor-history-body"></tbody>
+            </table>
+        </div>
+    </section>
+
+    <details id="factor-data-contract" class="factor-data-contract">
+        <summary>数据契约与版本</summary>
+        <dl id="factor-data-contract-grid" class="research-definition-grid"></dl>
+    </details>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/factor_data.js?v={{ asset_ver }}"></script>
+{% endblock %}

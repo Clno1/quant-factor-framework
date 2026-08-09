@@ -1,12 +1,12 @@
 # 项目运行架构
 
-更新日期：2026-08-08
+更新日期：2026-08-09
 
 ## 1. 系统由多个进程协作
 
 | 入口 | 职责 | 主输出 |
 |---|---|---|
-| `scripts/run_data_pipeline.py` | SP500 PIT、SP500/MAG7 日线摄取和正式版本发布 | `data/catalog/`、`data/lake/` |
+| `scripts/run_data_pipeline.py` | SP500/NASDAQ100 PIT、核心研究池日线摄取和正式版本发布 | `data/catalog/`、`data/lake/` |
 | `scripts/refresh_us_active.py` | 生成并发布版本化 `US_LIQUID_5M` | DuckDB + `data/lake/` |
 | `scripts/run_data_requests.py` | 处理 Watchlist 专属行情请求 | DuckDB + SQLite 请求状态 |
 | `scripts/run_factor_research.py` | 对最新正式版本发布整批因子研究 | `outputs/universes/` |
@@ -15,7 +15,7 @@
 | `scripts/run_paper.py` | 运行 active 日线模拟盘 | SQLite 账户和账本 |
 | `scripts/run_group_analytics.py` | sector/sub-industry EOD 强弱 | immutable group artifacts |
 | `scripts/run_momentum_alerts.py` | 独立动量扫描和 Discord 投递 | 告警状态与摘要 |
-| `scripts/run_intraday_momentum_monitor.py` | 独立分钟级 shadow 监控 | 独立 SQLite/快照 |
+| `scripts/run_intraday_momentum_monitor.py` | 独立分钟监控、五日晋级和 Discord 投递 | 独立 SQLite/outbox/快照 |
 | `scripts/run_market_regime_research.py` | 大盘顶底研究 | 独立研究产物 |
 
 Web 不是调度器。关闭浏览器不会停止 worker；启动网页也不会自动更新日线或因子。
@@ -101,6 +101,24 @@ configs/default.yaml
 命名股票池的因子先由研究任务发布。策略组合只读取同一 publication 下的 clean factor 矩阵。
 Watchlist 走专属行情版本并现场计算 runtime factor bundle，不能向 FMP 临时补一只股票。
 
+### 4.1 因子数据浏览器
+
+“研究 -> 因子数据”只查询正式发布的单因子观测，不是策略综合排名：
+
+```text
+research_publication.json
+  -> FactorObservationReader
+  -> 已校验 raw/clean generation
+  -> publication 绑定的显式 DatasetVersion
+  -> 当日 PIT membership
+  -> clean × direction
+  -> 单因子 rank / percentile / quintile
+  -> 页面、JSON API、CSV
+```
+
+排名是派生数据，不写 SQLite。查询不调用 FMP、不读取旧行情目录、不切换到另一个 latest version。
+旧单股页和 `src/analysis/single_stock.py` 已删除；历史任务事实继续由“决策回放”负责。
+
 ## 5. 独立模块边界
 
 动量突破、盘前 Discord、分钟监控和大盘顶底研究与主多因子共享部分配置或正式行情，但不是
@@ -110,11 +128,27 @@ Watchlist 走专属行情版本并现场计算 runtime factor bundle，不能向
 |---|---:|---|
 | group analytics | 否 | 正式 SP500 version + 分类发布物 |
 | 日线动量扫描 | 否 | 正式 `US_LIQUID_5M` version |
-| 分钟 shadow monitor | 否 | quote/分钟缓存和独立状态 |
-| market regime research | 否 | 正式 SP500 version + Cboe/FRED 等独立源 |
+| 分钟动量 monitor | 否 | 版本绑定 T-1 日线 + quote/分钟数据 + 独立 SQLite |
+| market regime research | 否 | 专属 `SP500_MARKET_REGIME` version/PIT + Cboe/FRED 等独立源 |
 
 以后若让突破信号参与策略，应将其做成显式 universe filter、entry timing 或可研究的新因子，并
 单独做样本外检验，不能由页面 Tab 暗中改变交易逻辑。
+
+动量域与多因子域共享的是数据基础设施，不共享策略状态：
+
+```mermaid
+flowchart LR
+    PARQUET["immutable Parquet"] --> ACCESS["src/data/access.py"]
+    DUCK["DuckDB version catalog"] --> ACCESS
+    ACCESS --> FACTOR["多因子消费者"]
+    ACCESS --> DAILY["BreakoutDailyDataset"]
+    DAILY --> WEBBO["突破 Web / 盘前 / 小时提醒"]
+    DAILY --> LIVE["分钟动量 monitor"]
+    LIVE --> SQLITE["突破专属 SQLite"]
+```
+
+`BreakoutDailyDataset` 一次携带冻结 universe、批量日线 frames、版本对象和 `DataContract`。
+突破 SQLite 不会被因子、回测或模拟盘读取；多因子 publication 也不会被突破 worker 修改。
 
 ## 6. 当前仍需治理的边界
 

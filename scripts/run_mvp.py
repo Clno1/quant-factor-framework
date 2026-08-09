@@ -34,6 +34,7 @@ Multi-Factor Quant pipeline 一键脚本（支持多股票池）。
 from __future__ import annotations
 
 import argparse
+from datetime import date
 import sys
 from pathlib import Path
 
@@ -55,8 +56,7 @@ from src.analysis import (  # noqa: E402
 from src.backtest import double_sort_backtest, quintile_backtest  # noqa: E402
 from src.backtest.quintile import build_tradable_mask  # noqa: E402
 from src.config import CONFIG  # noqa: E402
-from src.data import build_wide_tables  # noqa: E402
-from src.data.foundation import MarketDataReader  # noqa: E402
+from src.data.access import load_published_bundle  # noqa: E402
 from src.data.pit import (  # noqa: E402
     build_membership_mask,
     point_in_time_required,
@@ -69,6 +69,7 @@ from src.factors.publication import (  # noqa: E402
 )
 from src.preprocessing import preprocess_factor  # noqa: E402
 from src.utils.file_lock import file_lock  # noqa: E402
+from src.utils.io import atomic_save_json  # noqa: E402
 from src.utils.logger import get_logger  # noqa: E402
 from src.visualization.plots_mpl import (  # noqa: E402
     plot_drawdown_mpl,
@@ -114,15 +115,17 @@ def _enabled_universes() -> list[str]:
     """
     从配置中读出要跑哪些股票池。
 
-    配置使用 ``CONFIG.universes.enabled``，空列表属于配置错误。
+    正式研究池来自受版本控制的 typed registry。
     """
-    values = [str(value).upper() for value in CONFIG.universes.enabled]
+    from src.research_universes import research_universe_registry
+
+    values = research_universe_registry().ids()
     if not values:
-        raise ValueError("universes.enabled must contain at least one universe")
+        raise ValueError("research universe registry cannot be empty")
     return values
 
 
-def _min_stocks_for(n_universe: int) -> int:
+def _min_stocks_for(n_universe: int, universe: str) -> int:
     """
     决定每天计算 IC 时至少需要多少只有效股票。
 
@@ -131,21 +134,54 @@ def _min_stocks_for(n_universe: int) -> int:
     但 MAG7 只有 7 只股票，如果强行用 SP500 的门槛会一天都算不出来，
     所以小股票池会自动降低门槛。
     """
-    base = int(CONFIG.ic_analysis.min_stocks)
+    from src.research_universes import research_universe_registry
+
+    entry = research_universe_registry().get(universe)
+    base = max(
+        int(CONFIG.ic_analysis.min_stocks),
+        int(entry.minimum_cross_section),
+    )
     # 若池本身就比 base 小，强制设为池大小的一半（至少 3）
     if n_universe < base:
         return max(3, n_universe // 2)
     return base
 
 
-def _factor_confidence_enabled() -> bool:
+def _factor_confidence_enabled(universe: str) -> bool:
     """Return the required factor-confidence publication switch."""
-    return bool(CONFIG.factor_confidence.enabled)
+    from src.research_universes import research_universe_registry
+
+    return bool(
+        CONFIG.factor_confidence.enabled
+        and research_universe_registry().get(universe).confidence_enabled
+    )
+
+
+def _research_index(
+    index: pd.Index,
+    *,
+    start: str | None,
+    end: str | None,
+) -> pd.DatetimeIndex:
+    """Select the evaluation window while retaining earlier rows as warmup."""
+    dates = pd.DatetimeIndex(index)
+    lower = pd.Timestamp(start).normalize() if start else dates.min()
+    upper = pd.Timestamp(end).normalize() if end else dates.max()
+    selected = dates[(dates >= lower) & (dates <= upper)]
+    if selected.empty:
+        raise ValueError(
+            f"Research window {lower.date()}..{upper.date()} has no market data"
+        )
+    return selected
 
 
 def run_pipeline_for_universe(
     universe: str,
     universe_limit: int | None = None,
+    *,
+    dataset_version_id: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
 ) -> None:
     """
     跑完“一个股票池”的全部离线研究流程。
@@ -177,11 +213,30 @@ def run_pipeline_for_universe(
 
     # 1) 取得与行情同版本的股票池和 PIT 快照。研究端不访问网络，
     #    因而不会把“今天的成分股”错误地配到“昨天的数据版本”上。
-    reader = MarketDataReader()
-    data_version = reader.require_latest(universe)
+    enabled = list(CONFIG.factors.enabled)
+    if not enabled:
+        raise ValueError("No factors enabled in config")
+    bundle = load_published_bundle(
+        requested_universe=universe,
+        start=start,
+        end=end,
+        exact_universe=pit_required,
+        required_history_start=(
+            getattr(CONFIG.universe.point_in_time, "main_factor_start", None)
+            if pit_required
+            else None
+        ),
+        factor_ids=enabled,
+        dataset_version_id=dataset_version_id,
+    )
+    data_version = bundle.version
     data_provenance = dataset_version_provenance(data_version)
-    current_members = reader.load_universe(universe, current_only=True)
-    all_version_members = reader.load_universe(universe, current_only=False)
+    all_version_members = bundle.universe
+    current_members = all_version_members
+    if "is_current_member" in current_members.columns:
+        current_members = current_members.loc[
+            current_members["is_current_member"].astype(bool)
+        ]
     if universe_limit and pit_required:
         raise ValueError(
             f"Strict PIT universe {universe} cannot be published with "
@@ -192,10 +247,7 @@ def run_pipeline_for_universe(
     else:
         tickers = all_version_members["ticker"].astype(str).tolist()
     membership_kwargs = {
-        "membership_override": reader.load_membership(
-            universe,
-            version=data_version,
-        ),
+        "membership_override": bundle.membership,
         "membership_source": data_version.membership_path,
         "membership_source_sha256": data_version.membership_checksum_sha256,
     }
@@ -206,7 +258,13 @@ def run_pipeline_for_universe(
     #      columns = ticker
     #    wide["adj_close"]、wide["open"]、wide["returns"] 都是这种形状。
     #    后续因子、IC、回测都围绕这些宽表计算。
-    wide = build_wide_tables(tickers=tickers, universe=universe)
+    wide = bundle.wide
+    if universe_limit:
+        for key, frame in list(wide.items()):
+            if key in {"sector", "market_cap"}:
+                wide[key] = frame.reindex(tickers)
+            else:
+                wide[key] = frame.reindex(columns=tickers)
     adj_close = wide["adj_close"]
     returns = wide["returns"]
     log.info("[%s] adj_close shape=%s, returns shape=%s",
@@ -215,6 +273,15 @@ def run_pipeline_for_universe(
     if adj_close.empty:
         log.error("[%s] No price data available, skip.", universe)
         return
+    analysis_index = _research_index(adj_close.index, start=start, end=end)
+    log.info(
+        "[%s] Evaluation window: %s -> %s (%d sessions); earlier rows are "
+        "factor warmup only",
+        universe,
+        analysis_index.min().date(),
+        analysis_index.max().date(),
+        len(analysis_index),
+    )
 
     membership_mask, pit_diagnostics = build_membership_mask(
         adj_close.index,
@@ -229,6 +296,7 @@ def run_pipeline_for_universe(
             index=adj_close.index,
             columns=adj_close.columns,
         )
+    analysis_membership_mask = membership_mask.reindex(index=analysis_index)
     base_tradable_mask = build_tradable_mask(
         index=adj_close.index,
         columns=adj_close.columns,
@@ -244,17 +312,17 @@ def run_pipeline_for_universe(
         pit_diagnostics.to_dict(),
     )
 
-    enabled = list(CONFIG.factors.enabled)
     log.info("[%s] Enabled factors: %s", universe, enabled)
-    if not enabled:
-        raise ValueError("No factors enabled in config")
     missing_factors = sorted(set(enabled) - set(FACTOR_REGISTRY))
     if missing_factors:
         raise ValueError(
             f"Enabled factors are not registered: {missing_factors}"
         )
 
-    min_stocks = _min_stocks_for(adj_close.shape[1])
+    from src.research_universes import research_universe_registry
+
+    research_universe = research_universe_registry().get(universe)
+    min_stocks = _min_stocks_for(adj_close.shape[1], universe)
     log.info("[%s] IC min_stocks (adaptive) = %d", universe, min_stocks)
 
     # q-value/FDR 校正必须拿到“同一股票池内所有因子”的 p-value 后才能做，
@@ -280,17 +348,48 @@ def run_pipeline_for_universe(
             columns=membership_mask.columns,
         )
         raw = raw.where(membership_mask)
+        raw = raw.reindex(index=analysis_index)
         log.info("Raw factor shape=%s, non-NaN coverage=%.2f%%",
                  raw.shape, 100 * raw.notna().mean().mean())
         # 5) 预处理因子。
         #    典型步骤：去极值、可选行业/市值中性化、最终横截面 Z-score。
         #    后续 IC 和回测使用 clean，而不是 raw。
-        clean = preprocess_factor(
+        clean, preprocessing_audit = preprocess_factor(
             raw,
             sector_map=wide.get("sector"),
             mcap_df=wide.get("market_cap"),
+            membership_mask=analysis_membership_mask,
+            return_audit=True,
         )
         log.info("Preprocessed shape=%s", clean.shape)
+        fdir = factor_dir(fname, universe=universe)
+        preprocessing_audit_path = fdir / "preprocessing_audit.json"
+        atomic_save_json(preprocessing_audit.to_dict(), preprocessing_audit_path)
+        disappeared = list(
+            preprocessing_audit.raw_non_null_clean_all_null_tickers
+        )
+        if disappeared:
+            raise RuntimeError(
+                f"[{universe}/{fname}] preprocessing removed every active raw "
+                f"observation for tickers={disappeared[:50]}; audit="
+                f"{preprocessing_audit_path}"
+            )
+        neutralization = preprocessing_audit.neutralization or {}
+        industry_coverage = float(
+            neutralization.get("industry_coverage", 1.0)
+        )
+        if (
+            research_universe.confidence_enabled
+            and bool(CONFIG.preprocessing.neutralize_industry)
+            and industry_coverage
+            < research_universe.minimum_industry_coverage
+        ):
+            raise RuntimeError(
+                f"[{universe}/{fname}] industry coverage {industry_coverage:.2%} "
+                f"is below the formal research gate "
+                f"{research_universe.minimum_industry_coverage:.2%}; "
+                f"audit={preprocessing_audit_path}"
+            )
 
         # raw + clean 必须作为同一代原子发布；composer 会校验 manifest
         # 和两个文件的 SHA-256，拒绝新旧文件混用。
@@ -304,9 +403,21 @@ def run_pipeline_for_universe(
                 "factor_class": factor.__class__.__qualname__,
                 "factor_parameters": dict(vars(factor)),
                 "factor_direction": factor.direction,
+                "research_universe": research_universe.to_dict(),
+                "research_window": {
+                    "start": analysis_index.min().date().isoformat(),
+                    "end": analysis_index.max().date().isoformat(),
+                    "sessions": len(analysis_index),
+                },
                 "preprocessing": dict(CONFIG.preprocessing),
                 "point_in_time_universe": pit_diagnostics.to_dict(),
                 "data_foundation": data_provenance,
+                "preprocessing_audit": {
+                    "path": str(preprocessing_audit_path),
+                    "raw_non_null": preprocessing_audit.raw_non_null,
+                    "clean_non_null": preprocessing_audit.clean_non_null,
+                    "neutralization": preprocessing_audit.neutralization,
+                },
             },
         )
         log.info(
@@ -340,6 +451,8 @@ def run_pipeline_for_universe(
             price_df=wide.get("adj_close"),
             volume_df=wide.get("volume"),
             tradable_mask=base_tradable_mask,
+            membership_mask=membership_mask,
+            membership_events=bundle.membership_events,
         )
 
         # If point-in-time market cap is available, persist a size-controlled
@@ -359,8 +472,9 @@ def run_pipeline_for_universe(
                 price_df=wide.get("adj_close"),
                 volume_df=wide.get("volume"),
                 tradable_mask=base_tradable_mask,
+                membership_mask=membership_mask,
+                membership_events=bundle.membership_events,
             )
-            fdir = factor_dir(fname, universe=universe)
             ds.factor_returns.to_frame("returns").to_parquet(
                 fdir / "double_sort_returns.parquet"
             )
@@ -370,7 +484,6 @@ def run_pipeline_for_universe(
 
         # 静态图（保留英文标题，避免 matplotlib 中文字体问题）
         # 9) 保存静态图片，供本地查看或未来报告使用。
-        fdir = factor_dir(fname, universe=universe)
         save_fig(plot_ic_series_mpl(ic, title=f"[{universe}] {fname} · IC Time Series"),
                  fdir / "ic_series.png")
         save_fig(plot_quintile_nav_mpl(result.group_nav, result.long_short_nav,
@@ -400,7 +513,7 @@ def run_pipeline_for_universe(
         )
         log.info("Artifacts persisted for %s [%s]", fname, universe)
 
-        if _factor_confidence_enabled():
+        if _factor_confidence_enabled(universe):
             try:
                 # 11) 生成因子置信评估草稿。
                 #     注意这里还没有 q-value，因为 q-value 需要同池所有因子一起校正。
@@ -416,7 +529,7 @@ def run_pipeline_for_universe(
             except Exception as e:  # noqa: BLE001
                 log.exception("[%s] Confidence evaluation failed for %s: %s", universe, fname, e)
 
-    if _factor_confidence_enabled() and confidence_candidates:
+    if _factor_confidence_enabled(universe) and confidence_candidates:
         # 12) 同一个股票池内所有因子一起做 FDR 校正，得到 q-value。
         #     然后把最终 PASS/WATCH/FAIL、A/B/C/D、检查清单写入 outputs。
         finalized = finalize_confidence_reports(confidence_candidates)
@@ -459,6 +572,8 @@ def run_pipeline_for_universe(
 def run_pipeline(
     universe_limit: int | None = None,
     only_universe: str | None = None,
+    dataset_version_ids: dict[str, str] | None = None,
+    target_session: str | date | pd.Timestamp | None = None,
 ) -> list[str]:
     """
     跑一个或多个股票池。
@@ -470,6 +585,15 @@ def run_pipeline(
     start_iso, end_iso, dynamic = resolve_date_range(
         CONFIG.date_range.start, CONFIG.date_range.end
     )
+    if target_session is not None:
+        target = pd.Timestamp(target_session).normalize()
+        if pd.isna(target):
+            raise ValueError(f"Invalid research target session: {target_session}")
+        end_iso = target.date().isoformat()
+        if pd.Timestamp(start_iso).normalize() > target:
+            raise ValueError(
+                f"Research start {start_iso} is after target session {end_iso}"
+            )
     log.info(
         "Date range: %s → %s  (start=%r  end=%r  dynamic=%s)",
         start_iso, end_iso, CONFIG.date_range.start, CONFIG.date_range.end, dynamic,
@@ -493,10 +617,42 @@ def run_pipeline(
                 run_pipeline_for_universe(
                     uni,
                     universe_limit=universe_limit,
+                    dataset_version_id=(dataset_version_ids or {}).get(uni),
+                    start=start_iso,
+                    end=end_iso,
                 )
         except Exception as e:  # noqa: BLE001
             log.exception("[%s] Pipeline failed: %s", uni, e)
             failures.append(uni)
+    try:
+        from src.data.foundation import MarketDataReader
+        from src.research_universes.service import (
+            publish_cross_universe_assessments,
+        )
+
+        cross_target = None
+        if dataset_version_ids:
+            sessions = [
+                MarketDataReader()
+                .require_version(universe, version_id)
+                .target_session
+                for universe, version_id in dataset_version_ids.items()
+            ]
+            if sessions:
+                cross_target = max(sessions)
+        cross_publication = publish_cross_universe_assessments(
+            target_session=cross_target,
+        )
+        log.info(
+            "Cross-universe assessment published: generation=%s target=%s "
+            "verdicts=%s",
+            cross_publication.get("generation_id"),
+            cross_publication.get("target_session"),
+            cross_publication.get("verdict_counts"),
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Cross-universe assessment publication failed: %s", exc)
+        failures.append("CROSS_UNIVERSE")
     return failures
 
 

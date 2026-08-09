@@ -367,7 +367,7 @@
       const tickerCell = cell(tr, "");
       const tickerLink = document.createElement("a");
       tickerLink.textContent = text(item.ticker);
-      tickerLink.href = `/stock/${encodeURIComponent(item.ticker)}?universe=SP500`;
+      tickerLink.href = `/research/factor-data?mode=history&universe=SP500&ticker=${encodeURIComponent(item.ticker)}`;
       tickerCell.appendChild(tickerLink);
       cell(tr, text(item.name));
       cell(tr, text(item.security_id));

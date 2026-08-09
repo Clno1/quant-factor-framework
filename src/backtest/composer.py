@@ -48,10 +48,13 @@ class CompositionResult:
 # ---------------------------------------------------------------
 
 def _load_factor_bundle(
-    factor_id: str, universe: str,
+    factor_id: str,
+    universe: str,
+    *,
+    expected_generation_id: str | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     try:
-        raw, clean, _ = load_factor_matrix_bundle(
+        raw, clean, manifest = load_factor_matrix_bundle(
             factor_id,
             universe=universe,
         )
@@ -61,6 +64,17 @@ def _load_factor_bundle(
             "raw/clean 同代产物，请先运行 "
             f"`python scripts/run_mvp.py --update --only-universe {universe}`。"
         ) from exc
+    observed_generation = str(manifest.get("generation_id") or "")
+    if (
+        expected_generation_id is not None
+        and observed_generation != str(expected_generation_id)
+    ):
+        raise FactorDataMissingError(
+            "Factor generation changed during portfolio composition: "
+            f"universe={universe} factor={factor_id} "
+            f"expected={expected_generation_id!r} "
+            f"observed={observed_generation!r}. Refusing a mixed-version run."
+        )
     if clean.empty:
         raise FactorDataMissingError(
             f"因子 {factor_id} 在股票池 {universe} 上尚未计算 factor_values.parquet，"
@@ -91,6 +105,7 @@ def compose_factor(
     *,
     start: pd.Timestamp | str | None = None,
     end: pd.Timestamp | str | None = None,
+    expected_generations: dict[str, str] | None = None,
 ) -> CompositionResult:
     """
     合成因子。
@@ -114,7 +129,11 @@ def compose_factor(
 
     # 读入各因子值矩阵
     bundles: dict[str, tuple[pd.DataFrame, pd.DataFrame]] = {
-        c.factor_id: _load_factor_bundle(c.factor_id, universe)
+        c.factor_id: _load_factor_bundle(
+            c.factor_id,
+            universe,
+            expected_generation_id=(expected_generations or {}).get(c.factor_id),
+        )
         for c in components
     }
     per_factor = {

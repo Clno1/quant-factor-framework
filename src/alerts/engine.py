@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import math
-from typing import Any
+from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -16,16 +16,18 @@ from src.breakouts import (
     evaluate_daily_setup,
     load_intraday_1min,
     load_market_regime,
-    refresh_daily_frame,
     scan_breakouts,
 )
-from src.breakouts.scanner import load_daily_frame
-from src.data.fmp import get_batch_quotes, get_exchange_market_hours, get_security_profile
-from src.data.universe import get_universe
+from src.breakouts.daily_data import (
+    BreakoutDailyDataset,
+    load_breakout_daily_dataset,
+)
+from src.data.fmp import get_batch_quotes, get_exchange_market_hours
 from src.utils.logger import get_logger
 
 log = get_logger(__name__)
 _NEW_YORK = ZoneInfo("America/New_York")
+DailyDatasetLoader = Callable[..., BreakoutDailyDataset]
 
 
 def _finite(value: Any, default: float | None = None) -> float | None:
@@ -80,50 +82,15 @@ def _forced_tickers(settings: AlertSettings) -> set[str]:
 def _broad_pool(
     settings: AlertSettings,
     forced: set[str],
+    daily: BreakoutDailyDataset,
 ) -> tuple[list[str], pd.DataFrame, dict[str, Any], set[str], set[str], int]:
-    universe = get_universe(settings.universe).copy()
-    universe["ticker"] = universe["ticker"].astype(str).str.upper()
-    source_universe_count = len(universe)
-    effective_forced = set(forced)
-    excluded_forced: set[str] = set()
-    if not settings.include_etfs:
-        if "asset_type" not in universe.columns:
-            raise RuntimeError(
-                f"{settings.universe} 缺少 asset_type，无法可靠执行股票-only 告警"
-            )
-        source_tickers = set(universe["ticker"])
-        unknown_forced = forced - source_tickers
-        profile_rows: list[dict[str, Any]] = []
-        for ticker in sorted(unknown_forced):
-            try:
-                profile = get_security_profile(ticker)
-            except Exception as exc:  # noqa: BLE001
-                log.warning("Cannot classify forced ticker %s: %s", ticker, exc)
-                profile = None
-            if (
-                profile
-                and profile.get("asset_type") == "STOCK"
-                and profile.get("exchange") in {"NASDAQ", "NYSE", "AMEX"}
-                and profile.get("is_actively_trading", True)
-            ):
-                profile_rows.append(profile)
-        if profile_rows:
-            universe = pd.concat([universe, pd.DataFrame(profile_rows)], ignore_index=True)
-
-        asset_types = universe["asset_type"].fillna("").astype(str).str.upper()
-        universe = universe.loc[asset_types.eq("STOCK")].copy()
-        universe = universe.drop_duplicates(subset=["ticker"], keep="first")
-        allowed_tickers = set(universe["ticker"])
-        effective_forced &= allowed_tickers
-        excluded_forced = forced - effective_forced
-    current_liquidity = pd.to_numeric(
-        universe.get("current_dollar_volume", pd.Series(index=universe.index, dtype="float64")),
-        errors="coerce",
-    )
-    eligible = universe[
-        (current_liquidity >= settings.broad_min_current_dollar_volume)
-        | universe["ticker"].isin(effective_forced)
-    ].copy()
+    (
+        universe,
+        eligible,
+        effective_forced,
+        excluded_forced,
+        source_universe_count,
+    ) = _prepare_broad_universe(settings, forced, daily.universe)
     names = eligible.set_index("ticker").get("name", pd.Series(dtype="object")).fillna("").to_dict()
     sectors = eligible.set_index("ticker").get("sector", pd.Series(dtype="object")).fillna("").to_dict()
     scan = scan_breakouts(
@@ -137,6 +104,9 @@ def _broad_pool(
         ),
         names=names,
         sectors=sectors,
+        data_universe=daily.data_universe,
+        dataset_version_id=daily.dataset_version_id,
+        frames=daily.frames,
     )
     tickers = [str(row["ticker"]) for row in scan["rows"]]
     tickers = list(dict.fromkeys([*tickers, *sorted(effective_forced)]))
@@ -144,6 +114,44 @@ def _broad_pool(
         tickers,
         universe,
         scan,
+        effective_forced,
+        excluded_forced,
+        source_universe_count,
+    )
+
+
+def _prepare_broad_universe(
+    settings: AlertSettings,
+    forced: set[str],
+    source: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame, set[str], set[str], int]:
+    universe = source.copy()
+    if "ticker" not in universe.columns:
+        raise RuntimeError(f"{settings.universe} 缺少 ticker 行情元数据")
+    universe["ticker"] = universe["ticker"].astype(str).str.upper()
+    source_universe_count = len(universe)
+    if "asset_type" not in universe.columns:
+        raise RuntimeError(
+            f"{settings.universe} 缺少 asset_type，无法可靠执行资产类型过滤"
+        )
+    asset_types = universe["asset_type"].fillna("").astype(str).str.upper()
+    allowed_types = {"STOCK", "ETF"} if settings.include_etfs else {"STOCK"}
+    universe = universe.loc[asset_types.isin(allowed_types)].copy()
+    universe = universe.drop_duplicates(subset=["ticker"], keep="first")
+    allowed_tickers = set(universe["ticker"])
+    effective_forced = forced & allowed_tickers
+    excluded_forced = forced - effective_forced
+    current_liquidity = pd.to_numeric(
+        universe.get("current_dollar_volume", pd.Series(index=universe.index, dtype="float64")),
+        errors="coerce",
+    )
+    eligible = universe[
+        (current_liquidity >= settings.broad_min_current_dollar_volume)
+        | universe["ticker"].isin(effective_forced)
+    ].copy()
+    return (
+        universe,
+        eligible,
         effective_forced,
         excluded_forced,
         source_universe_count,
@@ -261,10 +269,25 @@ def run_live_alert_scan(
     *,
     market_hours: dict[str, Any] | None = None,
     include_intraday: bool | None = None,
+    dataset_loader: DailyDatasetLoader = load_breakout_daily_dataset,
 ) -> dict[str, Any]:
     market_hours = dict(market_hours or market_hours_snapshot(settings))
     market_open = bool(market_hours.get("isMarketOpen"))
     forced = _forced_tickers(settings)
+
+    def select_tickers(source: pd.DataFrame) -> list[str]:
+        _, eligible, _, _, _ = _prepare_broad_universe(settings, forced, source)
+        selected = eligible["ticker"].tolist()
+        source_tickers = set(source["ticker"].astype(str).str.upper())
+        if "QQQ" in source_tickers:
+            selected.append("QQQ")
+        return list(dict.fromkeys(selected))
+
+    daily = dataset_loader(
+        requested_universe=settings.universe,
+        ticker_selector=select_tickers,
+        min_latest_coverage=settings.min_exact_daily_coverage,
+    )
     (
         broad_tickers,
         universe,
@@ -272,7 +295,7 @@ def run_live_alert_scan(
         forced,
         excluded_forced,
         source_universe_count,
-    ) = _broad_pool(settings, forced)
+    ) = _broad_pool(settings, forced, daily)
     quotes = get_batch_quotes(broad_tickers, chunk_size=settings.quote_chunk_size)
     if quotes.empty:
         raise RuntimeError("FMP batch-quote returned no rows for the broad momentum pool")
@@ -297,9 +320,7 @@ def run_live_alert_scan(
             unavailable.append(ticker)
             continue
         quote = quotes.loc[ticker]
-        frame = load_daily_frame(ticker)
-        if frame.empty and ticker in forced:
-            frame, _ = refresh_daily_frame(ticker, end=quote_date)
+        frame = daily.frame(ticker)
         if frame.empty:
             unavailable.append(ticker)
             continue
@@ -360,6 +381,9 @@ def run_live_alert_scan(
             asof=session_date,
             symbol="QQQ",
             fetch_missing=False,
+            data_universe=daily.data_universe,
+            dataset_version_id=daily.dataset_version_id,
+            frame=daily.frame("QQQ"),
         )
     except Exception as exc:  # noqa: BLE001
         market_regime = {"symbol": "QQQ", "passed": False, "error": str(exc)}
@@ -371,6 +395,9 @@ def run_live_alert_scan(
         "market_hours": market_hours,
         "market_regime": market_regime,
         "universe": settings.universe,
+        "data_universe": daily.data_universe,
+        "dataset_version_id": daily.dataset_version_id,
+        "data_contract": daily.contract.to_dict(),
         "asset_scope": "stocks_and_etfs" if settings.include_etfs else "stocks",
         "include_etfs": settings.include_etfs,
         "source_universe_count": source_universe_count,

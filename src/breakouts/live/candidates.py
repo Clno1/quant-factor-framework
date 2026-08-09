@@ -2,20 +2,55 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 import pandas as pd
 
+from src.breakouts.daily_data import (
+    BreakoutDailyDataset,
+    load_breakout_daily_dataset,
+)
 from src.breakouts.live.detector import ALGORITHM_VERSION, PARAMETER_VERSION
 from src.breakouts.live.models import DailyCandidate
 from src.breakouts.live.settings import IntradayMonitorSettings
 from src.breakouts.scanner import (
     BreakoutFilters,
     evaluate_daily_setup,
-    load_daily_frame,
     scan_breakouts,
 )
-from src.data.universe import get_universe
+
+
+DailyDatasetLoader = Callable[..., BreakoutDailyDataset]
+
+
+def _prepare_universe(
+    settings: IntradayMonitorSettings,
+    source: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame, set[str]]:
+    universe = source.copy()
+    if "ticker" not in universe.columns:
+        raise RuntimeError(f"{settings.universe} is missing ticker metadata")
+    universe["ticker"] = universe["ticker"].astype(str).str.strip().str.upper()
+    if not settings.include_etfs:
+        if "asset_type" not in universe.columns:
+            raise RuntimeError("US_ACTIVE is missing asset_type for stock-only monitoring")
+        universe = universe.loc[
+            universe["asset_type"].fillna("").astype(str).str.upper().eq("STOCK")
+        ].copy()
+
+    forced = set(settings.always_tickers) & set(universe["ticker"])
+    liquidity = pd.to_numeric(
+        universe.get(
+            "current_dollar_volume",
+            pd.Series(index=universe.index, dtype="float64"),
+        ),
+        errors="coerce",
+    )
+    eligible = universe.loc[
+        (liquidity >= settings.broad_min_current_dollar_volume)
+        | universe["ticker"].isin(forced)
+    ].drop_duplicates(subset=["ticker"])
+    return universe, eligible, forced
 
 
 def _candidate_from_row(
@@ -23,9 +58,9 @@ def _candidate_from_row(
     *,
     forced: bool,
     asof: str,
+    frame: pd.DataFrame,
 ) -> DailyCandidate | None:
     ticker = str(row.get("ticker") or "").strip().upper()
-    frame = load_daily_frame(ticker)
     if frame.empty:
         return None
     data = frame.copy()
@@ -67,35 +102,36 @@ def build_daily_candidate_snapshot(
     *,
     session_date: str,
     source_session: str,
+    dataset_loader: DailyDatasetLoader = load_breakout_daily_dataset,
 ) -> dict[str, Any]:
     """Freeze the existing daily screen without importing alerts or Web code."""
     settings.validate()
-    universe = get_universe(settings.universe).copy()
-    if "ticker" not in universe.columns:
-        raise RuntimeError(f"{settings.universe} is missing ticker metadata")
-    universe["ticker"] = universe["ticker"].astype(str).str.strip().str.upper()
-    if not settings.include_etfs:
-        if "asset_type" not in universe.columns:
-            raise RuntimeError("US_ACTIVE is missing asset_type for stock-only monitoring")
-        universe = universe.loc[
-            universe["asset_type"].fillna("").astype(str).str.upper().eq("STOCK")
-        ].copy()
+    prepared: dict[str, Any] = {}
 
-    forced = set(settings.always_tickers) & set(universe["ticker"])
-    liquidity = pd.to_numeric(
-        universe.get(
-            "current_dollar_volume",
-            pd.Series(index=universe.index, dtype="float64"),
-        ),
-        errors="coerce",
+    def select_tickers(source: pd.DataFrame) -> list[str]:
+        universe, eligible, forced = _prepare_universe(settings, source)
+        prepared.update({
+            "universe": universe,
+            "eligible": eligible,
+            "forced": forced,
+        })
+        return eligible["ticker"].tolist()
+
+    dataset = dataset_loader(
+        requested_universe=settings.universe,
+        ticker_selector=select_tickers,
+        end=source_session,
+        min_latest_coverage=settings.min_exact_daily_coverage,
     )
-    eligible = universe.loc[
-        (liquidity >= settings.broad_min_current_dollar_volume)
-        | universe["ticker"].isin(forced)
-    ].drop_duplicates(subset=["ticker"])
+    if prepared:
+        universe = prepared["universe"]
+        eligible = prepared["eligible"]
+        forced = prepared["forced"]
+    else:
+        universe, eligible, forced = _prepare_universe(settings, dataset.universe)
     exact_tickers: list[str] = []
     for ticker in eligible["ticker"]:
-        frame = load_daily_frame(str(ticker))
+        frame = dataset.frame(str(ticker))
         if frame.empty:
             continue
         latest = pd.Timestamp(frame.index.max()).normalize().strftime("%Y-%m-%d")
@@ -124,6 +160,9 @@ def build_daily_candidate_snapshot(
         asof=source_session,
         names=names,
         sectors=sectors,
+        data_universe=dataset.data_universe,
+        dataset_version_id=dataset.dataset_version_id,
+        frames=dataset.frames,
     )
     asof = source_session
     rows_by_ticker = {
@@ -142,7 +181,7 @@ def build_daily_candidate_snapshot(
     )
     for ticker in sorted(forced - set(rows_by_ticker)):
         row = evaluate_daily_setup(
-            load_daily_frame(ticker),
+            dataset.frame(ticker),
             ticker=ticker,
             filters=permissive,
             asof=asof,
@@ -167,6 +206,7 @@ def build_daily_candidate_snapshot(
                 rows_by_ticker[ticker],
                 forced=ticker in forced,
                 asof=asof,
+                frame=dataset.frame(ticker),
             )
         ) is not None
     ]
@@ -177,6 +217,9 @@ def build_daily_candidate_snapshot(
         "parameter_version": PARAMETER_VERSION,
         "source_data_date": asof,
         "universe": settings.universe,
+        "data_universe": dataset.data_universe,
+        "dataset_version_id": dataset.dataset_version_id,
+        "data_contract": dataset.contract.to_dict(),
         "include_etfs": settings.include_etfs,
         "source_universe_count": len(universe),
         "eligible_count": len(eligible),

@@ -1,7 +1,8 @@
 """Configuration owned by the intraday breakout monitor."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import os
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,19 @@ def _nested(mapping: dict[str, Any], *keys: str, default: Any = None) -> Any:
             return default
         value = value[key]
     return value
+
+
+def _strict_bool(value: Any, *, default: bool, field_name: str) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{field_name} must be a boolean")
 
 
 @dataclass(frozen=True)
@@ -47,6 +61,16 @@ class IntradayMonitorSettings:
     exact_confirm_cooldown_seconds: int = 50
     timezone: str = "America/New_York"
     cooldown_minutes: int = 20
+    delivery_enabled: bool = False
+    discord_webhook_url: str = field(default="", repr=False)
+    discord_role_id: str = ""
+    dashboard_base_url: str = ""
+    max_delivery_attempts: int = 3
+    max_messages_per_cycle: int = 5
+    required_shadow_sessions: int = 5
+    observation_min_cycle_coverage: float = 0.85
+    observation_max_error_cycle_ratio: float = 0.05
+    observation_max_cycle_p95_seconds: float = 30.0
     always_tickers: tuple[str, ...] = ()
     state_path: Path = (
         PROJECT_ROOT / "outputs" / "intraday_momentum_monitor" / "state.sqlite3"
@@ -74,6 +98,20 @@ class IntradayMonitorSettings:
             raise ValueError("min_exact_daily_coverage must be between 0.5 and 1.0")
         if not 1 <= self.max_concurrent_requests <= 8:
             raise ValueError("max_concurrent_requests must be between 1 and 8")
+        if self.cooldown_minutes < 0:
+            raise ValueError("cooldown_minutes cannot be negative")
+        if not 1 <= self.max_delivery_attempts <= 10:
+            raise ValueError("max_delivery_attempts must be between 1 and 10")
+        if not 1 <= self.max_messages_per_cycle <= 20:
+            raise ValueError("max_messages_per_cycle must be between 1 and 20")
+        if not 1 <= self.required_shadow_sessions <= 20:
+            raise ValueError("required_shadow_sessions must be between 1 and 20")
+        if not 0.5 <= self.observation_min_cycle_coverage <= 1.0:
+            raise ValueError("observation_min_cycle_coverage must be between 0.5 and 1.0")
+        if not 0.0 <= self.observation_max_error_cycle_ratio <= 1.0:
+            raise ValueError("observation_max_error_cycle_ratio must be between 0 and 1")
+        if self.observation_max_cycle_p95_seconds <= 0:
+            raise ValueError("observation_max_cycle_p95_seconds must be positive")
         return self
 
     @classmethod
@@ -92,7 +130,14 @@ class IntradayMonitorSettings:
             root, "opening_range", "windows", default=[5, 15]
         ) or [5, 15]
         settings = cls(
-            enabled=bool(root.get("enabled", False)),
+            enabled=_strict_bool(
+                os.environ.get(
+                    "INTRADAY_MOMENTUM_MONITOR_ENABLED",
+                    root.get("enabled", False),
+                ),
+                default=False,
+                field_name="INTRADAY_MOMENTUM_MONITOR_ENABLED",
+            ),
             universe=str(_nested(root, "universe", "name", default="US_ACTIVE")).upper(),
             include_etfs=bool(
                 _nested(root, "asset_types", "include_etfs", default=False)
@@ -169,6 +214,41 @@ class IntradayMonitorSettings:
             ),
             cooldown_minutes=int(
                 _nested(root, "notifications", "cooldown_minutes", default=20)
+            ),
+            delivery_enabled=_strict_bool(
+                os.environ.get(
+                    "INTRADAY_MOMENTUM_DISCORD_ENABLED",
+                    _nested(root, "notifications", "delivery_enabled", default=False),
+                ),
+                default=False,
+                field_name="INTRADAY_MOMENTUM_DISCORD_ENABLED",
+            ),
+            discord_webhook_url=os.environ.get(
+                "INTRADAY_MOMENTUM_DISCORD_WEBHOOK_URL", ""
+            ).strip(),
+            discord_role_id=os.environ.get(
+                "INTRADAY_MOMENTUM_DISCORD_ROLE_ID", ""
+            ).strip(),
+            dashboard_base_url=os.environ.get(
+                "MOMENTUM_DASHBOARD_BASE_URL", ""
+            ).strip().rstrip("/"),
+            max_delivery_attempts=int(
+                _nested(root, "notifications", "max_delivery_attempts", default=3)
+            ),
+            max_messages_per_cycle=int(
+                _nested(root, "notifications", "max_messages_per_cycle", default=5)
+            ),
+            required_shadow_sessions=int(
+                _nested(root, "observation", "required_sessions", default=5)
+            ),
+            observation_min_cycle_coverage=float(
+                _nested(root, "observation", "min_cycle_coverage", default=0.85)
+            ),
+            observation_max_error_cycle_ratio=float(
+                _nested(root, "observation", "max_error_cycle_ratio", default=0.05)
+            ),
+            observation_max_cycle_p95_seconds=float(
+                _nested(root, "observation", "max_cycle_p95_seconds", default=30.0)
             ),
             always_tickers=always,
         )

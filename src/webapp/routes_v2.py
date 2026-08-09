@@ -31,7 +31,7 @@ from uuid import UUID
 
 import pandas as pd
 from fastapi import APIRouter, Body, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from src.backtest import store as bt_store
@@ -42,9 +42,11 @@ from src.data.access import (
     enqueue_market_data_request,
     watchlist_universe_frame,
 )
+from src.data.foundation import MarketDataCatalog
 from src.data.universe_ids import watchlist_snapshot_data_universe
 from src.factors import assert_valid_factor_ids, get_factor_catalog, list_factor_ids
 from src.factors.library import FactorLibraryError
+from src.execution import resolve_execution_config
 from src.papertrading import (
     PaperTradingValidationError,
     create_account as create_paper_account,
@@ -56,6 +58,7 @@ from src.papertrading import (
 )
 from src.papertrading.definition import create_account_payload
 from src.papertrading.target import generate_target_weights
+from src.research_universes.registry import research_universe_registry
 from src.strategies import (
     StrategyComponent,
     StrategyDefinition,
@@ -71,6 +74,7 @@ from src.utils.identifiers import (
     canonical_ticker,
     canonical_uuid,
 )
+from src.utils.market_calendar import latest_publishable_xnys_session
 from src.webapp.results_store import list_universes
 from src.visualization.plots_plotly import fig_to_json
 import plotly.graph_objects as go
@@ -148,11 +152,8 @@ def _format_money(x, digits: int = 2) -> str:
 
 
 def _enabled_universes() -> list[str]:
-    """配置 + 已有产物的并集。"""
-    try:
-        cfg_list = [str(u).upper() for u in (CONFIG.universes.enabled or [])]
-    except Exception:
-        cfg_list = []
+    """Return registered presets plus readable historical output partitions."""
+    cfg_list = research_universe_registry().ids()
     existing = list_universes()
     seen: dict[str, None] = {}
     for u in cfg_list + existing:
@@ -200,14 +201,108 @@ def _strategy_component_rows(strategy: StrategyDefinition) -> list[dict[str, Any
     return rows
 
 
+def _strategy_research_rows(
+    strategy: StrategyDefinition,
+    *,
+    assessments: dict[str, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    if assessments is None:
+        from src.webapp.research_routes import factor_assessment_map
+
+        assessments = factor_assessment_map()
+    components = _strategy_component_rows(strategy)
+    for component in components:
+        assessment = assessments.get(component["factor_id"], {})
+        component["cross_verdict"] = assessment.get("verdict") or "INSUFFICIENT"
+        component["sp500_verdict"] = (
+            (assessment.get("sp500") or {}).get("verdict")
+            or (assessment.get("sp500") or {}).get("status")
+            or "MISSING"
+        )
+        component["nasdaq100_verdict"] = (
+            (assessment.get("nasdaq100") or {}).get("verdict")
+            or (assessment.get("nasdaq100") or {}).get("status")
+            or "MISSING"
+        )
+        component["research_target_session"] = assessment.get("target_session")
+    return components
+
+
+def _strategy_research_map(
+    summaries: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    from src.webapp.research_routes import factor_assessment_map
+
+    assessments = factor_assessment_map()
+    output: dict[str, list[dict[str, Any]]] = {}
+    for summary in summaries:
+        strategy = load_strategy(str(summary["id"]))
+        if strategy is not None:
+            output[strategy.id] = _strategy_research_rows(
+                strategy,
+                assessments=assessments,
+            )
+    return output
+
+
+def _strategy_research_snapshot(
+    strategy: StrategyDefinition,
+) -> dict[str, Any]:
+    from src.webapp.research_routes import factor_research_snapshot
+
+    snapshot = factor_research_snapshot(
+        [component.factor_id for component in strategy.components]
+    )
+    assessments = {
+        str(item["factor_id"]): item
+        for item in snapshot.get("factors", [])
+    }
+    snapshot["components"] = _strategy_research_rows(
+        strategy,
+        assessments=assessments,
+    )
+    return snapshot
+
+
+def _risk_config_snapshot() -> dict[str, Any]:
+    return {
+        "require_point_in_time_universe": bool(
+            getattr(CONFIG.backtest, "require_point_in_time_universe", True)
+        ),
+        "tradability": dict(getattr(CONFIG.backtest, "tradability", {})),
+    }
+
+
+def _target_universe_snapshot(
+    universe: str,
+    watchlist_snapshot: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if watchlist_snapshot is not None:
+        return {
+            **watchlist_snapshot,
+            "requested_universe": universe,
+            "universe_type": "TARGET",
+        }
+    try:
+        registered = research_universe_registry().get(universe)
+        return {
+            **registered.to_dict(),
+            "requested_universe": universe,
+            "universe_type": "RESEARCH_PRESET_AS_TARGET",
+        }
+    except Exception:  # noqa: BLE001
+        return {
+            "universe_id": universe,
+            "requested_universe": universe,
+            "universe_type": "NAMED_TARGET",
+        }
+
+
 def _default_universe() -> str:
     enabled = _enabled_universes()
-    try:
-        configured = str(CONFIG.universes.default).upper()
-        if configured in enabled:
-            return configured
-    except Exception:  # noqa: BLE001
-        pass
+    configured = research_universe_registry().primary().universe_id
+    if configured in enabled:
+        return configured
     return enabled[0] if enabled else "SP500"
 
 
@@ -243,11 +338,6 @@ def _resolve_watchlist_snapshot(universe: str) -> tuple[dict[str, Any] | None, s
         raise HTTPException(status_code=404, detail=f"股票池不存在: {wid}")
     wl.validate()
     return wl.to_dict(), wl.name
-
-
-def _ranking_universe_options() -> tuple[list[str], list[dict[str, Any]]]:
-    from src.watchlists import list_watchlists
-    return _enabled_universes(), list_watchlists()
 
 
 def _build_strategy_ranking(
@@ -305,10 +395,23 @@ def _build_strategy_ranking(
 
     target_count = sum(1 for r in rows if r.get("is_target"))
     stock_link_universe = None if universe.lower().startswith("watchlist:") else universe
+    if watchlist_snapshot is not None:
+        from src.watchlists import record_ranking_activity
+
+        record_ranking_activity(
+            str(watchlist_snapshot["id"]),
+            strategy_id=strategy.id,
+            decision_date=target.decision_date,
+            data_contract=target.data_contract,
+        )
     return {
         "strategy": strategy.to_dict(),
         "universe": universe,
         "universe_label": universe_label,
+        "target_universe_snapshot": _target_universe_snapshot(
+            universe,
+            watchlist_snapshot,
+        ),
         "stock_link_universe": stock_link_universe,
         "asof": asof or "",
         "decision_date": target.decision_date,
@@ -322,6 +425,13 @@ def _build_strategy_ranking(
         "tickers_missing": target.tickers_missing,
         "warnings": target.warnings,
         "data_contract": target.data_contract,
+        "standardization_scope": {
+            "method": "cross_sectional_zscore_then_weighted_sum",
+            "requested_universe": universe,
+            "data_universe": target.data_contract.get("data_universe"),
+            "decision_date": target.decision_date,
+            "eligible_ticker_count": len(rows),
+        },
         "score_max": max((float(r["score"]) for r in rows if r.get("score") is not None), default=None),
         "score_min": min((float(r["score"]) for r in rows if r.get("score") is not None), default=None),
     }
@@ -388,7 +498,7 @@ def strategy_detail_page(request: Request, sid: UUID):
     s = load_strategy(sid)
     if s is None:
         raise HTTPException(status_code=404, detail=f"Strategy not found: {sid}")
-    components = _strategy_component_rows(s)
+    components = _strategy_research_rows(s)
     total_abs = sum(abs(c.weight) for c in s.components) or 1.0
     weights_norm = [{"factor_id": c.factor_id, "weight": c.weight / total_abs}
                     for c in s.components]
@@ -422,6 +532,12 @@ def strategy_detail_page(request: Request, sid: UUID):
     })
 
 
+@router_v2.get("/rankings", response_class=HTMLResponse)
+def rankings_entry_page(request: Request):
+    del request
+    return RedirectResponse(url="/strategies", status_code=307)
+
+
 @router_v2.get("/strategies/{sid}/ranking", response_class=HTMLResponse)
 def strategy_ranking_page(
     request: Request,
@@ -429,40 +545,8 @@ def strategy_ranking_page(
     universe: str | None = Query(None),
     asof: str | None = Query(None),
 ):
-    sid = str(sid)
-    strategy = load_strategy(sid)
-    if strategy is None:
-        raise HTTPException(status_code=404, detail=f"Strategy not found: {sid}")
-    selected_universe = _normalize_ranking_universe(universe)
-    presets, watchlists = _ranking_universe_options()
-    ranking: dict[str, Any] | None = None
-    error = ""
-    try:
-        ranking = _build_strategy_ranking(
-            strategy=strategy,
-            universe=selected_universe,
-            asof=(asof or "").strip() or None,
-        )
-    except HTTPException as exc:
-        if exc.status_code == 409:
-            error = str(exc.detail)
-        else:
-            raise
-    except Exception as e:  # noqa: BLE001
-        error = str(e)
-
-    return templates.TemplateResponse(request, "strategy_ranking.html", {
-        "title": f"策略排行 · {strategy.name}",
-        "strategy": strategy.to_dict(),
-        "components": _strategy_component_rows(strategy),
-        "ranking": ranking,
-        "error": error,
-        "selected_universe": selected_universe,
-        "selected_asof": (asof or "").strip(),
-        "preset_universes": presets,
-        "watchlists": watchlists,
-        "universes": _enabled_universes(),
-    })
+    del request, universe, asof
+    return RedirectResponse(url=f"/strategies/{sid}", status_code=307)
 
 
 # ---------- API：策略 ----------
@@ -478,7 +562,9 @@ def api_get_strategy(sid: UUID):
     s = load_strategy(sid)
     if s is None:
         raise HTTPException(status_code=404, detail="Strategy not found")
-    return JSONResponse(_sanitize(s.to_dict()))
+    payload = s.to_dict()
+    payload["research_evidence"] = _strategy_research_rows(s)
+    return JSONResponse(_sanitize(payload))
 
 
 @router_v2.get("/api/strategies/{sid}/ranking")
@@ -539,7 +625,7 @@ def api_delete_strategy(sid: UUID):
 
 
 # ---------------------------------------------------------------
-# 回测 Tab
+# 回测任务
 # ---------------------------------------------------------------
 
 @router_v2.get("/backtests", response_class=HTMLResponse)
@@ -583,6 +669,7 @@ def backtests_new_page(
     return templates.TemplateResponse(request, "backtest_new.html", {
         "title": "新建回测",
         "strategies": strategies,
+        "strategy_research": _strategy_research_map(strategies),
         "universes": universes,
         "watchlists": watchlists,
         "preselect_strategy_id": strategy_id,
@@ -600,8 +687,9 @@ def backtest_detail_page(request: Request, tid: UUID):
     if task is None:
         raise HTTPException(status_code=404, detail="Backtest not found")
 
-    # 构造 NAV 图（仅成功态）
+    # 构造 NAV 图与逐票执行明细（仅成功态）
     nav_fig_json = None
+    arts: dict[str, Any] = {}
     if task.get("status") == bt_store.STATUS_SUCCESS:
         arts = bt_store.load_task_artifacts(tid)
         nav_df = arts.get("nav")
@@ -678,6 +766,22 @@ def backtest_detail_page(request: Request, tid: UUID):
         "task": task,
         "metrics_fmt": metrics_fmt,
         "components_rows": components_rows,
+        "research_snapshot": task.get("research_evidence_snapshot") or {},
+        "target_snapshot": task.get("target_universe_snapshot") or {},
+        "data_contract": task.get("data_contract") or {},
+        "risk_config": task.get("risk_config") or {},
+        "holdings_detail": _records_for_table(
+            arts.get("holdings_detail", pd.DataFrame()),
+            limit=200,
+        ),
+        "trades_detail": _records_for_table(
+            arts.get("trades", pd.DataFrame()),
+            limit=200,
+        ),
+        "costs_detail": _records_for_table(
+            arts.get("costs", pd.DataFrame()),
+            limit=100,
+        ),
         "nav_fig_json": nav_fig_json,
         "is_running": task.get("status") in (
             bt_store.STATUS_PENDING,
@@ -754,8 +858,8 @@ def api_create_backtest(payload: dict = Body(...)):
         raise HTTPException(status_code=400, detail=str(e))
 
     # universe 两种形态：
-    #   1) 预设股票池："SP500" / "MAG7"（大写）
-    #   2) 自定义 watchlist："watchlist:<uuid>"
+    #   1) 注册的研究股票池："SP500" / "NASDAQ100" / "MAG7"
+    #   2) 用户目标股票池："watchlist:<uuid>"
     watchlist_snapshot: dict | None = None
     universe_for_task: str
     if universe_raw.lower().startswith("watchlist:"):
@@ -860,6 +964,14 @@ def api_create_backtest(payload: dict = Body(...)):
         if not execution:
             execution = None
 
+    try:
+        execution = resolve_execution_config(execution or {})
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"execution 配置非法：{exc}",
+        ) from exc
+
     task = bt_store.create_task(
         strategy=strategy,
         universe=universe_for_task,
@@ -872,6 +984,12 @@ def api_create_backtest(payload: dict = Body(...)):
         name=name,
         watchlist_snapshot=watchlist_snapshot,
         execution=execution,
+        research_evidence_snapshot=_strategy_research_snapshot(strategy),
+        target_universe_snapshot=_target_universe_snapshot(
+            universe_for_task,
+            watchlist_snapshot,
+        ),
+        risk_config=_risk_config_snapshot(),
     )
     get_runner().submit(task["id"])
     return JSONResponse(_sanitize(task), status_code=201)
@@ -898,7 +1016,7 @@ def api_delete_backtest(tid: UUID):
 
 
 # ===============================================================
-# 模拟盘 Tab（内部 FMP 驱动模拟）
+# 模拟盘（内部 FMP 驱动模拟）
 # ===============================================================
 
 def _format_paper_account_summary(a: dict[str, Any]) -> dict[str, Any]:
@@ -947,6 +1065,7 @@ def paper_new_page(
     watchlist_id: str | None = Query(None),
 ):
     from src.watchlists import list_watchlists
+    strategies = list_strategies()
     default_exec = {
         "timing": "next_open",
         "fee_model": str(getattr(CONFIG.backtest.execution, "fee_model", "ibkr_us_pro_fixed")),
@@ -957,7 +1076,8 @@ def paper_new_page(
     }
     return templates.TemplateResponse(request, "paper_new.html", {
         "title": "新建模拟盘",
-        "strategies": list_strategies(),
+        "strategies": strategies,
+        "strategy_research": _strategy_research_map(strategies),
         "universes": _enabled_universes(),
         "watchlists": list_watchlists(),
         "preselect_strategy_id": strategy_id,
@@ -1016,6 +1136,10 @@ def paper_detail_page(request: Request, aid: UUID):
     return templates.TemplateResponse(request, "paper_detail.html", {
         "title": f"模拟盘 · {account.get('name') or aid[:8]}",
         "account": account,
+        "research_snapshot": account.get("research_evidence_snapshot") or {},
+        "target_snapshot": account.get("target_universe_snapshot") or {},
+        "data_contract": account.get("data_contract") or {},
+        "risk_config": account.get("risk_config") or {},
         "summary": summary,
         "positions": _records_for_table(positions, limit=100),
         "open_orders": open_orders,
@@ -1085,7 +1209,7 @@ def api_create_paper_account(payload: dict = Body(...)):
             raise HTTPException(status_code=400, detail=f"未知股票池 {universe}，可选: {enabled}")
 
     try:
-          account = create_account_payload(
+        account = create_account_payload(
             name=name or f"{strategy.name} 模拟盘",
             strategy=strategy,
             universe=universe,
@@ -1094,22 +1218,28 @@ def api_create_paper_account(payload: dict = Body(...)):
             n_groups=int(payload.get("n_groups") or CONFIG.backtest.n_groups),
             top_group=int(payload.get("top_group") or CONFIG.backtest.n_groups),
             rebalance_mode=str(payload.get("rebalance_mode") or getattr(CONFIG.backtest, "rebalance_mode", "month_end")),
-              execution=payload.get("execution") or {},
-          )
-          if watchlist_snapshot is not None:
-              request = _queue_watchlist_market_data(
-                  watchlist_snapshot,
-                  consumer_kind="paper_account",
-                  consumer_id=str(account["id"]),
-              )
-              account["data_request_id"] = request.request_id
-              account["diagnostics"] = {
-                  "waiting_for_data": {
-                      "request_id": request.request_id,
-                      "data_universe": request.data_universe,
-                  }
-              }
-          create_paper_account(account)
+            execution=payload.get("execution") or {},
+            research_evidence_snapshot=_strategy_research_snapshot(strategy),
+            target_universe_snapshot=_target_universe_snapshot(
+                universe,
+                watchlist_snapshot,
+            ),
+            risk_config=_risk_config_snapshot(),
+        )
+        if watchlist_snapshot is not None:
+            request = _queue_watchlist_market_data(
+                watchlist_snapshot,
+                consumer_kind="paper_account",
+                consumer_id=str(account["id"]),
+            )
+            account["data_request_id"] = request.request_id
+            account["diagnostics"] = {
+                "waiting_for_data": {
+                    "request_id": request.request_id,
+                    "data_universe": request.data_universe,
+                }
+            }
+        create_paper_account(account)
     except (PaperTradingValidationError, FactorLibraryError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e))
     return JSONResponse(_sanitize(account), status_code=201)
@@ -1146,7 +1276,7 @@ def api_delete_paper_account(aid: UUID):
 
 
 # ===============================================================
-# Watchlist Tab（自定义股票组）
+# 目标股票池（内部存储类型仍叫 Watchlist）
 # ===============================================================
 
 from src.watchlists import (  # noqa: E402
@@ -1155,16 +1285,74 @@ from src.watchlists import (  # noqa: E402
     create_watchlist,
     delete_watchlist,
     list_watchlists,
+    load_ranking_activity,
     load_watchlist,
     update_watchlist,
 )
 
 
+def _target_universe_rows() -> list[dict[str, Any]]:
+    """Build the Target Universe operational view without changing domain IDs."""
+    catalog = MarketDataCatalog()
+    expected = latest_publishable_xnys_session(
+        delay_minutes=int(getattr(CONFIG.data.foundation, "close_delay_minutes", 120))
+    ).date().isoformat()
+    backtests = bt_store.list_tasks()
+    accounts = list_paper_accounts()
+    rows: list[dict[str, Any]] = []
+    for summary in list_watchlists():
+        wid = str(summary["id"])
+        watchlist = load_watchlist(wid)
+        if watchlist is None:
+            continue
+        snapshot = watchlist.to_dict()
+        data_universe = watchlist_snapshot_data_universe(snapshot)
+        version = catalog.latest_version(data_universe)
+        complete_hashes = bool(
+            version
+            and version.checksum_sha256
+            and version.universe_checksum_sha256
+            and version.membership_checksum_sha256
+            and version.manifest_checksum_sha256
+        )
+        if version is None:
+            data_status = "MISSING"
+        elif not complete_hashes:
+            data_status = "INVALID"
+        elif version.target_session.isoformat() != expected:
+            data_status = "STALE"
+        else:
+            data_status = "PUBLISHED"
+        key = f"watchlist:{wid}"
+        activity = load_ranking_activity(wid) or {}
+        rows.append(
+            {
+                **summary,
+                "universe_type": "TARGET",
+                "data_universe": data_universe,
+                "data_status": data_status,
+                "latest_session": (
+                    version.target_session.isoformat() if version else None
+                ),
+                "dataset_version_id": version.version_id if version else None,
+                "latest_ranking_at": activity.get("ranked_at"),
+                "latest_ranking_date": activity.get("decision_date"),
+                "backtest_count": sum(
+                    1 for task in backtests if task.get("universe") == key
+                ),
+                "paper_count": sum(
+                    1 for account in accounts if account.get("universe") == key
+                ),
+            }
+        )
+    return rows
+
+
 @router_v2.get("/watchlists", response_class=HTMLResponse)
 def watchlists_list_page(request: Request):
-    items = list_watchlists()
+    items = _target_universe_rows()
     return templates.TemplateResponse(request, "watchlist_list.html", {
-        "title": "股票组",
+        "title": "目标股票池",
         "watchlists": items,
     })
 
@@ -1172,7 +1360,7 @@ def watchlists_list_page(request: Request):
 @router_v2.get("/watchlists/new", response_class=HTMLResponse)
 def watchlists_new_page(request: Request):
     return templates.TemplateResponse(request, "watchlist_edit.html", {
-        "title": "新建股票组",
+        "title": "新建目标股票池",
         "mode": "new",
         "watchlist": None,
     })
@@ -1185,7 +1373,7 @@ def watchlists_edit_page(request: Request, wid: UUID):
     if wl is None:
         raise HTTPException(status_code=404, detail="Watchlist not found")
     return templates.TemplateResponse(request, "watchlist_edit.html", {
-        "title": f"编辑股票组 · {wl.name}",
+        "title": f"编辑目标股票池 · {wl.name}",
         "mode": "edit",
         "watchlist": wl.to_dict(),
     })
@@ -1195,7 +1383,7 @@ def watchlists_edit_page(request: Request, wid: UUID):
 
 @router_v2.get("/api/watchlists")
 def api_list_watchlists():
-    return JSONResponse(_sanitize(list_watchlists()))
+    return JSONResponse(_sanitize(_target_universe_rows()))
 
 
 @router_v2.get("/api/watchlists/{wid}")
@@ -1204,7 +1392,11 @@ def api_get_watchlist(wid: UUID):
     wl = load_watchlist(wid)
     if wl is None:
         raise HTTPException(status_code=404, detail="Watchlist not found")
-    return JSONResponse(_sanitize(wl.to_dict()))
+    operational = next(
+        (item for item in _target_universe_rows() if item["id"] == wid),
+        {},
+    )
+    return JSONResponse(_sanitize({**wl.to_dict(), **operational}))
 
 
 def _parse_payload_items(raw_items: Any) -> list[WatchlistItem]:

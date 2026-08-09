@@ -13,8 +13,8 @@ Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONPATH=/home/projects/quant
 Environment=MPLCONFIGDIR=/home/projects/quant/data/cache/matplotlib
-ExecStartPre=/home/projects/quant/.venv-worker/bin/python -c "import duckdb, exchange_calendars, matplotlib, sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
-ExecStart=/home/projects/quant/.venv-worker/bin/python /home/projects/quant/scripts/run_factor_research.py
+ExecStartPre=/home/projects/quant/.venv/bin/python -c "import duckdb, exchange_calendars, matplotlib, sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
+ExecStart=/home/projects/quant/.venv/bin/python /home/projects/quant/scripts/run_factor_research.py
 TimeoutStartSec=5h
 Restart=on-failure
 RestartSec=30min

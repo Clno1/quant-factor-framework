@@ -676,6 +676,7 @@ def _run_account_once_locked(
 
     try:
         strategy = account_strategy(account)
+        risk_cfg = account.get("risk_config") or {}
         target = generate_target_weights(
             strategy=strategy,
             universe=str(account["universe"]),
@@ -683,6 +684,17 @@ def _run_account_once_locked(
             asof=asof,
             n_groups=int(account.get("n_groups") or 5),
             top_group=int(account.get("top_group") or account.get("n_groups") or 5),
+            tradability=risk_cfg.get("tradability"),
+            require_point_in_time=bool(
+                risk_cfg.get(
+                    "require_point_in_time_universe",
+                    getattr(
+                        CONFIG.backtest,
+                        "require_point_in_time_universe",
+                        False,
+                    ),
+                )
+            ),
         )
         expected_session = _expected_target_session(asof)
         actual_session = pd.Timestamp(target.decision_date).normalize()

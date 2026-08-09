@@ -6,7 +6,7 @@
     <span class="badge">{{ items|length }} 个任务</span>
 </h1>
 <div class="page-sub">
-    每个任务 = 策略 × 股票池 × 日期范围。异步执行，通常 2~5 秒完成。
+    每个任务冻结策略、目标股票池、数据版本、日期范围和执行配置。
 </div>
 
 <div class="toolbar-row">
@@ -21,7 +21,7 @@
                 <tr>
                     <th style="width: 22%;">任务名</th>
                     <th>策略</th>
-                    <th>股票池</th>
+                    <th>目标股票池</th>
                     <th>日期范围</th>
                     <th style="width:90px;">状态</th>
                     <th style="text-align:right;">年化收益</th>
@@ -70,7 +70,7 @@
 {% else %}
 <div class="empty">
     <p>还没有回测任务。</p>
-    <p><a href="/backtests/new">点击新建回测</a>，选一个策略 + 股票池即可开始。</p>
+    <p><a href="/backtests/new">点击新建回测</a>，选择策略和目标股票池即可开始。</p>
 </div>
 {% endif %}
 

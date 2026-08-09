@@ -74,6 +74,10 @@ signal_confidence        LOW / MEDIUM / HIGH
 | 4 小时指数历史 | 本地没有连续 SPY/QQQ 4 小时历史 | 暂不能验证双底 |
 | 市场宽度函数 | 已有 `compute_breadth()` | PIT 数据完成后可以复用 |
 
+2026-08-09 更新：主因子 `SP500.parquet` 已从 2020 年起正式发布，但不能用于这条
+1990 年研究链。市场研究现在要求独立的 `SP500_MARKET_REGIME.parquet` 和同名
+DuckDB/Curated universe；两者当前仍未发布，所以完整宽度研究继续失败关闭。
+
 现有 `compute_breadth()` 已严格计算上涨数、下跌数、`breadth_net` 和
 `ad_ratio`，但计算公式正确不代表输入历史成分正确。当前最大风险不是公式，
 而是样本过短和幸存者偏差。

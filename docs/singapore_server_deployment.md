@@ -1,7 +1,7 @@
 # 新加坡服务器部署
 
-> 当前腾讯云服务器若采用 `/home/projects/quant`、`root` systemd 用户和独立
-> `.venv-worker`，日常启动、状态检查和代码更新请先读
+> 当前腾讯云服务器采用 `/home/projects/quant`、`root` systemd 用户和统一 `.venv`，
+> 日常启动、状态检查和代码更新请先读
 > [server_daily_runbook.md](server_daily_runbook.md)。本文件下面的通用示例
 > 仍以 `/opt/quant + quant 用户` 为默认环境，不应直接复制到当前 root 服务器。
 
@@ -89,7 +89,7 @@ sudo -u quant /opt/quant/.venv/bin/python /opt/quant/scripts/refresh_us_active.p
   --env-file /etc/quant/momentum-alerts.env \
   --workers 6 --force-universe --stocks-only \
   --min-current-dollar-volume-m 5 \
-  --market-symbol QQQ --market-symbol SPY --skip-precompute
+  --market-symbol QQQ --market-symbol SPY
 ```
 
 输出必须包含 `published_universe_manifest=...us_active.premarket.json`。该 manifest 固定真实
@@ -133,9 +133,10 @@ sudo journalctl -u quant-momentum-alerts.service -n 100 --no-pager
 
 两个任务分别是：
 
-- `quant-market-data.timer`：新加坡时间周二至周六 08:15，发布 SP500/MAG7 已校验版本。
+- `quant-market-data.timer`：新加坡时间周二至周六 08:15，发布
+  SP500/NASDAQ100 PIT 和 SP500/NASDAQ100/MAG7 已校验版本。
 - `quant-factor-research.timer`：新加坡时间周二至周六 08:45，发布与当日 DuckDB
-  version 绑定的主因子研究。
+  version 绑定的 SP500/NASDAQ100 因子研究、MAG7 参考结果和跨池结论。
 - `quant-us-daily-refresh.timer`：新加坡时间周二至周六 07:15，更新刚结束的美股交易日。
 - `quant-momentum-alerts.timer`：每小时 35 分唤醒；worker 再按 NASDAQ 实际开市状态和
   美东 10:00-15:59 判断是否扫描，因此自动适配夏令时、节假日和提前收盘。
@@ -174,11 +175,11 @@ version 一致，并只刷新自定义 Watchlist，成功后再执行 `run_paper
 `data/pit_universes/<UNIVERSE>.parquet`；缺文件时账户会 fail closed。完整说明见
 [`paper_trading_operations.md`](paper_trading_operations.md)。
 
-## 5. 分钟级突破影子服务
+## 5. 分钟级突破监控与自动晋级
 
 该服务与旧的 `quant-momentum-alerts.timer` 不同：它在 09:20 ET 启动一个常驻进程，默认
-600 只每 5 分钟宽筛、40 只每分钟观察，16:05 ET 自行退出。当前 unit 只有 `--shadow`，
-环境文件只含 FMP key，没有 Discord Webhook。
+600 只每 5 分钟宽筛、40 只每分钟观察，并在交易所实际收盘五分钟后退出。unit 使用 `--auto`：
+前五个合格 session 只写 shadow outbox；最近五个预期 session 全部 `PASS` 后才进入 Discord live。
 
 先安装独立环境文件并确认依赖：
 
@@ -203,7 +204,7 @@ sudo -u quant /opt/quant/.venv/bin/python \
   --env-file /etc/quant/intraday-momentum-monitor.env --status
 ```
 
-第一次真实 smoke 应在美股开市后执行，仍不会发送 Discord：
+第一次真实 smoke 应在美股开市后显式使用 `--shadow`，不会发送 Discord：
 
 ```bash
 sudo -u quant /opt/quant/.venv/bin/python \
@@ -221,14 +222,15 @@ sudo -u quant /opt/quant/.venv/bin/python \
 - `active_count <= 40`；
 - 没有 Discord 消息。
 
-然后只安装这两个新 unit，不要借机覆盖服务器上已经适配过路径/用户的其他 unit：
+通用 `/opt/quant` 部署安装标准 unit；当前 `/home/projects/quant + root` 服务器把
+`quant-intraday-momentum-monitor-root.service` 安装为规范 unit 名：
 
 ```bash
 sudo install -m 0644 \
-  /opt/quant/deploy/systemd/quant-intraday-momentum-monitor.service \
-  /etc/systemd/system/
+  /home/projects/quant/deploy/systemd/quant-intraday-momentum-monitor-root.service \
+  /etc/systemd/system/quant-intraday-momentum-monitor.service
 sudo install -m 0644 \
-  /opt/quant/deploy/systemd/quant-intraday-momentum-monitor.timer \
+  /home/projects/quant/deploy/systemd/quant-intraday-momentum-monitor.timer \
   /etc/systemd/system/
 sudo systemd-analyze verify \
   /etc/systemd/system/quant-intraday-momentum-monitor.service \
@@ -247,8 +249,9 @@ sudo -u quant /opt/quant/.venv/bin/python \
   --env-file /etc/quant/intraday-momentum-monitor.env --status
 ```
 
-状态库是 `/opt/quant/outputs/intraday_momentum_monitor/state.sqlite3`。完成五日观察前不要修改
-service 加入 Webhook，也不要停用旧小时提醒；两者切换属于下一阶段发布操作。
+状态库是 `outputs/intraday_momentum_monitor/state.sqlite3`。独立 env 可以预先配置 Webhook；
+`INTRADAY_MOMENTUM_DISCORD_ENABLED=false` 是总 kill switch。设为 true 仍不能绕过五日 SQLite
+晋级闸门，旧小时提醒在分钟 live 稳定前继续保留。
 
 ## 6. 行业涨跌影子任务
 
@@ -287,14 +290,15 @@ sudo journalctl -u quant-group-analytics-eod.service -n 200 --no-pager
 `GROUP_ANALYTICS_WEB_ENABLED=true` 后重启 Web；完成连续 10 个实际交易日的影子
 观察与生产机性能复测前，不要开启页面。
 
-## 7. 美股开盘前 Discord 双频道日报
+## 7. 美股开盘前 Discord 动量日报
 
 独立盘前 worker 在每个 XNYS session 的 09:20 America/New_York 读取上一完整交易日的
-动量日线，以及 `sector` / `sub_industry` immutable group artifacts，分别投递到
-`#momentum-alerts` 和 `#sector-rotation`。它不修改盘中小时告警状态，也不让主框架或
-group analytics 反向依赖通知层。
+动量日线并投递到 `#momentum-alerts`。当前生产 unit 显式传入 `--channel momentum`；
+sector rotation 的代码和独立 Webhook 可以保留，但配置默认关闭，且不由该 timer 发送。
+盘前 worker 不修改盘中小时告警状态，也不让主框架反向依赖通知层。
 
-先配置两个独立 Webhook：
+先配置并测试动量 Webhook。现有配置向导同时支持 sector Webhook；若 sector 尚未发布，保留其
+已有值但不要启用 sector channel：
 
 ```bash
 sudo install -m 0640 -o root -g quant \
@@ -306,8 +310,8 @@ sudo chown root:quant /etc/quant/premarket-digest.env
 sudo chmod 0640 /etc/quant/premarket-digest.env
 ```
 
-必须人工确认两个频道各恰好收到一条无 mention 测试消息，且没有投错频道；未确认前不要
-启用 `quant-premarket-digest.timer`。
+必须人工确认动量频道恰好收到一条无 mention 测试消息，且没有投错频道；未确认前不要启用
+`quant-premarket-digest.timer`。
 
 先按一个已完成 session 运行不发送的 preview；`--session` 参数表示即将开盘的交易日，
 数据会自动取其 previous XNYS session：
@@ -317,10 +321,9 @@ sudo -u quant /opt/quant/.venv/bin/python /opt/quant/scripts/run_premarket_diges
   --env-file /etc/quant/premarket-digest.env --session 2026-07-16
 ```
 
-确认 universe manifest、两个 payload、日期、动量精确/可计算覆盖和 group 98% 门槛后，
-继续完成 group analytics 连续 10 个真实 XNYS
-session 的影子观察，并在新加坡生产机执行 benchmark。sector Discord 是正式外发面，不仅是
-Web UI，因此这两项 release gate 完成前不要启用盘前 timer。全部通过后安装调度：
+确认 universe、动量 payload、日期、精确日期覆盖和可计算历史覆盖后即可安装动量调度。
+sector Discord 若以后启用，仍需单独完成 group analytics 的观察和发布门槛，不能借用动量
+频道的验收结果。当前安装命令如下：
 
 ```bash
 sudo install -m 0644 /opt/quant/deploy/systemd/quant-premarket-digest.service /etc/systemd/system/
@@ -332,9 +335,9 @@ sudo systemctl enable --now quant-premarket-digest.timer
 sudo systemctl status quant-premarket-digest.timer
 ```
 
-`After=` 只保证同一启动事务中的排序，不证明当天上游成功。启用前还要检查
-`quant-us-daily-refresh.timer`、`quant-group-analytics-eod.timer` 均已启用，并核对两项
-service 最近一次成功日志；最终数据门槛仍会阻止陈旧消息。
+`After=` 只保证同一启动事务中的排序，不证明当天上游成功。当前 unit 固定
+`--channel momentum`，启用前检查 `quant-us-daily-refresh.timer` 最近一次成功日志；数据门槛
+仍会阻止陈旧消息，sector rotation 不由该 timer 发送。
 
 详细算法、消息合同、幂等状态和故障处理见 `docs/premarket_discord.md`。如果希望动量频道
 每天严格只有盘前一条，应另行停用 `quant-momentum-alerts.timer`；否则两者可并存。

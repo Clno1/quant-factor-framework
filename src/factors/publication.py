@@ -14,7 +14,7 @@ from src.utils.identifiers import safe_path_component
 from src.utils.io import atomic_save_json, load_json
 
 
-RESEARCH_PUBLICATION_SCHEMA_VERSION = 1
+RESEARCH_PUBLICATION_SCHEMA_VERSION = 2
 RESEARCH_PUBLICATION_FILE = "research_publication.json"
 
 
@@ -30,6 +30,56 @@ def _output_root() -> Path:
 def research_publication_path(universe: str) -> Path:
     name = safe_path_component(universe.upper(), label="universe")
     return _output_root() / "universes" / name / RESEARCH_PUBLICATION_FILE
+
+
+def factor_confidence_path(universe: str, factor_id: str) -> Path:
+    universe = safe_path_component(universe.upper(), label="universe")
+    factor_id = safe_path_component(factor_id, label="factor_id")
+    return (
+        _output_root()
+        / "universes"
+        / universe
+        / "factors"
+        / factor_id
+        / "confidence.json"
+    )
+
+
+def _confidence_required(universe: str) -> bool:
+    try:
+        from src.research_universes import research_universe_registry
+
+        return bool(
+            research_universe_registry().get(universe).confidence_enabled
+        )
+    except (KeyError, ValueError):
+        # Test/private universes outside the formal registry remain supported.
+        return False
+
+
+def _confidence_binding(universe: str, factor_id: str) -> dict[str, Any]:
+    path = factor_confidence_path(universe, factor_id)
+    if not path.exists():
+        raise ResearchPublicationError(
+            f"Confidence report is missing for {universe}/{factor_id}: {path}"
+        )
+    report = load_json(path)
+    if (
+        not isinstance(report, dict)
+        or report.get("factor") != factor_id
+        or report.get("verdict") not in {"PASS", "WATCH", "FAIL"}
+        or not report.get("methodology_version")
+    ):
+        raise ResearchPublicationError(
+            f"Confidence report is invalid for {universe}/{factor_id}"
+        )
+    return {
+        "path": str(path),
+        "sha256": _sha256(path),
+        "methodology_version": report["methodology_version"],
+        "generated_at": report.get("generated_at"),
+        "verdict": report["verdict"],
+    }
 
 
 def _sha256(path: Path) -> str:
@@ -49,7 +99,9 @@ def dataset_version_provenance(version: DatasetVersion) -> dict[str, Any]:
         "universe": version.universe,
         "target_session": version.target_session.isoformat(),
         "bars_sha256": version.checksum_sha256,
+        "universe_sha256": version.universe_checksum_sha256,
         "membership_sha256": version.membership_checksum_sha256,
+        "manifest_sha256": version.manifest_checksum_sha256,
         "row_count": int(version.row_count),
         "ticker_count": int(version.ticker_count),
     }
@@ -83,7 +135,9 @@ def _load_factor_manifest(
         "universe",
         "target_session",
         "bars_sha256",
+        "universe_sha256",
         "membership_sha256",
+        "manifest_sha256",
     ):
         if data.get(field) != expected_data.get(field):
             raise ResearchPublicationError(
@@ -111,6 +165,7 @@ def publish_factor_research(
     if not factors:
         raise ResearchPublicationError("Factor research cannot publish an empty run")
     expected_data = dataset_version_provenance(version)
+    confidence_required = _confidence_required(universe)
     factor_payload: dict[str, dict[str, Any]] = {}
     for factor_id in factors:
         path, manifest = _load_factor_manifest(
@@ -124,6 +179,11 @@ def publish_factor_research(
             "date_end": manifest.get("date_end"),
             "manifest_path": str(path),
             "manifest_sha256": _sha256(path),
+            "confidence": (
+                _confidence_binding(universe, factor_id)
+                if confidence_required
+                else None
+            ),
         }
 
     payload = {
@@ -132,6 +192,7 @@ def publish_factor_research(
         "publication_id": str(uuid4()),
         "published_at": datetime.now(timezone.utc).isoformat(),
         "universe": universe,
+        "confidence_required": confidence_required,
         "data_foundation": expected_data,
         "factors": factor_payload,
     }
@@ -187,7 +248,9 @@ def validate_factor_research_publication(
         "universe",
         "target_session",
         "bars_sha256",
+        "universe_sha256",
         "membership_sha256",
+        "manifest_sha256",
     ):
         if observed_data.get(field) != expected_data.get(field):
             raise ResearchPublicationError(
@@ -232,6 +295,22 @@ def validate_factor_research_publication(
                 f"Factor generation changed after publication for "
                 f"{universe}/{factor_id}"
             )
+        confidence = published.get("confidence")
+        if publication.get("confidence_required"):
+            if not isinstance(confidence, dict):
+                raise ResearchPublicationError(
+                    f"Research publication has no confidence binding for "
+                    f"{universe}/{factor_id}"
+                )
+            confidence_path = factor_confidence_path(universe, factor_id)
+            if (
+                not confidence_path.exists()
+                or confidence.get("sha256") != _sha256(confidence_path)
+            ):
+                raise ResearchPublicationError(
+                    f"Confidence report changed after publication for "
+                    f"{universe}/{factor_id}"
+                )
     return publication
 
 
@@ -240,6 +319,7 @@ __all__ = [
     "RESEARCH_PUBLICATION_SCHEMA_VERSION",
     "ResearchPublicationError",
     "dataset_version_provenance",
+    "factor_confidence_path",
     "publish_factor_research",
     "research_publication_path",
     "validate_factor_research_publication",

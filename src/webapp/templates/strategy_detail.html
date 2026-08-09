@@ -14,10 +14,30 @@
 
 <div class="toolbar-row">
     <a class="btn primary" href="/backtests/new?strategy_id={{ strategy.id }}">用此策略新建回测 →</a>
-    <a class="btn" href="/strategies/{{ strategy.id }}/ranking">查看股票排行</a>
     <a class="btn" href="/paper/new?strategy_id={{ strategy.id }}">用此策略新建模拟盘</a>
     <button class="btn danger" onclick="deleteStrategy('{{ strategy.id }}', '{{ strategy.name }}')">删除策略</button>
 </div>
+
+<section class="research-section">
+    <h2>研究证据</h2>
+    <div class="research-table-wrap">
+        <table class="data research-table">
+            <thead><tr><th>因子</th><th>权重</th><th>跨池结论</th><th>标普500</th><th>纳斯达克100</th><th>方向检查</th></tr></thead>
+            <tbody>
+            {% for c in components %}
+                <tr>
+                    <td><a href="/research/factors/{{ c.factor_id }}"><strong>{{ c.factor_id }}</strong></a></td>
+                    <td class="mono">{{ "%.4f"|format(c.weight) }}</td>
+                    <td><span class="pool-verdict verdict-{{ c.cross_verdict|lower }}" title="系统代码：{{ c.cross_verdict }}">{{ research_label(c.cross_verdict) }}</span></td>
+                    <td><span class="pool-verdict verdict-{{ c.sp500_verdict|lower }}" title="系统代码：{{ c.sp500_verdict }}">{{ research_label(c.sp500_verdict) }}</span></td>
+                    <td><span class="pool-verdict verdict-{{ c.nasdaq100_verdict|lower }}" title="系统代码：{{ c.nasdaq100_verdict }}">{{ research_label(c.nasdaq100_verdict) }}</span></td>
+                    <td>{{ '权重与预设方向冲突' if c.direction_mismatch else '一致' }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
 
 <div class="strategy-detail-grid">
     <section class="chart-panel">

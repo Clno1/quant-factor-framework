@@ -33,7 +33,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
     pit = subparsers.add_parser(
         "pit",
-        help="build and strictly publish the main-factor SP500 PIT universe",
+        help="build and strictly publish configured PIT research universes",
+    )
+    pit.add_argument(
+        "--universe",
+        action="append",
+        dest="universes",
+        help="PIT universe to build; repeat for several (default: all PIT research pools)",
     )
     pit.add_argument(
         "--target-session",
@@ -50,7 +56,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     pit.add_argument(
         "--corrections",
-        help="reviewed correction registry path",
+        help="legacy alias for the SP500 reviewed correction registry path",
+    )
+    pit.add_argument(
+        "--nasdaq100-verification",
+        help="reviewed NASDAQ100 endpoint and event verification registry",
     )
     pit.add_argument(
         "--env-file",
@@ -117,10 +127,28 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def _configured_universes() -> list[str]:
-    from src.config import CONFIG
+    from src.research_universes import research_universe_registry
 
-    values = list(CONFIG.universes.enabled)
-    return list(dict.fromkeys(str(value).strip().upper() for value in values))
+    return research_universe_registry().ids()
+
+
+def _research_initial_start(universe: str) -> str | None:
+    """Return the fixed history baseline for registered research universes."""
+    from src.config import CONFIG
+    from src.research_universes import research_universe_registry
+    from src.research_universes.registry import ResearchUniverseRegistryError
+
+    try:
+        research_universe_registry().get(universe)
+    except ResearchUniverseRegistryError:
+        return None
+    start = str(CONFIG.universe.point_in_time.main_factor_start).strip()
+    if not start:
+        raise RuntimeError(
+            "universe.point_in_time.main_factor_start is required for "
+            f"research universe {universe}"
+        )
+    return start
 
 
 def _print_update_result(payload: dict, *, as_json: bool) -> None:
@@ -164,6 +192,7 @@ def _run_update(args: argparse.Namespace) -> int:
                 target_session=args.target_session,
                 force=bool(args.force),
                 workers=args.workers,
+                initial_start=_research_initial_start(universe),
             )
             payload = result.to_dict()
             results.append(payload)
@@ -174,6 +203,10 @@ def _run_update(args: argparse.Namespace) -> int:
 
                 research_failures = run_pipeline(
                     only_universe=universe,
+                    dataset_version_ids={
+                        universe: result.version.version_id,
+                    },
+                    target_session=result.target_session,
                 )
                 if research_failures:
                     failures.extend(research_failures)
@@ -201,34 +234,88 @@ def _run_update(args: argparse.Namespace) -> int:
 
 
 def _run_pit(args: argparse.Namespace) -> int:
-    from src.data.sp500_pit import build_main_sp500_pit
+    from src.research_universes import MembershipType, research_universe_registry
     from src.utils.env import load_local_env
+    from src.utils.logger import get_logger
 
     load_local_env(args.env_file)
-    result = build_main_sp500_pit(
-        target_session=args.target_session,
-        start=args.start,
-        candidate_only=bool(args.candidate_only),
-        corrections_path=args.corrections,
-    )
-    payload = result.to_dict()
+    log = get_logger("run_data_pipeline")
+    configured = [
+        entry.universe_id
+        for entry in research_universe_registry().list()
+        if entry.membership_type == MembershipType.PIT
+    ]
+    universes = [
+        str(value).strip().upper()
+        for value in (getattr(args, "universes", None) or configured)
+    ]
+    results: list[dict] = []
+    failures: list[str] = []
+    for universe in universes:
+        try:
+            if universe == "SP500":
+                from src.data.sp500_pit import build_main_sp500_pit
+
+                result = build_main_sp500_pit(
+                    target_session=args.target_session,
+                    start=args.start,
+                    candidate_only=bool(args.candidate_only),
+                    corrections_path=getattr(args, "corrections", None),
+                )
+            elif universe == "NASDAQ100":
+                from src.data.nasdaq100_pit import build_main_nasdaq100_pit
+
+                result = build_main_nasdaq100_pit(
+                    target_session=args.target_session,
+                    start=args.start,
+                    candidate_only=bool(args.candidate_only),
+                    verification_path=getattr(
+                        args,
+                        "nasdaq100_verification",
+                        None,
+                    ),
+                )
+            else:
+                raise ValueError(f"Unsupported PIT publication universe: {universe}")
+            payload = result.to_dict()
+            results.append(payload)
+            if result.status not in {"PUBLISHED", "CANDIDATE_PASS"}:
+                failures.append(universe)
+            if not args.json:
+                print(
+                    "{universe} PIT: {status} target={target} start={start} "
+                    "snapshots={snapshots} inconsistencies={inconsistencies} "
+                    "membership={membership}".format(
+                        universe=universe,
+                        status=payload["status"],
+                        target=payload["target_session"],
+                        start=payload["start"],
+                        snapshots=payload.get("snapshots") or 0,
+                        inconsistencies=payload.get("inconsistency_count") or 0,
+                        membership=payload.get("membership_path") or "-",
+                    )
+                )
+                print(f"Diagnostics: {payload['diagnostics_path']}")
+        except Exception as exc:  # noqa: BLE001
+            log.exception("[%s] PIT publication failed: %s", universe, exc)
+            failures.append(universe)
+            results.append(
+                {
+                    "universe": universe,
+                    "status": "FAILED",
+                    "error": str(exc),
+                }
+            )
     if args.json:
-        print(json.dumps(payload, ensure_ascii=False, indent=2, default=str))
-    else:
         print(
-            "SP500 PIT: {status} target={target} start={start} "
-            "snapshots={snapshots} inconsistencies={inconsistencies} "
-            "membership={membership}".format(
-                status=payload["status"],
-                target=payload["target_session"],
-                start=payload["start"],
-                snapshots=payload.get("snapshots") or 0,
-                inconsistencies=payload.get("inconsistency_count") or 0,
-                membership=payload.get("membership_path") or "-",
+            json.dumps(
+                {"results": results, "failures": sorted(set(failures))},
+                ensure_ascii=False,
+                indent=2,
+                default=str,
             )
         )
-        print(f"Diagnostics: {payload['diagnostics_path']}")
-    return 0 if result.status in {"PUBLISHED", "CANDIDATE_PASS"} else 2
+    return 2 if failures else 0
 
 
 def _run_status(args: argparse.Namespace) -> int:

@@ -33,6 +33,35 @@ class SystemdUnitTests(unittest.TestCase):
                 expected_hourly_starts * 2,
             )
 
+    def test_root_services_use_the_single_production_venv(self):
+        root_services = list(SYSTEMD_DIR.glob("quant-*-root.service"))
+        self.assertGreaterEqual(len(root_services), 10)
+        for service in root_services:
+            content = service.read_text(encoding="utf-8")
+            self.assertNotIn(".venv-worker", content, service.name)
+            self.assertIn("/home/projects/quant/.venv/bin/python", content, service.name)
+
+    def test_momentum_root_units_match_current_server_layout(self):
+        hourly = (
+            SYSTEMD_DIR / "quant-momentum-alerts-root.service"
+        ).read_text(encoding="utf-8")
+        intraday = (
+            SYSTEMD_DIR / "quant-intraday-momentum-monitor-root.service"
+        ).read_text(encoding="utf-8")
+        refresh = (
+            SYSTEMD_DIR / "quant-us-daily-refresh-root.service"
+        ).read_text(encoding="utf-8")
+        premarket = (
+            SYSTEMD_DIR / "quant-premarket-digest-root.service"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("--scheduled-hourly", hourly)
+        self.assertIn("--auto", intraday)
+        self.assertNotIn("--skip-precompute", refresh)
+        self.assertIn("--channel momentum", premarket)
+        self.assertIn("PREMARKET_SECTOR_ROTATION_ENABLED=false", premarket)
+        self.assertNotIn("quant-group-analytics-eod.service", premarket)
+
 
 if __name__ == "__main__":
     unittest.main()

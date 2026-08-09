@@ -18,6 +18,7 @@ from src.decision_replay.query import (
 )
 from src.papertrading.store import (
     account_dir,
+    list_accounts,
     load_account,
     load_account_artifacts,
 )
@@ -123,6 +124,48 @@ def _page(request: Request, kind: str, source_id: str):
         "rerun_href": context["rerun_href"],
         "universes": _universes(),
     })
+
+
+@router.get("/decision-replay", response_class=HTMLResponse)
+def decision_replay_index(request: Request):
+    sources: list[dict[str, Any]] = []
+    for task in bt_store.list_tasks():
+        source_id = str(task.get("id") or "")
+        if not source_id:
+            continue
+        sources.append(
+            {
+                "kind": "backtest",
+                "kind_label": "回测",
+                "id": source_id,
+                "name": task.get("name") or source_id[:8],
+                "status": task.get("status") or "—",
+                "universe": task.get("universe") or "—",
+                "available": get_snapshot(bt_store.BACKTEST_ROOT / source_id) is not None,
+                "href": f"/backtests/{source_id}/decisions",
+            }
+        )
+    for account in list_accounts():
+        source_id = str(account.get("id") or "")
+        if not source_id:
+            continue
+        sources.append(
+            {
+                "kind": "paper",
+                "kind_label": "模拟盘",
+                "id": source_id,
+                "name": account.get("name") or source_id[:8],
+                "status": account.get("status") or "—",
+                "universe": account.get("universe") or "—",
+                "available": get_snapshot(account_dir(source_id)) is not None,
+                "href": f"/paper/{source_id}/decisions",
+            }
+        )
+    return templates.TemplateResponse(
+        request,
+        "decision_replay_index.html",
+        {"title": "决策回放", "sources": sources},
+    )
 
 
 @router.get("/backtests/{source_id}/decisions", response_class=HTMLResponse)

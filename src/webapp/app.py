@@ -22,6 +22,18 @@ from src.webapp.security import (
     basic_auth_credentials,
     install_basic_auth_middleware,
 )
+from src.webapp.research_labels import (
+    factor_direction_label,
+    factor_input_label,
+    hash_label,
+    preprocessing_method_label,
+    quality_check_label,
+    research_label,
+    research_text,
+    target_data_status_label,
+    target_data_status_note,
+    universe_label,
+)
 
 log = get_logger(__name__)
 
@@ -103,6 +115,11 @@ def create_app() -> FastAPI:
     )
     from src.webapp.routes import router, templates
     from src.webapp.routes_v2 import router_v2, templates as templates_v2
+    from src.webapp.research_routes import (
+        research_status_payload,
+        router as research_router,
+        templates as research_templates,
+    )
     from src.webapp.decision_replay_routes import (
         router as decision_replay_router,
         templates as decision_replay_templates,
@@ -126,12 +143,37 @@ def create_app() -> FastAPI:
     templates_v2.env.globals["asset_ver"] = ASSET_VER
     decision_replay_templates.env.globals["asset_ver"] = ASSET_VER
     breakout_templates.env.globals["asset_ver"] = ASSET_VER
+    research_templates.env.globals["asset_ver"] = ASSET_VER
     templates.env.globals["group_analytics_enabled"] = group_analytics_enabled
     templates_v2.env.globals["group_analytics_enabled"] = group_analytics_enabled
     decision_replay_templates.env.globals["group_analytics_enabled"] = group_analytics_enabled
     breakout_templates.env.globals["group_analytics_enabled"] = group_analytics_enabled
+    research_templates.env.globals["group_analytics_enabled"] = group_analytics_enabled
+    for template_env in (
+        templates,
+        templates_v2,
+        decision_replay_templates,
+        breakout_templates,
+        research_templates,
+    ):
+        template_env.env.globals.update(
+            {
+                "factor_direction_label": factor_direction_label,
+                "factor_input_label": factor_input_label,
+                "hash_label": hash_label,
+                "preprocessing_method_label": preprocessing_method_label,
+                "quality_check_label": quality_check_label,
+                "research_label": research_label,
+                "research_status": research_status_payload,
+                "research_text": research_text,
+                "target_data_status_label": target_data_status_label,
+                "target_data_status_note": target_data_status_note,
+                "universe_label": universe_label,
+            }
+        )
     app.include_router(router)
     app.include_router(router_v2)
+    app.include_router(research_router)
     app.include_router(decision_replay_router)
     app.include_router(breakout_router)
 
@@ -145,6 +187,23 @@ def create_app() -> FastAPI:
         )
         group_analytics_templates.env.globals["asset_ver"] = ASSET_VER
         group_analytics_templates.env.globals["group_analytics_enabled"] = True
+        group_analytics_templates.env.globals["research_status"] = (
+            research_status_payload
+        )
+        group_analytics_templates.env.globals.update(
+            {
+                "factor_direction_label": factor_direction_label,
+                "factor_input_label": factor_input_label,
+                "hash_label": hash_label,
+                "preprocessing_method_label": preprocessing_method_label,
+                "quality_check_label": quality_check_label,
+                "research_label": research_label,
+                "research_text": research_text,
+                "target_data_status_label": target_data_status_label,
+                "target_data_status_note": target_data_status_note,
+                "universe_label": universe_label,
+            }
+        )
         app.include_router(group_analytics_router)
 
     log.info(

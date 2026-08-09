@@ -1,6 +1,6 @@
-# SP500 PIT 与每日研究发布
+# 核心研究池 PIT 与每日研究发布
 
-更新日期：2026-08-02
+更新日期：2026-08-09
 
 ## 1. 两条 PIT 研究边界
 
@@ -10,6 +10,17 @@
 |---|---|---|---|
 | 主多因子 | 固定从 2020-01-01 开始 | 严格 PASS | 因子、回测、策略、模拟盘 |
 | 大盘顶底研究 | 1990 年至今 | 仍有 22 组旧代码身份问题 | 只保留诊断，不能发布完整 PIT 宽度研究 |
+
+两条链现在也有不同的物理身份：
+
+| 研究链 | PIT publication | DuckDB/Curated universe |
+|---|---|---|
+| 主多因子 | `SP500.parquet` | `SP500` |
+| 大盘顶底研究 | `SP500_MARKET_REGIME.parquet` | `SP500_MARKET_REGIME` |
+
+市场研究不能读取或覆盖主因子 PIT。其 metadata 必须带
+`scope=market_regime` 和 `publication_id=SP500_MARKET_REGIME`；行情访问契约还会要求
+bars 与冻结 membership 从 1990 年起可用。任一条件不满足，完整模式失败关闭。
 
 旧的 24 组异常中，主多因子窗口实际只涉及两组：
 
@@ -79,21 +90,37 @@ metadata 记录 FMP 两个 endpoint、原始 payload hash、修正规则 hash、
 - inconsistency：0；
 - 正式状态：PUBLISHED。
 
+### 2.1 NASDAQ100 PIT
+
+NASDAQ100 使用独立实现 `src/data/nasdaq100_pit.py` 和受版本控制的
+`configs/nasdaq100_pit_verification.yaml`，不复用 SP500 修正规则。正式门禁包括 Nasdaq 官方
+当前名单精确比对和至少 10 组官方历史事件核验。
+
+候选命令：
+
+```bash
+python scripts/run_data_pipeline.py pit \
+  --universe NASDAQ100 --candidate-only --json
+```
+
+截至 2026-08-09，FMP 当前名单独有 `EA`、Nasdaq 官方名单独有 `HONA`，因此候选状态为
+`FAIL`，没有写入 `data/pit_universes/NASDAQ100.parquet`。该状态必须保持失败关闭。
+
 ## 3. 行情与研究版本绑定
 
 每日链路分成三个独立发布阶段：
 
 ```text
 08:15 market data
-  -> SP500 PIT PASS
-  -> OHLCV / open / volume / PIT coverage PASS
-  -> DuckDB published_versions
+  -> SP500 / NASDAQ100 PIT 分别执行严格门禁
+  -> SP500 / NASDAQ100 / MAG7 OHLCV、open、volume、PIT coverage
+  -> 各池独立写 DuckDB published_versions
 
 08:45 factor research
-  -> 要求 DuckDB target_session 等于应发布交易日
-  -> 8 个因子逐个生成 raw/clean 同代 manifest
-  -> 每个 manifest 写入 DuckDB version_id 和行情/PIT hash
-  -> 全部完成后原子写 research_publication.json
+  -> SP500 / NASDAQ100 要求同一应发布交易日
+  -> 两池 8 个因子分别生成 raw/clean 同代 manifest
+  -> MAG7 仅发布参考结果，不参与总体 PASS
+  -> 最后原子发布 cross-universe assessment
 
 10:30 paper trading
   -> 要求 research_publication 与最新 DuckDB version 完全一致
@@ -119,8 +146,9 @@ outputs/universes/<UNIVERSE>/research_publication.json
 - 配置中全部启用因子的 generation ID；
 - 每个 factor manifest 的 SHA-256。
 
-只要行情指针前进、某个因子缺失、generation 被后来覆盖或 hash 不一致，模拟盘前置检查就
-失败，不能把昨天的因子配到今天的行情。
+只要行情指针前进、某个因子缺失、generation 被后来覆盖或 hash 不一致，组合运行前置检查就
+失败，不能把昨天的因子配到今天的行情。任一核心池失败时，跨池结论必须为
+`INSUFFICIENT`。
 
 ## 4. 新加坡服务器环境
 
@@ -128,17 +156,16 @@ outputs/universes/<UNIVERSE>/research_publication.json
 
 | 用途 | Python |
 |---|---|
-| Web | `/home/projects/quant/.venv/bin/python` |
-| 行情、研究、模拟盘等 worker | `/home/projects/quant/.venv-worker/bin/python` |
+| Web 与全部 worker | `/home/projects/quant/.venv/bin/python` |
 
-root 模板已经按这个分工固定：
+root 模板已经统一使用该环境：
 
 - `quant-market-data-root.service`
 - `quant-factor-research-root.service`
 - `quant-paper-trading-root.service`
 - `quant-web-root.service`
 
-不要再把 worker 模板手工改回 `.venv`。三个每日 timer 分别是：
+不要再为 worker 创建第二套虚拟环境。三个每日 timer 分别是：
 
 - `quant-market-data.timer`：Tue-Sat 08:15 Asia/Singapore；
 - `quant-factor-research.timer`：Tue-Sat 08:45 Asia/Singapore；

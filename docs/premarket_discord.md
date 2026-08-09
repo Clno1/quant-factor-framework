@@ -1,11 +1,12 @@
-# 美股开盘前 Discord 双频道日报
+# 美股开盘前 Discord 日报（生产当前仅动量）
 
 ## 1. 目标与边界
 
-本功能在每个 XNYS（NYSE 交易日历）交易日美东时间 09:20 各生成一份日报：
+实现支持两个独立频道，但当前生产 unit 在每个 XNYS 交易日美东时间 09:20 只运行
+`--channel momentum`：
 
 - `#momentum-alerts`：截至上一完整交易日收盘的动量突破/Setup 候选；
-- `#sector-rotation`：截至同一交易日收盘的 Sector 与 Sub-industry 单日强弱、宽度和驱动股。
+- `#sector-rotation`：代码保留但配置关闭，不由当前 timer 发送。
 
 实现位于独立的 `src/premarket_digest/` 叶子编排层。允许的依赖方向是：
 
@@ -62,13 +63,13 @@ Worker 使用 `exchange-calendars` 的 `XNYS` 日历二次校验：
 ### 4.1 数据范围
 
 盘前摘要不调用 `run_live_alert_scan()`，也不把盘前 batch quote 拼成正式日线。它通过
-`MarketDataReader` 读取 `US_LIQUID_5M` 已发布版本中完成的 `T-1` 日线，并复用现有
-`src.breakouts.scanner.evaluate_daily_setup` 算法。证券属性仍读取 refresh 任务写入并带
-manifest 的 `data/raw/universe/us_active.parquet`；发送窗口内不会临时请求 FMP 或刷新股票池。
+`load_breakout_daily_dataset()` 读取一个 `US_LIQUID_5M` 正式版本，并复用现有
+`src.breakouts.scanner.evaluate_daily_setup` 算法。日线、证券属性和 membership 都来自同一
+版本，报告保存完整 `DataContract`；发送窗口内不会临时请求 FMP 或刷新股票池。
 
 股票池步骤：
 
-1. 读取 `US_ACTIVE`；
+1. 解析 `US_ACTIVE -> US_LIQUID_5M` 的唯一 `DatasetVersion`；
 2. 默认严格保留 `asset_type == STOCK`，ETF 不进入日报；
 3. 保留当前流动性 `current_dollar_volume >= 5,000,000 USD` 的股票；配置的
    `momentum_alerts.always_tickers` 只能让已经存在于 `US_ACTIVE` 且资产类型合规的成员
@@ -87,11 +88,10 @@ manifest 的 `data/raw/universe/us_active.parquet`；发送窗口内不会临时
 摘要会同时显示两组分子、分母和覆盖率；因此“只有一根 T-1 bar”不会被当成可计算，也
 不会生成误导性的零候选消息。
 
-`refresh_us_active.py --force-universe` 还会原子发布
-`data/raw/universe/us_active.premarket.json`，其中固定真实 XNYS 已完成 session、刷新时间、
-Parquet SHA-256 和行数。盘前 reader 会校验 manifest 与文件一致、时间不在未来、
-`source_session == T-1`，并检测读取期间替换。强制刷新若只回退到旧 cache，则拒绝签发新
-manifest；节假日也按 XNYS session 而不是普通工作日或文件日期判断。
+生产 reader 校验 DuckDB 中的正式版本、目标 session、bars checksum 和 membership checksum，
+并要求各股票最后一根可评估 bar 精确等于 `T-1`。旧的
+`data/raw/universe/us_active.premarket.json` 校验器暂时保留为显式兼容测试路径，不再是默认盘前
+输入；节假日仍按 XNYS session，而不是普通工作日或文件日期判断。
 
 ### 4.2 四项硬筛
 
@@ -352,8 +352,8 @@ sudo chown root:quant /etc/quant/premarket-digest.env
 sudo chmod 0640 /etc/quant/premarket-digest.env
 ```
 
-向导成功后必须人工确认：`#momentum-alerts` 和 `#sector-rotation` 各恰好收到一条、不含
-mention 的测试消息，而且没有投错频道；未确认前不得启用 timer。独立 env 文件是运行时
+当前上线只需人工确认 `#momentum-alerts` 恰好收到一条不含 mention 的测试消息；sector
+Webhook 可以保留但不会被 `--channel momentum` 使用。未确认前不得启用 timer。独立 env 文件是运行时
 注入隔离，不是强安全边界：这些 unit 同属 `quant` 用户/组，`root:quant 0640` 的文件仍可被
 该组读取。需要强隔离时，应使用独立 service user、专用 ACL/组或 systemd credentials。
 
@@ -405,11 +405,8 @@ python scripts/run_premarket_digest.py --send --session 2026-07-16 \
 任何非 systemd 的手工 `--send` 都必须显式加 `--allow-outside-window`；正常定时任务使用
 `--send --scheduled`，自动推导当天 session，不能同时传 `--session`。
 
-安装 timer 前，先确认 universe manifest、`T-1` 动量精确/可计算覆盖和两个 group 层的
-98% 覆盖门槛均通过。由于
-sector 消息属于 group analytics 的正式外发面，还必须先完成连续 10 个真实 XNYS session
-影子观察，并在新加坡生产机重跑 benchmark 通过；门槛完成前只做 dry-run，不启用 timer。
-全部 release gate 通过后再执行：
+安装 timer 前，先确认 `US_LIQUID_5M` 正式版本契约和 `T-1` 动量精确/可计算覆盖通过。当前 unit
+显式固定 `--channel momentum`，不受 sector 发布门槛影响。通过后执行：
 
 ```bash
 python3 -c 'import sys; assert sys.version_info >= (3, 11), sys.version'
@@ -443,8 +440,8 @@ sudo journalctl -u quant-premarket-digest.service -n 200 --no-pager
 
 ## 10. 与现有盘中小时提醒的关系
 
-`quant-momentum-alerts.timer` 仍是 10:00–15:59 ET 的盘中小时扫描；新 timer 是 09:20
-ET 的上一收盘日报。二者状态完全独立，可以并存。
+`quant-momentum-alerts.timer` 仍是 10:00–15:59 ET 的盘中小时扫描；盘前 timer 是 09:20 ET
+的上一收盘动量日报。分钟 `--auto` worker 另有独立 outbox 和五日晋级状态，三者状态互不复用。
 
 - 希望 `#momentum-alerts` 同时有盘前摘要和盘中升级提醒：保留旧 timer；
 - 希望该频道严格每天只有一条消息：部署新 timer 后执行

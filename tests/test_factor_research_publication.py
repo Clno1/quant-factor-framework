@@ -59,6 +59,21 @@ def _write_factor_manifest(tmp_path, version, generation="g1"):
     return path
 
 
+def _write_confidence(tmp_path, *, verdict="PASS"):
+    path = tmp_path / "universes" / "TEST" / "factors" / "MOM" / "confidence.json"
+    atomic_save_json(
+        {
+            "factor": "MOM",
+            "verdict": verdict,
+            "methodology_version": "test-v1",
+            "generated_at": "2026-07-31T23:00:00Z",
+            "summary": {},
+        },
+        path,
+    )
+    return path
+
+
 def test_research_publication_binds_all_factors_to_one_data_version(
     monkeypatch,
     tmp_path,
@@ -128,5 +143,29 @@ def test_research_publication_rejects_stale_market_data_version(
         publication.validate_factor_research_publication(
             "TEST",
             version=_version("v2"),
+            factor_ids=["MOM"],
+        )
+
+
+def test_research_publication_binds_confidence_report(monkeypatch, tmp_path):
+    _redirect(monkeypatch, tmp_path)
+    monkeypatch.setattr(publication, "_confidence_required", lambda _universe: True)
+    version = _version()
+    _write_factor_manifest(tmp_path, version)
+    _write_confidence(tmp_path)
+    publication.publish_factor_research(
+        universe="TEST",
+        version=version,
+        factor_ids=["MOM"],
+    )
+
+    _write_confidence(tmp_path, verdict="FAIL")
+    with pytest.raises(
+        publication.ResearchPublicationError,
+        match="Confidence report changed after publication",
+    ):
+        publication.validate_factor_research_publication(
+            "TEST",
+            version=version,
             factor_ids=["MOM"],
         )

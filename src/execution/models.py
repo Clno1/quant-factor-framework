@@ -126,6 +126,7 @@ def resolve_execution_config(overrides: dict[str, Any] | None = None) -> dict[st
     defaults = _plain_dict(getattr(CONFIG.backtest, "execution", {}))
     fallback = {
         "timing": "next_open",
+        "membership_exit_policy": "fail",
         "portfolio_value": 100000.0,
         "fee_model": "ibkr_us_pro_fixed",
         "slippage_model": "volume_share",

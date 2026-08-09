@@ -1,5 +1,5 @@
 [Unit]
-Description=Start the shadow intraday momentum monitor before each US session
+Description=Start the gated intraday momentum monitor before each US session
 
 [Timer]
 OnCalendar=Mon..Fri *-*-* 09:20:00 America/New_York

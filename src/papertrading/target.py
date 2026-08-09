@@ -129,6 +129,8 @@ def generate_target_weights(
     end: str | None = None,
     n_groups: int | None = None,
     top_group: int | None = None,
+    tradability: dict[str, Any] | None = None,
+    require_point_in_time: bool | None = None,
 ) -> TargetResult:
     """Generate the latest long-only top-group target weights."""
     strategy.validate()
@@ -216,6 +218,7 @@ def generate_target_weights(
             universe=universe,
             start=start_iso,
             end=end_iso,
+            expected_generations=bundle.contract.factor_generations,
         )
         composite = comp.composite
         normalized = comp.normalized_weights
@@ -246,11 +249,15 @@ def generate_target_weights(
                 ).reindex(index=composite.index, columns=composite.columns)
         pit_required = point_in_time_required(
             universe,
-            strict=bool(
-                getattr(
-                    CONFIG.backtest,
-                    "require_point_in_time_universe",
-                    False,
+            strict=(
+                bool(require_point_in_time)
+                if require_point_in_time is not None
+                else bool(
+                    getattr(
+                        CONFIG.backtest,
+                        "require_point_in_time_universe",
+                        False,
+                    )
                 )
             ),
         )
@@ -292,6 +299,7 @@ def generate_target_weights(
         # At decision time tomorrow's open is unknown. Orders may remain pending
         # until it arrives, so future open availability must not affect ranking.
         timing="close",
+        tradability=tradability,
     )
     eligible_composite = composite.where(membership_mask & tradable_mask)
     decision_ts, row = _latest_row_at_or_before(eligible_composite, asof)

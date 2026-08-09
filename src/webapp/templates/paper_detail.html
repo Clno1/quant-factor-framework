@@ -72,6 +72,9 @@
     </div>
 </section>
 
+{% set frozen_execution = account.execution or {} %}
+{% include "_run_contract.html" %}
+
 {% if equity_fig_json %}
 <section class="chart-panel">
     <div class="plot" style="width:100%;" data-plotly-json='{{ equity_fig_json|safe }}'></div>
@@ -197,8 +200,19 @@
                     <th style="text-align:right;">数量</th>
                     <th style="text-align:right;">成交价</th>
                     <th style="text-align:right;">金额</th>
-                    <th style="text-align:right;">滑点</th>
-                    <th style="text-align:right;">费用</th>
+                    <th style="text-align:right;">开盘原价</th>
+                    <th style="text-align:right;">参与率</th>
+                    <th style="text-align:right;">滑点 bps</th>
+                    <th style="text-align:right;">滑点成本</th>
+                    <th style="text-align:right;">券商佣金</th>
+                    <th style="text-align:right;">SEC</th>
+                    <th style="text-align:right;">FINRA TAF</th>
+                    <th style="text-align:right;">FINRA CAT</th>
+                    <th style="text-align:right;">清算</th>
+                    <th style="text-align:right;">转付</th>
+                    <th style="text-align:right;">交易所</th>
+                    <th style="text-align:right;">总费用</th>
+                    <th style="text-align:right;">总摩擦成本</th>
                 </tr>
             </thead>
             <tbody>
@@ -210,8 +224,19 @@
                     <td class="mono" style="text-align:right;">{{ f.quantity }}</td>
                     <td class="mono" style="text-align:right;">{{ "%.2f"|format(f.fill_price or 0) }}</td>
                     <td class="mono" style="text-align:right;">{{ "%.2f"|format(f.notional or 0) }}</td>
-                    <td class="mono" style="text-align:right;">{{ "%.2f"|format(f.slippage_bps or 0) }} bps</td>
-                    <td class="mono" style="text-align:right;">{{ "%.2f"|format(f.fee or 0) }}</td>
+                    <td class="mono" style="text-align:right;">{{ "%.4f"|format(f.raw_open_price or 0) }}</td>
+                    <td class="mono" style="text-align:right;">{{ "%.4f"|format((f.participation_rate or 0) * 100) }}%</td>
+                    <td class="mono" style="text-align:right;">{{ "%.3f"|format(f.slippage_bps or 0) }}</td>
+                    <td class="mono" style="text-align:right;">{{ "%.4f"|format(f.slippage_cost or 0) }}</td>
+                    <td class="mono" style="text-align:right;">{{ "%.4f"|format(f.broker_commission or 0) }}</td>
+                    <td class="mono" style="text-align:right;">{{ "%.4f"|format(f.sec_fee or 0) }}</td>
+                    <td class="mono" style="text-align:right;">{{ "%.4f"|format(f.finra_taf or 0) }}</td>
+                    <td class="mono" style="text-align:right;">{{ "%.4f"|format(f.finra_cat or 0) }}</td>
+                    <td class="mono" style="text-align:right;">{{ "%.4f"|format(f.clearing_fee or 0) }}</td>
+                    <td class="mono" style="text-align:right;">{{ "%.4f"|format(f.pass_through_fee or 0) }}</td>
+                    <td class="mono" style="text-align:right;">{{ "%.4f"|format(f.exchange_fee or 0) }}</td>
+                    <td class="mono" style="text-align:right;">{{ "%.4f"|format(f.fee or 0) }}</td>
+                    <td class="mono" style="text-align:right;">{{ "%.4f"|format(f.total_cost_cash or 0) }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -219,6 +244,50 @@
     </div>
     {% else %}
     <div class="empty"><p>还没有成交记录。</p></div>
+    {% endif %}
+</details>
+
+<details class="chart-panel paper-details">
+    <summary class="panel-title"><span>运行与版本绑定记录</span></summary>
+    {% if runs %}
+    <div class="table-wrap">
+        <table class="data compact execution-ledger-table">
+            <thead>
+                <tr>
+                    <th>运行时间</th>
+                    <th>决策日</th>
+                    <th>预期交易日</th>
+                    <th>估值日</th>
+                    <th>调仓</th>
+                    <th>成交数</th>
+                    <th>新订单</th>
+                    <th>待成交</th>
+                    <th>权益</th>
+                    <th>数据版本</th>
+                    <th>因子发布</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for run in runs %}
+                <tr>
+                    <td class="mono">{{ run.run_at or '—' }}</td>
+                    <td class="mono">{{ run.decision_date or '—' }}</td>
+                    <td class="mono">{{ run.expected_session or '—' }}</td>
+                    <td class="mono">{{ run.mark_date or '—' }}</td>
+                    <td class="mono">{{ 'TRUE' if run.is_rebalance else 'FALSE' }}</td>
+                    <td class="mono">{{ run.fills_count or 0 }}</td>
+                    <td class="mono">{{ run.orders_created or 0 }}</td>
+                    <td class="mono">{{ run.pending_orders or 0 }}</td>
+                    <td class="mono">{{ "%.2f"|format(run.equity or 0) }}</td>
+                    <td class="mono compact-hash" title="{{ run.dataset_version_id or '' }}">{{ (run.dataset_version_id or '—')[:12] }}</td>
+                    <td class="mono compact-hash" title="{{ run.factor_publication_id or '' }}">{{ (run.factor_publication_id or '—')[:12] }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty"><p>还没有运行记录。</p></div>
     {% endif %}
 </details>
 

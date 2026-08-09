@@ -12,7 +12,7 @@ EnvironmentFile=/etc/quant/momentum-alerts.env
 Environment=PYTHONUNBUFFERED=1
 Environment=MPLCONFIGDIR=/opt/quant/data/cache/matplotlib
 ExecStartPre=/opt/quant/.venv/bin/python -c "import sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
-ExecStart=/opt/quant/.venv/bin/python /opt/quant/scripts/refresh_us_active.py --env-file /etc/quant/momentum-alerts.env --workers 6 --force-universe --stocks-only --min-current-dollar-volume-m 5 --market-symbol QQQ --market-symbol SPY --skip-precompute
+ExecStart=/opt/quant/.venv/bin/python /opt/quant/scripts/refresh_us_active.py --env-file /etc/quant/momentum-alerts.env --workers 6 --force-universe --stocks-only --min-current-dollar-volume-m 5 --market-symbol QQQ --market-symbol SPY
 TimeoutStartSec=3h
 UMask=0077
 NoNewPrivileges=true

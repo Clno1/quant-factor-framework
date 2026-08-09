@@ -104,12 +104,21 @@ class DailyBreakoutScannerTests(unittest.TestCase):
     def test_persistent_scan_cache_round_trip_and_clear(self):
         with tempfile.TemporaryDirectory() as temporary:
             with patch.object(scan_cache, "_CACHE_DIR", Path(temporary)):
-                parameters = {"universe": "US_ACTIVE", "min_return_20d": 20.0}
+                parameters = {
+                    "universe": "US_ACTIVE",
+                    "min_return_20d": 20.0,
+                    "dataset_version_id": "version-1",
+                }
                 payload = {"asof": "2026-07-10", "rows": [{"ticker": "AEVA"}]}
 
                 scan_cache.save_scan_cache(parameters, payload)
 
                 self.assertEqual(scan_cache.load_scan_cache(parameters), payload)
+                next_version = {
+                    **parameters,
+                    "dataset_version_id": "version-2",
+                }
+                self.assertIsNone(scan_cache.load_scan_cache(next_version))
                 self.assertEqual(scan_cache.clear_scan_cache(), 1)
                 self.assertIsNone(scan_cache.load_scan_cache(parameters))
 

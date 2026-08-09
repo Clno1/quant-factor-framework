@@ -17,7 +17,7 @@
     <div class="nav-progress" aria-hidden="true"></div>
     <div class="app-shell">
         <aside class="sidebar" aria-label="主导航">
-            <a href="/" class="brand side-brand">
+            <a href="/research" class="brand side-brand">
                 <span class="brand-badge">Q</span>
                 <span>
                     <strong>量化研究平台</strong>
@@ -27,26 +27,44 @@
 
             <nav class="side-nav">
                 <details class="side-group" open>
-                    <summary class="side-group-title">因子</summary>
+                    <summary class="side-group-title">研究</summary>
                     <div class="side-subnav">
-                        <a href="/{% if universe %}?universe={{ universe }}{% endif %}"
-                           class="side-link {% if request.url.path == '/' or request.url.path.startswith('/factor/') or request.url.path == '/backtest' or request.url.path.startswith('/backtest/') %}active{% endif %}">
-                            <span>因子回测概览</span>
+                        <a href="/research"
+                           class="side-link {% if request.url.path == '/' or request.url.path == '/research' %}active{% endif %}">
+                            <span>研究总览</span>
+                        </a>
+                        <a href="/research/universes"
+                           class="side-link {% if request.url.path.startswith('/research/universes') %}active{% endif %}">
+                            <span>研究股票池</span>
                         </a>
                         <a href="/factors"
-                           class="side-link {% if request.url.path.startswith('/factors') %}active{% endif %}">
+                           class="side-link {% if request.url.path.startswith('/factors') or request.url.path.startswith('/factor/') or request.url.path.startswith('/research/factors/') %}active{% endif %}">
                             <span>因子库</span>
+                        </a>
+                        <a href="/research/factor-data"
+                           class="side-link {% if request.url.path.startswith('/research/factor-data') %}active{% endif %}">
+                            <span>因子数据</span>
                         </a>
                     </div>
                 </details>
 
                 <details class="side-group" open>
-                    <summary class="side-group-title">回测</summary>
+                    <summary class="side-group-title">策略</summary>
                     <div class="side-subnav">
+                        <a href="/watchlists"
+                           class="side-link {% if request.url.path.startswith('/watchlists') %}active{% endif %}">
+                            <span>目标股票池</span>
+                        </a>
                         <a href="/strategies"
                            class="side-link {% if request.url.path.startswith('/strategies') %}active{% endif %}">
                             <span>策略库</span>
                         </a>
+                    </div>
+                </details>
+
+                <details class="side-group" open>
+                    <summary class="side-group-title">交易验证</summary>
+                    <div class="side-subnav">
                         <a href="/backtests"
                            class="side-link {% if request.url.path.startswith('/backtests') %}active{% endif %}">
                             <span>回测任务</span>
@@ -55,29 +73,44 @@
                            class="side-link {% if request.url.path.startswith('/paper') %}active{% endif %}">
                             <span>模拟盘</span>
                         </a>
+                        <a href="/decision-replay"
+                           class="side-link {% if request.url.path.startswith('/decision-replay') or request.url.path.endswith('/decisions') %}active{% endif %}">
+                            <span>决策回放</span>
+                        </a>
                     </div>
                 </details>
 
-                <a href="/watchlists"
-                   class="side-group-link {% if request.url.path.startswith('/watchlists') %}active{% endif %}">
-                    <span>股票池</span>
-                </a>
-
-                <a href="/breakouts"
-                   class="side-group-link {% if request.url.path.startswith('/breakouts') %}active{% endif %}">
-                    <span>动量交易</span>
-                </a>
-
-                {% if group_analytics_enabled %}
-                <a href="/group-analytics"
-                   class="side-group-link {% if request.url.path.startswith('/group-analytics') %}active{% endif %}">
-                    <span>行业/主题</span>
-                </a>
-                {% endif %}
+                <details class="side-group" open>
+                    <summary class="side-group-title">市场监控</summary>
+                    <div class="side-subnav">
+                        <a href="/breakouts"
+                           class="side-link {% if request.url.path.startswith('/breakouts') %}active{% endif %}">
+                            <span>动量交易</span>
+                        </a>
+                        {% if group_analytics_enabled %}
+                        <a href="/group-analytics"
+                           class="side-link {% if request.url.path.startswith('/group-analytics') %}active{% endif %}">
+                            <span>行业/主题</span>
+                        </a>
+                        {% endif %}
+                    </div>
+                </details>
             </nav>
         </aside>
 
         <div class="app-main">
+            {% if research_status is defined %}
+            {% set rs = research_status() %}
+            {% set sp500_status = rs.universes.get('SP500', {}).get('status', 'MISSING') %}
+            {% set nasdaq100_status = rs.universes.get('NASDAQ100', {}).get('status', 'MISSING') %}
+            <div class="research-status-strip" role="status" aria-label="研究发布状态">
+                <span>行情截止日 <strong>{{ rs.market_session or '—' }}</strong></span>
+                <span>标普500研究 <strong class="status-{{ sp500_status|lower }}" title="系统状态：{{ sp500_status }}">{{ research_label(sp500_status) }}</strong></span>
+                <span>纳斯达克100研究 <strong class="status-{{ nasdaq100_status|lower }}" title="系统状态：{{ nasdaq100_status }}">{{ research_label(nasdaq100_status) }}</strong></span>
+                <span>跨池研究 <strong class="status-{{ rs.cross_status|lower }}" title="系统状态：{{ rs.cross_status }}">{{ research_label(rs.cross_status) }}</strong></span>
+                <span>延迟 <strong>{{ rs.data_delay_sessions if rs.data_delay_sessions is not none else '—' }}</strong> 个交易日</span>
+            </div>
+            {% endif %}
             <main class="container">
                 {% block content %}{% endblock %}
             </main>

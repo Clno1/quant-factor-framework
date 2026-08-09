@@ -7,7 +7,12 @@ from typing import Any
 import pandas as pd
 
 
-def _calendar(calendar: Any | None = None) -> Any:
+def _calendar(
+    calendar: Any | None = None,
+    *,
+    start: str | None = None,
+    end: str | None = None,
+) -> Any:
     if calendar is not None:
         return calendar
     try:
@@ -16,7 +21,12 @@ def _calendar(calendar: Any | None = None) -> Any:
         raise RuntimeError(
             "exchange-calendars is required for XNYS session resolution"
         ) from exc
-    return xcals.get_calendar("XNYS")
+    kwargs = {
+        key: value
+        for key, value in {"start": start, "end": end}.items()
+        if value
+    }
+    return xcals.get_calendar("XNYS", **kwargs)
 
 
 def _utc_timestamp(value: datetime | pd.Timestamp | None) -> pd.Timestamp:
@@ -111,12 +121,38 @@ def xnys_session_on_or_before(
     calendar: Any | None = None,
 ) -> pd.Timestamp:
     """Resolve a calendar date to the same or previous XNYS session."""
-    exchange = _calendar(calendar)
     timestamp = pd.Timestamp(value)
     if timestamp.tzinfo is not None:
         timestamp = timestamp.tz_localize(None)
+    exchange = _calendar(
+        calendar,
+        start=(timestamp - pd.Timedelta(days=14)).date().isoformat(),
+        end=(timestamp + pd.Timedelta(days=1)).date().isoformat(),
+    )
     session = pd.Timestamp(
         exchange.date_to_session(timestamp.normalize(), direction="previous")
+    )
+    if session.tzinfo is not None:
+        session = session.tz_localize(None)
+    return session.normalize()
+
+
+def xnys_session_on_or_after(
+    value: str | pd.Timestamp,
+    *,
+    calendar: Any | None = None,
+) -> pd.Timestamp:
+    """Resolve a calendar date to the same or next XNYS session."""
+    timestamp = pd.Timestamp(value)
+    if timestamp.tzinfo is not None:
+        timestamp = timestamp.tz_localize(None)
+    exchange = _calendar(
+        calendar,
+        start=(timestamp - pd.Timedelta(days=14)).date().isoformat(),
+        end=(timestamp + pd.Timedelta(days=14)).date().isoformat(),
+    )
+    session = pd.Timestamp(
+        exchange.date_to_session(timestamp.normalize(), direction="next")
     )
     if session.tzinfo is not None:
         session = session.tz_localize(None)
@@ -127,5 +163,6 @@ __all__ = [
     "is_xnys_session",
     "latest_completed_xnys_session",
     "latest_publishable_xnys_session",
+    "xnys_session_on_or_after",
     "xnys_session_on_or_before",
 ]

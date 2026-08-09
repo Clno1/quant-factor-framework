@@ -20,3 +20,10 @@ def test_pit_cli_cannot_backdate_the_current_constituent_snapshot(monkeypatch):
             asof="2026-01-09",
             candidate_only=True,
         )
+
+
+def test_market_regime_pit_uses_a_dedicated_publication_path():
+    target = cli._membership_target(MarketRegimeResearchSettings())
+
+    assert target.name == "SP500_MARKET_REGIME.parquet"
+    assert target.name != "SP500.parquet"

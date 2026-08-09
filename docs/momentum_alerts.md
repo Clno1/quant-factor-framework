@@ -7,6 +7,19 @@
 Discord 动量提醒采用独立 worker，不依赖 FastAPI 进程。现有强势筛选、日线 Setup
 评分和盘中触发器保持不变，提醒层只负责定时运行、状态去重和消息投递。
 
+## 日线数据契约
+
+旧 worker 现在也通过 `load_breakout_daily_dataset()` 一次加载正式日线：
+
+- `US_ACTIVE` 实际解析为一个明确的 `US_LIQUID_5M DatasetVersion`；
+- bars、证券属性和 membership 来自同一版本；
+- DuckDB 在读取时下推 ticker 和 400 日窗口，随后在内存中批量计算；
+- 输出快照包含 `data_universe / dataset_version_id / DataContract`；
+- FMP 只提供当日 market hours、batch quote 和可选分钟线，不再临时补日线或证券 profile。
+
+`always_tickers` 只有在正式版本股票池中且资产类型合规时才有效。缺失股票会进入
+`excluded_forced_tickers`，应由收盘后的统一数据任务补入并发布，不能在提醒进程里旁路补洞。
+
 ## 资产范围
 
 Discord 告警默认只扫描股票，不包含 ETF：
@@ -86,3 +99,8 @@ python scripts/run_momentum_alerts.py --send --scheduled-hourly
 `--intraday` 的高优先级突破提醒。
 
 新加坡 Linux 服务器的完整部署步骤见 `docs/singapore_server_deployment.md`。
+
+当前 root 服务器应把 `deploy/systemd/quant-momentum-alerts-root.service` 安装为
+`/etc/systemd/system/quant-momentum-alerts.service`，并配套安装仓库中的 timer。它使用
+`/home/projects/quant/.venv`。分钟 worker 在连续五个交易日晋级并验证 live 投递前，小时提醒
+继续运行；之后是否停用小时 timer 应按消息重复度单独决定。

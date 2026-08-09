@@ -1,8 +1,8 @@
 # 盘中动量触发监控方案
 
 状态：已确认；阶段 0-2 已实现，等待生产机 5 个交易日影子观察
-版本：Implementation v1
-日期：2026-07-28
+版本：Implementation v1.1
+日期：2026-08-08
 
 ## 1. 目标
 
@@ -55,7 +55,7 @@ worker：
 | 扫描编排 | `src/breakouts/application.py`，刷新脚本不再导入 Web | 已隔离 |
 | 盘中 live 域 | `src/breakouts/live/`，无 Web/因子/回测/模拟盘导入 | 已隔离 |
 | FastAPI 进程 | 突破页面与量化页面使用同一个 FastAPI 实例 | 共享组合层 |
-| 日线行情 | 突破与多因子都通过 `MarketDataReader` 读取正式版本 | 统一只读边界 |
+| 日线行情 | 突破与多因子都通过 `src/data/access.py` 绑定正式版本 | 统一只读边界 |
 | FMP 适配器 | `src/data/fmp.py` 中立复用 | 有意共享 |
 | 配置文件 | 共用 `configs/default.yaml`，分属不同配置段 | 可接受 |
 
@@ -70,9 +70,11 @@ worker：
 
 ```mermaid
 flowchart LR
-    FMP["FMP API"] --> DATA["src/data + 行情缓存"]
-    DATA --> FACTOR["多因子 pipeline"]
-    DATA --> BO["src/breakouts"]
+    FMP["FMP API"] --> DATA["MarketDataWriter"]
+    DATA --> STORE["DuckDB catalog + immutable Parquet"]
+    STORE --> ACCESS["src/data/access.py"]
+    ACCESS --> FACTOR["多因子 pipeline"]
+    ACCESS --> BO["BreakoutDailyDataset"]
     BO --> ALERT["src/alerts"]
     ALERT --> DISCORD["Discord"]
     BO --> BROUTER["breakout_routes.py"]
@@ -95,7 +97,7 @@ flowchart LR
 3. Web router 只能调用突破 application service，不直接实现扫描循环或行情订阅。
 4. 多因子 pipeline 不得读取实时提醒 SQLite，也不得根据 Discord 状态改变结果。
 5. FMP 适配器只负责数据协议，不承载 Setup 或突破业务规则。
-6. 日线刷新任务是共享日线缓存的唯一主动写入者；盘中 worker 只读日线缓存。
+6. 日线刷新任务是正式版本的唯一主动写入者；盘中 worker 只读同一个 `DataContract`。
 7. 盘中 bar、运行状态和快照使用突破专属目录，不写入多因子产物目录。
 
 ### 4.2 目标依赖图
@@ -104,7 +106,8 @@ flowchart LR
 flowchart LR
     FMP["当前 FMP REST"] --> FEED["breakouts/live/feeds"]
     STREAM["未来授权流式源"] -.-> FEED
-    DAILY["共享日线缓存，只读"] --> SETUP["breakouts 日线 Setup"]
+    DAILY["DuckDB + immutable Parquet"] --> CONTRACT["data/access + DataContract"]
+    CONTRACT --> SETUP["breakouts 日线 Setup"]
     FEED --> MONITOR["盘中 monitor service"]
     SETUP --> MONITOR
     MONITOR --> STATE["专属 SQLite + 快照"]
@@ -127,6 +130,7 @@ FastAPI 仍可作为统一页面外壳，这属于展示层复用，不代表交
 src/
   breakouts/
     scanner.py                  # 保留：日线强势筛选和 Setup
+    daily_data.py               # 版本绑定日线数据包
     intraday.py                 # 保留：历史分钟诊断；后续去除实时循环职责
     application.py              # 从 Web 下沉：股票池解析和扫描用例
     live/
@@ -137,8 +141,7 @@ src/
       detector.py               # 固定版本的盘中触发规则
       service.py                # 会话生命周期和状态机
       state.py                  # 专属 SQLite、heartbeat、幂等状态
-      feeds/
-        fmp_rest.py             # 批量 quote 雷达 + 精确分钟确认
+      feeds.py                  # 批量 quote 雷达 + 精确分钟确认
   alerts/
     discord.py                  # 继续复用安全投递
 
@@ -187,9 +190,14 @@ previous_high
 adr20
 avg_dollar_volume20
 source_data_date
+data_universe
+dataset_version_id
+bars_sha256
 ```
 
 实时 worker 启动时读取这份冻结快照，不在每分钟重新计算全部日线指标。
+完整 `DataContract` 保存在候选 payload 中；重启恢复时校验 version、run、target session 和
+checksum。latest pointer 后续前进不会改变当日候选输入。
 
 ### 5.2 5 分钟宽池更新
 
@@ -218,7 +226,7 @@ rvol(t) = 今日截至 t 的累计成交量
 
 只对重点池按完成的 1 分钟 bar 更新：
 
-- OR5 / OR15；
+- OR1 / OR5 / OR30 / OR60 指标；
 - VWAP；
 - 分钟 MA10 / MA20 / MA50；
 - 当前与同时间基准的相对成交量；
@@ -228,9 +236,9 @@ rvol(t) = 今日截至 t 的累计成交量
 正式信号只在完成的 bar 上评估，避免未收盘高点短暂穿越后消失。建议在交易所分钟结束后的
 2 至 8 秒内完成本轮计算和发送。
 
-第一阶段不把规则做成页面可调参数。现有规则保持不变；新增的 OR5/OR15 和相对成交量规则应使用
-独立 `algorithm_version`，先在影子模式记录，评审后才成为正式提醒条件。这样不会用新调度方式
-偷偷改变旧信号语义。
+第一阶段不把规则做成页面可调参数。现有 detector 正式保留既有 OR60/OR30 语义；配置中的
+OR5/OR15 是后续研究参数，目前 `RollingIntradayBars` 实际维护 1/5/30/60，不能把 OR15 描述为
+已上线触发条件。任何变更必须使用独立 `algorithm_version`，先影子记录再评审。
 
 ### 5.4 单条 Discord 提醒
 
@@ -298,10 +306,10 @@ REST 可用于：
 REST 不应采用“40 只股票每分钟逐只下载三天分钟线”的方式。按 40 只、390 分钟计算，这会产生
 约 15,600 次单股分钟线请求/交易日，并重复解析和写入大量相同数据。
 
-该方案常态约为 40 次精确请求/5 分钟，而不是 40 次/分钟；仍只允许影子运行，正式 Discord
-上线必须完成生产机数据覆盖与五日观察闸门。
+该方案常态约为 40 次精确请求/5 分钟，而不是 40 次/分钟。systemd 使用 `--auto`：生产机数据
+覆盖与五日观察闸门通过前只运行 shadow，通过后才允许正式 Discord。
 
-## 7. 2 核 4 GB 容量设计
+## 7. 2 核约 2 GB 实机容量设计
 
 ### 7.1 预期负载
 
@@ -315,16 +323,17 @@ REST 不应采用“40 只股票每分钟逐只下载三天分钟线”的方式
 | SQLite 写入 | heartbeat + 状态变化 | 很低 |
 | Discord | 仅出现信号时 | 可忽略 |
 
-2 核 4 GB 足够，前提是使用常驻单进程和增量计算。
+2026-08-09 实机 `free -m` 显示约 2 GB、无 swap。当前设计仍可运行，但必须保留 systemd 内存
+上限并用五日观测确认真实网络负载，不能按 4 GB 预算估算。
 
 ### 7.2 资源预算
 
 | 组件 | 目标内存 |
 |---|---:|
-| FastAPI Web | 400-800 MB |
-| 盘中 monitor worker | 200-500 MB |
-| 操作系统、文件缓存、SQLite | 800-1,200 MB |
-| 安全余量 | 至少 1 GB |
+| FastAPI Web | 300-700 MB |
+| 盘中 monitor worker | 150-500 MB，硬上限 768 MB |
+| 操作系统、文件缓存、SQLite | 600-1,000 MB |
+| 安全余量 | 由 `MemoryMax` 和错峰任务保护 |
 
 建议：
 
@@ -360,6 +369,11 @@ peak RSS = 167.1 MB
 ```
 
 开发机已经通过计算与内存线；网络延迟、日线覆盖、连续运行和 CPU 仍必须在新加坡生产机复测。
+SG 单日 600 候选/40 活跃合成基准为 cycle P95 182 ms、峰值 RSS 126.9 MB。
+
+2026-08-08 版本数据路径补充实测：正式 SP500 503 只当前成分，400 日窗口 154,474 行；
+日线载入 0.59 秒、Setup 扫描 1.45 秒、总计 2.04 秒、峰值 RSS 约 230 MB。读取条件已下推
+DuckDB。SG 的 `US_LIQUID_5M` 规模更大，仍必须单独验收。
 
 ## 8. 会话生命周期
 
@@ -455,7 +469,7 @@ peak RSS = 167.1 MB
 
 ```yaml
 intraday_momentum_monitor:
-  enabled: false
+  enabled: true
   asset_types:
     include_etfs: false
 
@@ -484,7 +498,16 @@ intraday_momentum_monitor:
 
   notifications:
     cooldown_minutes: 20
+    delivery_enabled: false
+    max_delivery_attempts: 3
+    max_messages_per_cycle: 5
     send_empty: false
+
+  observation:
+    required_sessions: 5
+    min_cycle_coverage: 0.85
+    max_error_cycle_ratio: 0.05
+    max_cycle_p95_seconds: 30.0
 ```
 
 算法阈值与运行参数分开管理。运行频率、池子大小可以配置；真正改变信号语义的阈值必须形成新的
@@ -495,6 +518,7 @@ intraday_momentum_monitor:
 每 30 秒更新 heartbeat，至少记录：
 
 - 进程启动时间和算法版本；
+- `data_universe / dataset_version_id / bars_sha256`；
 - 当前交易日和市场状态；
 - 数据源连接状态；
 - 最新消息和最新完成 bar 时间；
@@ -512,9 +536,10 @@ intraday_momentum_monitor:
 python scripts/run_intraday_momentum_monitor.py --status
 ```
 
-以及一个不发送 Discord 的影子模式：
+systemd 使用自动晋级模式；也可以显式强制 shadow：
 
 ```bash
+python scripts/run_intraday_momentum_monitor.py --auto
 python scripts/run_intraday_momentum_monitor.py --shadow
 ```
 
@@ -532,7 +557,7 @@ python scripts/run_intraday_momentum_monitor.py --shadow
 
 ### 13.2 业务测试
 
-- OR5/OR15 边界；
+- 当前 OR1/5/30/60 边界，以及未来启用 OR15 前的新增测试；
 - 1 分钟 bar 完成前不触发；
 - MA、VWAP 和相对成交量增量计算；
 - 缺失 bar、乱序 bar、重复 bar；
@@ -590,16 +615,18 @@ python scripts/run_intraday_momentum_monitor.py --shadow
 - 实现增量 bar、VWAP、MA、OR 和相对成交量；
 - 实现版本化 detector；
 - 实现专属 SQLite、heartbeat 和幂等；
+- 候选 SQLite 与 Web cache 绑定 `DataContract`；
+- Web、盘前、旧提醒和分钟监控迁移到同一个版本化日线入口；
 - 使用历史数据和合成流回放。
 
 完成条件：5 日回放达到性能和正确性验收线。
 
 ### 阶段 3：服务器影子运行
 
-状态：**待在新加坡服务器执行**。仓库已提供 service/timer，但不得提前开启 Discord。
+状态：**代码完成，待新加坡服务器累计真实会话**。仓库已提供 service/timer 与自动晋级闸门。
 
 - 部署独立 systemd service/timer；
-- Discord 保持关闭；
+- Discord outbox 只写 `SHADOW`；
 - 连续观察至少 5 个完整交易日；
 - 记录漏 bar、延迟、重连、候选数量、CPU、RSS 和预期信号；
 - 与 Web 手工检查结果抽样对照。
@@ -608,7 +635,7 @@ python scripts/run_intraday_momentum_monitor.py --shadow
 
 ### 阶段 4：内部 Discord 上线
 
-状态：**未开始**，受阶段 3 的五个完整交易日闸门约束。
+状态：**投递代码与独立 outbox 已完成，正式发送受五个完整交易日闸门约束**。
 
 - 开启单频道正式提醒；
 - 旧小时 worker 先转为 dry-run，避免重复发送；
@@ -633,15 +660,15 @@ python scripts/run_intraday_momentum_monitor.py --shadow
 2. 禁用其 timer；
 3. 重新启用旧小时 worker；
 4. 保留新 SQLite 和会话快照用于调查；
-5. 不删除共享日线缓存，不回滚多因子产物。
+5. 不删除正式日线版本，不回滚多因子产物。
 
 ## 16. 当前发布闸门
 
 1. 先在服务器运行收盘后刷新，确认候选源日期等于上一 XNYS session；
-2. 安装但仅启用 `--shadow` service/timer；
+2. 安装并启用 `--auto` service/timer；环境开关是总 kill switch；
 3. 连续观察至少 5 个完整交易日；
 4. 核对缺 bar、延迟、API 失败、CPU、RSS 和影子信号；
-5. 完成抽样人工对照后，另行评审 Discord 投递，不在 shadow unit 中加入 Webhook。
+5. 只有最近五个预期 XNYS session 全部 `PASS`，下一交易日进程才进入 live；否则继续 shadow。
 
 ## 17. 参考
 

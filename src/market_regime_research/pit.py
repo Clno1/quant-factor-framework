@@ -27,6 +27,9 @@ from src.market_regime_research.settings import PITSettings
 from src.utils.identifiers import InvalidResourceId, canonical_ticker
 
 
+MARKET_REGIME_PIT_SCOPE = "market_regime"
+
+
 def _text(series: pd.Series) -> pd.Series:
     return series.fillna("").astype(str).str.strip()
 
@@ -479,6 +482,7 @@ def publish_validated_membership(
 
 
 __all__ = [
+    "MARKET_REGIME_PIT_SCOPE",
     "atomic_write_membership",
     "membership_metadata_path",
     "normalize_fmp_sp500_changes",

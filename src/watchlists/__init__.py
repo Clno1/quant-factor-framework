@@ -21,6 +21,8 @@ from src.watchlists.store import (
     delete_watchlist,
     list_watchlists,
     load_watchlist,
+    load_ranking_activity,
+    record_ranking_activity,
     update_watchlist,
 )
 
@@ -33,5 +35,7 @@ __all__ = [
     "delete_watchlist",
     "list_watchlists",
     "load_watchlist",
+    "load_ranking_activity",
+    "record_ranking_activity",
     "update_watchlist",
 ]

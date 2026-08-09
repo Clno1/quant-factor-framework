@@ -20,7 +20,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Mapping, Optional
 
 import numpy as np
 import pandas as pd
@@ -92,6 +92,15 @@ def _resolve_execution(execution: dict | None) -> dict:
             "fills are disabled because a close-derived signal cannot trade at "
             "that already-observed close."
         )
+    exit_policy = str(
+        out.get("membership_exit_policy") or "fail"
+    ).strip().lower()
+    if exit_policy not in {"fail", "next_open_or_last_close_to_cash"}:
+        raise ValueError(
+            "execution.membership_exit_policy must be 'fail' or "
+            "'next_open_or_last_close_to_cash'"
+        )
+    out["membership_exit_policy"] = exit_policy
     return out
 
 
@@ -128,6 +137,357 @@ def _safe_trailing_volume(
     return float(values.mean())
 
 
+def _apply_membership_exit_policy(
+    returns: pd.DataFrame,
+    held_assignment: pd.DataFrame,
+    *,
+    membership_mask: pd.DataFrame | None,
+    membership_events: pd.DataFrame | None,
+    rebalance_dates: pd.DatetimeIndex,
+    open_df: pd.DataFrame | None,
+    close_df: pd.DataFrame | None,
+    policy: str,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Liquidate held names that leave a PIT universe without reweighting.
+
+    A normal removal uses the next session open. If that security no longer
+    trades, the final tradable close is used as an explicit approximation.
+    The released weight remains cash until the next scheduled rebalance.
+    Other missing held returns remain untouched and therefore fail later.
+    """
+    adjusted = returns.copy()
+    if membership_mask is None or policy == "fail" or adjusted.empty:
+        return adjusted, pd.DataFrame()
+
+    dates = pd.DatetimeIndex(adjusted.index)
+    columns = pd.Index(adjusted.columns)
+    held = held_assignment.reindex(index=dates, columns=columns)
+    membership = membership_mask.reindex(
+        index=dates,
+        columns=columns,
+        fill_value=False,
+    ).astype(bool)
+
+    # A removed position becomes cash for the remainder of that rebalance
+    # interval. Reset only when a new target portfolio becomes effective.
+    boundaries = {0, len(dates)}
+    for decision_date in rebalance_dates:
+        position = int(dates.searchsorted(decision_date, side="right"))
+        if 0 < position < len(dates):
+            boundaries.add(position)
+    ordered = sorted(boundaries)
+    cash_mask = pd.DataFrame(False, index=dates, columns=columns)
+    for begin, finish in zip(ordered[:-1], ordered[1:]):
+        if begin >= finish:
+            continue
+        segment_membership = membership.iloc[begin:finish]
+        exited = (~segment_membership).cummax()
+        cash_mask.iloc[begin:finish] = (
+            held.iloc[begin:finish].notna() & exited
+        )
+    adjusted = adjusted.mask(cash_mask, 0.0)
+
+    event_ledger = None
+    if membership_events is not None and not membership_events.empty:
+        event_ledger = membership_events.copy()
+        event_ledger["effective_date"] = pd.to_datetime(
+            event_ledger["effective_date"], errors="coerce"
+        ).dt.normalize()
+        event_ledger["removed_ticker"] = (
+            event_ledger["removed_ticker"].fillna("").astype(str).str.upper()
+        )
+
+    def settlement_reason(ticker: str, effective_date: pd.Timestamp) -> tuple[str, str]:
+        if event_ledger is None:
+            raise ValueError(
+                "Membership exit predates the last tradable bar but the "
+                f"published version has no event ledger: {ticker} {effective_date.date()}"
+            )
+        candidates = event_ledger.loc[
+            event_ledger["removed_ticker"].eq(ticker)
+            & event_ledger["effective_date"].between(
+                effective_date - pd.Timedelta(days=7),
+                effective_date + pd.Timedelta(days=1),
+            )
+        ].copy()
+        if candidates.empty:
+            raise ValueError(
+                "No version-bound PIT removal event matches a stale membership "
+                f"exit: {ticker} {effective_date.date()}"
+            )
+        candidates["distance"] = (
+            candidates["effective_date"] - effective_date
+        ).abs()
+        candidates = candidates.sort_values(["distance", "effective_date"])
+        best_distance = candidates.iloc[0]["distance"]
+        best = candidates.loc[candidates["distance"].eq(best_distance)]
+        if len(best) != 1:
+            raise ValueError(
+                f"Ambiguous PIT removal events for {ticker} {effective_date.date()}"
+            )
+        reason = str(best.iloc[0]["reason"] or "").strip()
+        normalized = reason.casefold()
+        if any(
+            marker in normalized
+            for marker in ("fdic", "receivership", "bankruptcy", "bankrupt")
+        ):
+            return "TOTAL_LOSS_WRITE_OFF", reason
+        if any(
+            marker in normalized
+            for marker in (
+                "acquired",
+                "acquisition",
+                "acquiring",
+                "merger",
+                "merged",
+                "combined",
+            )
+        ):
+            return "LAST_TRADABLE_CLOSE", reason
+        raise ValueError(
+            "Stale membership exit has no reviewed settlement rule: "
+            f"{ticker} {effective_date.date()} reason={reason!r}"
+        )
+
+    next_membership = membership.shift(-1)
+    terminal = (
+        held.notna()
+        & membership
+        & next_membership.eq(False)
+        & ~cash_mask
+    )
+    event_rows: list[dict] = []
+    for row_no, col_no in np.argwhere(terminal.to_numpy()):
+        if row_no + 1 >= len(dates):
+            continue
+        dt = dates[row_no]
+        next_dt = dates[row_no + 1]
+        ticker = str(columns[col_no])
+        assignment = held.iat[row_no, col_no]
+        reason = ""
+        stale_sessions = 0
+        group_size = int(held.loc[dt].eq(assignment).sum())
+        if group_size <= 0:
+            raise ValueError(
+                f"Invalid held group size for membership exit: {dt.date()} {ticker}"
+            )
+
+        next_open = _safe_lookup(open_df, next_dt, ticker)
+        observed_return = adjusted.iat[row_no, col_no]
+        if next_open is not None and pd.notna(observed_return):
+            execution_date = next_dt
+            decision_date = dt
+            raw_price = next_open
+            pricing_method = "NEXT_OPEN"
+        else:
+            terminal_row = row_no
+            current_open = _safe_lookup(open_df, dates[terminal_row], ticker)
+            final_close = _safe_lookup(close_df, dates[terminal_row], ticker)
+            while current_open is None and terminal_row > 0:
+                terminal_row -= 1
+                current_open = _safe_lookup(open_df, dates[terminal_row], ticker)
+                final_close = _safe_lookup(close_df, dates[terminal_row], ticker)
+            terminal_assignment = held.iat[terminal_row, col_no]
+            if current_open is None:
+                raise ValueError(
+                    "Membership exit has no executable next open or final "
+                    f"tradable close: date={dt.date()} ticker={ticker}"
+                )
+            if pd.isna(terminal_assignment):
+                raise ValueError(
+                    "Membership exit has no modeled holding at its last "
+                    f"tradable open: date={dates[terminal_row].date()} "
+                    f"ticker={ticker}"
+                )
+            # A rebalance target cannot change the modeled owner while the
+            # security is halted. Keep the position in the group that held it
+            # at the last executable open, matching the per-security ledger.
+            assignment = terminal_assignment
+            group_size = int(held.loc[dates[terminal_row]].eq(assignment).sum())
+            if group_size <= 0:
+                raise ValueError(
+                    "Invalid held group size at the last tradable open: "
+                    f"date={dates[terminal_row].date()} ticker={ticker}"
+                )
+            stale_sessions = row_no - terminal_row
+            pricing_method = "LAST_TRADABLE_CLOSE"
+            terminal_date = dates[terminal_row]
+            if next_open is not None:
+                adjusted.iat[terminal_row, col_no] = (
+                    next_open / current_open - 1.0
+                )
+                execution_date = next_dt
+                decision_date = terminal_date
+                raw_price = next_open
+                pricing_method = "NEXT_OPEN"
+            else:
+                if final_close is None:
+                    raise ValueError(
+                        "Membership exit has no final tradable close: "
+                        f"date={terminal_date.date()} ticker={ticker}"
+                    )
+                if stale_sessions > 0:
+                    pricing_method, reason = settlement_reason(ticker, next_dt)
+                if pricing_method == "TOTAL_LOSS_WRITE_OFF":
+                    adjusted.iat[terminal_row, col_no] = -1.0
+                    raw_price = 0.0
+                else:
+                    adjusted.iat[terminal_row, col_no] = (
+                        final_close / current_open - 1.0
+                    )
+                    raw_price = final_close
+                execution_date = terminal_date
+                decision_date = terminal_date
+            segment_finish = min(value for value in ordered if value > row_no)
+            if terminal_row + 1 < segment_finish:
+                cash_mask.iloc[terminal_row + 1:segment_finish, col_no] = True
+                adjusted.iloc[terminal_row + 1:segment_finish, col_no] = 0.0
+            dt = terminal_date
+
+        event_rows.append(
+            {
+                "decision_date": decision_date,
+                "execution_date": execution_date,
+                "terminal_date": dt,
+                "ticker": ticker,
+                "assignment": float(assignment),
+                "target_weight": 1.0 / group_size,
+                "raw_price": float(raw_price),
+                "pricing_method": pricing_method,
+                "effective_exit_date": next_dt,
+                "reason": reason,
+                "stale_sessions": stale_sessions,
+            }
+        )
+
+    if len(dates):
+        # The final open-to-open interval is outside the measured horizon.
+        # Cash placeholders must not turn an otherwise unavailable final row
+        # into a partially observed portfolio return.
+        adjusted.loc[dates[-1]] = adjusted.loc[dates[-1]].mask(
+            cash_mask.loc[dates[-1]]
+        )
+
+    return adjusted, pd.DataFrame(event_rows)
+
+
+def _build_trade_row(
+    *,
+    date: pd.Timestamp,
+    decision_date: pd.Timestamp,
+    group: str,
+    ticker: str,
+    old_weight: float,
+    new_weight: float,
+    execution: dict,
+    execution_price_df: pd.DataFrame | None,
+    volume_df: pd.DataFrame | None,
+    raw_price_override: float | None = None,
+    event_type: str = "REBALANCE",
+    pricing_method: str = "NEXT_OPEN",
+) -> dict | None:
+    trade_weight = float(new_weight) - float(old_weight)
+    if abs(trade_weight) <= 1e-12:
+        return None
+    trade_abs = abs(trade_weight)
+    side = "BUY" if trade_weight > 0 else "SELL"
+    raw_price = (
+        float(raw_price_override)
+        if raw_price_override is not None
+        else _safe_lookup(execution_price_df, date, ticker)
+    )
+    adv_window = int(
+        ((execution.get("slippage") or {}).get("adv_window", 20)) or 20
+    )
+    bar_volume = _safe_trailing_volume(
+        volume_df,
+        decision_date,
+        ticker,
+        adv_window,
+    )
+    portfolio_value = float(execution.get("portfolio_value", 100000.0) or 100000.0)
+    estimated_notional = trade_abs * portfolio_value
+    estimated_quantity = (
+        estimated_notional / raw_price
+        if raw_price is not None and raw_price > 0
+        else 0.0
+    )
+    if raw_price is None or raw_price <= 0:
+        raise ValueError(
+            "Missing execution price for required backtest trade: "
+            f"decision_date={decision_date.date()} execution_date={date.date()} "
+            f"ticker={ticker} side={side} event_type={event_type}. Rebuild "
+            "open/close data; the engine will not synthesize a fill."
+        )
+    if estimated_quantity <= 0:
+        raise ValueError(
+            "Backtest trade resolved to a non-positive quantity: "
+            f"ticker={ticker} notional={estimated_notional}"
+        )
+    max_quantity = max_volume_fill_quantity(
+        requested_quantity=estimated_quantity,
+        volume=bar_volume,
+        execution=execution,
+    )
+    if estimated_quantity > max_quantity + 1e-9:
+        raise ValueError(
+            "Backtest order exceeds the configured ADV fill limit: "
+            f"decision_date={decision_date.date()} ticker={ticker} "
+            f"requested={estimated_quantity:.4f} allowed={max_quantity:.4f} "
+            f"adv={bar_volume}. Reduce portfolio_value, widen the universe, "
+            "or use an event-driven partial-fill model."
+        )
+    execution_result = calculate_execution(
+        side=side,
+        quantity=estimated_quantity,
+        raw_price=raw_price,
+        volume=bar_volume,
+        execution=execution,
+    )
+    fee_components = execution_result.get("fee_components") or {}
+    total_cost_cash = float(execution_result["total_cost"])
+    return {
+        "date": date.strftime("%Y-%m-%d"),
+        "decision_date": decision_date.strftime("%Y-%m-%d"),
+        "group": group,
+        "ticker": ticker,
+        "old_weight": float(old_weight),
+        "new_weight": float(new_weight),
+        "trade_weight": trade_weight,
+        "trade_abs_weight": trade_abs,
+        "side": side,
+        "event_type": event_type,
+        "pricing_method": pricing_method,
+        "portfolio_value": portfolio_value,
+        "estimated_notional": float(estimated_notional),
+        "estimated_quantity": float(estimated_quantity),
+        "raw_price": float(raw_price),
+        "fill_price": float(execution_result["fill_price"]),
+        "bar_volume": float(bar_volume) if bar_volume is not None else np.nan,
+        "volume_reference": f"ADV{adv_window}_asof_decision",
+        "participation_rate": float(execution_result["participation_rate"]),
+        "slippage_model": execution.get("slippage_model"),
+        "slippage_bps": float(execution_result["slippage_bps"]),
+        "impact_bps": float(execution_result["impact_bps"]),
+        "slippage_cost": float(execution_result["slippage_cost"]),
+        "fee_model": execution.get("fee_model"),
+        "broker_commission": float(
+            fee_components.get("broker_commission", 0.0) or 0.0
+        ),
+        "sec_fee": float(fee_components.get("sec_fee", 0.0) or 0.0),
+        "finra_taf": float(fee_components.get("finra_taf", 0.0) or 0.0),
+        "finra_cat": float(fee_components.get("finra_cat", 0.0) or 0.0),
+        "clearing_fee": float(fee_components.get("clearing_fee", 0.0) or 0.0),
+        "pass_through_fee": float(
+            fee_components.get("pass_through_fee", 0.0) or 0.0
+        ),
+        "exchange_fee": float(fee_components.get("exchange_fee", 0.0) or 0.0),
+        "fee": float(execution_result["fee"]),
+        "total_cost_cash": total_cost_cash,
+        "cost": total_cost_cash / portfolio_value if portfolio_value > 0 else 0.0,
+    }
+
+
 def _build_execution_details(
     assign_df: pd.DataFrame,
     return_index: pd.Index,
@@ -137,6 +497,8 @@ def _build_execution_details(
     execution: dict,
     execution_price_df: pd.DataFrame | None = None,
     volume_df: pd.DataFrame | None = None,
+    forced_exit_events: pd.DataFrame | None = None,
+    membership_mask: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Build per-stock target weights, trades, and costs for every rebalance.
@@ -149,10 +511,7 @@ def _build_execution_details(
     """
     group_names = [f"Q{g}" for g in range(1, n_groups + 1)]
     portfolio_value = float(execution.get("portfolio_value", 100000.0) or 100000.0)
-    adv_window = int(
-        ((execution.get("slippage") or {}).get("adv_window", 20)) or 20
-    )
-
+    return_dates = pd.DatetimeIndex(return_index)
     prev_weights: dict[str, pd.Series] = {
         g: pd.Series(dtype="float64") for g in group_names
     }
@@ -160,28 +519,261 @@ def _build_execution_details(
     trades_rows: list[dict] = []
     cost_rows: list[dict] = []
 
+    events = (
+        forced_exit_events.copy()
+        if forced_exit_events is not None and not forced_exit_events.empty
+        else pd.DataFrame()
+    )
+    if not events.empty:
+        events["execution_date"] = pd.to_datetime(events["execution_date"])
+        events["decision_date"] = pd.to_datetime(events["decision_date"])
+        events["_event_priority"] = events["pricing_method"].map(
+            {
+                "NEXT_OPEN": 0,
+                "LAST_TRADABLE_CLOSE": 2,
+                "TOTAL_LOSS_WRITE_OFF": 2,
+            }
+        )
+        if events["_event_priority"].isna().any():
+            raise ValueError("Unknown membership-exit pricing method")
+        events = events.sort_values(
+            ["execution_date", "_event_priority", "assignment", "ticker"]
+        ).reset_index(drop=True)
+    execution_membership = (
+        membership_mask.reindex(
+            index=return_dates,
+            columns=assign_df.columns,
+            fill_value=False,
+        ).astype(bool)
+        if membership_mask is not None
+        else None
+    )
+    event_cursor = 0
+
+    def append_cost_row(
+        trade_rows: list[dict],
+        *,
+        date: pd.Timestamp,
+        decision_date: pd.Timestamp,
+        group: str,
+        traded_weight: float,
+        turnover: float,
+        event_type: str,
+    ) -> None:
+        total_cost = float(sum(row["cost"] for row in trade_rows))
+        total_fee = float(sum(row["fee"] for row in trade_rows))
+        total_slippage = float(
+            sum(row["slippage_cost"] for row in trade_rows)
+        )
+        cost_rows.append(
+            {
+                "date": date.strftime("%Y-%m-%d"),
+                "decision_date": decision_date.strftime("%Y-%m-%d"),
+                "group": group,
+                "event_type": event_type,
+                "traded_weight": float(traded_weight),
+                "turnover": float(turnover),
+                "portfolio_value": portfolio_value,
+                "fee_model": execution.get("fee_model"),
+                "slippage_model": execution.get("slippage_model"),
+                "avg_slippage_bps": (
+                    float(np.mean([row["slippage_bps"] for row in trade_rows]))
+                    if trade_rows
+                    else 0.0
+                ),
+                "total_slippage_cost": total_slippage,
+                "total_fee": total_fee,
+                "total_cost_cash": total_slippage + total_fee,
+                "cost": total_cost,
+            }
+        )
+
+    def consume_forced_exits(
+        cutoff: pd.Timestamp,
+        *,
+        max_priority_at_cutoff: int,
+    ) -> None:
+        nonlocal event_cursor
+        while event_cursor < len(events):
+            event = events.iloc[event_cursor]
+            execution_date = pd.Timestamp(event["execution_date"])
+            event_priority = int(event["_event_priority"])
+            if execution_date > cutoff or (
+                execution_date == cutoff
+                and event_priority > max_priority_at_cutoff
+            ):
+                break
+            event_cursor += 1
+            group_no = int(float(event["assignment"]))
+            group_name = f"Q{group_no}"
+            if group_name not in prev_weights:
+                raise ValueError(
+                    f"Invalid forced-exit group {group_name} for {event['ticker']}"
+                )
+            ticker = str(event["ticker"])
+            old_weights = prev_weights[group_name]
+            old_weight = float(old_weights.get(ticker, 0.0))
+            if old_weight <= 0:
+                raise ValueError(
+                    "Membership-exit trade is not present in modeled holdings: "
+                    f"date={execution_date.date()} group={group_name} "
+                    f"ticker={ticker}"
+                )
+            decision_date = pd.Timestamp(event["decision_date"])
+            pricing_method = str(event["pricing_method"])
+            event_type = (
+                "MEMBERSHIP_EXIT_WRITE_OFF"
+                if pricing_method == "TOTAL_LOSS_WRITE_OFF"
+                else "MEMBERSHIP_EXIT"
+            )
+            if pricing_method == "TOTAL_LOSS_WRITE_OFF":
+                trade_row = {
+                    "date": execution_date.strftime("%Y-%m-%d"),
+                    "decision_date": decision_date.strftime("%Y-%m-%d"),
+                    "group": group_name,
+                    "ticker": ticker,
+                    "old_weight": old_weight,
+                    "new_weight": 0.0,
+                    "trade_weight": -old_weight,
+                    "trade_abs_weight": old_weight,
+                    "side": "WRITE_OFF",
+                    "event_type": event_type,
+                    "pricing_method": pricing_method,
+                    "portfolio_value": portfolio_value,
+                    "estimated_notional": old_weight * portfolio_value,
+                    "estimated_quantity": np.nan,
+                    "raw_price": 0.0,
+                    "fill_price": 0.0,
+                    "bar_volume": np.nan,
+                    "volume_reference": "NOT_APPLICABLE_WRITE_OFF",
+                    "participation_rate": 0.0,
+                    "slippage_model": execution.get("slippage_model"),
+                    "slippage_bps": 0.0,
+                    "impact_bps": 0.0,
+                    "slippage_cost": 0.0,
+                    "fee_model": execution.get("fee_model"),
+                    "broker_commission": 0.0,
+                    "sec_fee": 0.0,
+                    "finra_taf": 0.0,
+                    "finra_cat": 0.0,
+                    "clearing_fee": 0.0,
+                    "pass_through_fee": 0.0,
+                    "exchange_fee": 0.0,
+                    "fee": 0.0,
+                    "total_cost_cash": 0.0,
+                    "cost": 0.0,
+                }
+            else:
+                trade_row = _build_trade_row(
+                    date=execution_date,
+                    decision_date=decision_date,
+                    group=group_name,
+                    ticker=ticker,
+                    old_weight=old_weight,
+                    new_weight=0.0,
+                    execution=execution,
+                    execution_price_df=execution_price_df,
+                    volume_df=volume_df,
+                    raw_price_override=float(event["raw_price"]),
+                    event_type=event_type,
+                    pricing_method=pricing_method,
+                )
+            if trade_row is None:
+                continue
+            trades_rows.append(trade_row)
+            append_cost_row(
+                [trade_row],
+                date=execution_date,
+                decision_date=decision_date,
+                group=group_name,
+                traded_weight=old_weight,
+                turnover=old_weight,
+                event_type=event_type,
+            )
+            prev_weights[group_name] = old_weights.drop(ticker)
+
     for decision_date in rebal_dates:
-        effective_idx = return_index.searchsorted(decision_date, side="right")
+        effective_idx = return_dates.searchsorted(decision_date, side="right")
         # Include a next-open trade only when its following valuation open is
         # also inside the measured horizon. Otherwise costs and returns would
         # be truncated on different dates.
-        if effective_idx + 1 >= len(return_index):
+        if effective_idx + 1 >= len(return_dates):
             continue
-        effective_date = return_index[effective_idx]
+        effective_date = return_dates[effective_idx]
+        consume_forced_exits(
+            pd.Timestamp(effective_date),
+            max_priority_at_cutoff=0,
+        )
 
         assign_row = assign_df.loc[decision_date]
         for group_no, group_name in enumerate(group_names, start=1):
-            tickers = list(assign_df.columns[assign_row.values == group_no])
-            if tickers:
+            target_tickers = list(
+                assign_df.columns[assign_row.values == group_no]
+            )
+            eligible_tickers = target_tickers
+            if execution_membership is not None:
+                eligible_tickers = [
+                    ticker
+                    for ticker in target_tickers
+                    if bool(execution_membership.at[effective_date, ticker])
+                ]
+            if target_tickers:
                 new_weights = pd.Series(
-                    1.0 / len(tickers),
-                    index=pd.Index(tickers, name="ticker"),
+                    1.0 / len(target_tickers),
+                    index=pd.Index(eligible_tickers, name="ticker"),
                     dtype="float64",
                 )
             else:
                 new_weights = pd.Series(dtype="float64")
 
             old_weights = prev_weights[group_name]
+            candidate_tickers = old_weights.index.union(new_weights.index)
+            for ticker in candidate_tickers:
+                old_weight = float(old_weights.get(ticker, 0.0))
+                new_weight = float(new_weights.get(ticker, 0.0))
+                if abs(new_weight - old_weight) <= 1e-12:
+                    continue
+                if _safe_lookup(
+                    execution_price_df,
+                    pd.Timestamp(effective_date),
+                    str(ticker),
+                ) is not None:
+                    continue
+                pending_exit = (
+                    not events.empty
+                    and events["ticker"].astype(str).eq(str(ticker)).any()
+                    and (
+                        events.loc[
+                            events["ticker"].astype(str).eq(str(ticker)),
+                            "execution_date",
+                        ]
+                        >= pd.Timestamp(effective_date)
+                    ).any()
+                )
+                if not pending_exit:
+                    continue
+                if old_weight > 0:
+                    new_weights.loc[ticker] = old_weight
+                else:
+                    new_weights = new_weights.drop(ticker, errors="ignore")
+
+            if float(new_weights.sum()) > 1.0 + 1e-12:
+                locked = [
+                    ticker
+                    for ticker in new_weights.index
+                    if _safe_lookup(
+                        execution_price_df,
+                        pd.Timestamp(effective_date),
+                        str(ticker),
+                    ) is None
+                ]
+                locked_weight = float(new_weights.reindex(locked).sum())
+                adjustable = new_weights.index.difference(locked)
+                adjustable_weight = float(new_weights.reindex(adjustable).sum())
+                budget = max(0.0, 1.0 - locked_weight)
+                if adjustable_weight > 0:
+                    new_weights.loc[adjustable] *= budget / adjustable_weight
+
             all_tickers = old_weights.index.union(new_weights.index)
             old_aligned = old_weights.reindex(all_tickers, fill_value=0.0)
             new_aligned = new_weights.reindex(all_tickers, fill_value=0.0)
@@ -203,131 +795,51 @@ def _build_execution_details(
 
             group_trade_rows: list[dict] = []
             for ticker, trade_weight in delta.items():
-                if abs(float(trade_weight)) <= 1e-12:
+                trade_row = _build_trade_row(
+                    date=pd.Timestamp(effective_date),
+                    decision_date=pd.Timestamp(decision_date),
+                    group=group_name,
+                    ticker=str(ticker),
+                    old_weight=float(old_aligned.loc[ticker]),
+                    new_weight=float(new_aligned.loc[ticker]),
+                    execution=execution,
+                    execution_price_df=execution_price_df,
+                    volume_df=volume_df,
+                )
+                if trade_row is None:
                     continue
-                trade_abs = abs(float(trade_weight))
-                side = "BUY" if trade_weight > 0 else "SELL"
-                raw_price = _safe_lookup(execution_price_df, pd.Timestamp(effective_date), str(ticker))
-                bar_volume = _safe_trailing_volume(
-                    volume_df,
-                    pd.Timestamp(decision_date),
-                    str(ticker),
-                    adv_window,
-                )
-                estimated_notional = trade_abs * portfolio_value
-                estimated_quantity = (
-                    estimated_notional / raw_price
-                    if raw_price is not None and raw_price > 0 else 0.0
-                )
-                if raw_price is None or raw_price <= 0:
-                    raise ValueError(
-                        "Missing execution price for required backtest trade: "
-                        f"decision_date={pd.Timestamp(decision_date).date()} "
-                        f"execution_date={pd.Timestamp(effective_date).date()} "
-                        f"ticker={ticker} side={side}. Rebuild open/close data; "
-                        "the engine will not synthesize a fill."
-                    )
-                if estimated_quantity <= 0:
-                    raise ValueError(
-                        "Backtest trade resolved to a non-positive quantity: "
-                        f"ticker={ticker} notional={estimated_notional}"
-                    )
-                max_quantity = max_volume_fill_quantity(
-                    requested_quantity=estimated_quantity,
-                    volume=bar_volume,
-                    execution=execution,
-                )
-                if estimated_quantity > max_quantity + 1e-9:
-                    raise ValueError(
-                        "Backtest order exceeds the configured ADV fill limit: "
-                        f"decision_date={pd.Timestamp(decision_date).date()} "
-                        f"ticker={ticker} requested={estimated_quantity:.4f} "
-                        f"allowed={max_quantity:.4f} adv={bar_volume}. "
-                        "Reduce portfolio_value, widen the universe, or use an "
-                        "event-driven partial-fill model."
-                    )
-                ex = calculate_execution(
-                    side=side,
-                    quantity=estimated_quantity,
-                    raw_price=raw_price,
-                    volume=bar_volume,
-                    execution=execution,
-                )
-                slippage_cost = float(ex["slippage_cost"])
-                fee = float(ex["fee"])
-                total_cost_cash = float(ex["total_cost"])
-                cost_rate = (
-                    total_cost_cash / portfolio_value
-                    if portfolio_value > 0
-                    else 0.0
-                )
-                fee_components = ex.get("fee_components") or {}
-                fill_price = float(ex["fill_price"])
-                slippage_bps_used = float(ex["slippage_bps"])
-                participation_rate = float(ex["participation_rate"])
-                impact_bps = float(ex["impact_bps"])
-
-                trade_row = {
-                    "date": pd.Timestamp(effective_date).strftime("%Y-%m-%d"),
-                    "decision_date": pd.Timestamp(decision_date).strftime("%Y-%m-%d"),
-                    "group": group_name,
-                    "ticker": ticker,
-                    "old_weight": float(old_aligned.loc[ticker]),
-                    "new_weight": float(new_aligned.loc[ticker]),
-                    "trade_weight": float(trade_weight),
-                    "trade_abs_weight": trade_abs,
-                    "side": side,
-                    "portfolio_value": portfolio_value,
-                    "estimated_notional": float(estimated_notional),
-                    "estimated_quantity": float(estimated_quantity),
-                    "raw_price": float(raw_price) if raw_price is not None else np.nan,
-                    "fill_price": float(fill_price),
-                    "bar_volume": float(bar_volume) if bar_volume is not None else np.nan,
-                    "volume_reference": f"ADV{adv_window}_asof_decision",
-                    "participation_rate": participation_rate,
-                    "slippage_model": execution.get("slippage_model"),
-                    "slippage_bps": slippage_bps_used,
-                    "impact_bps": impact_bps,
-                    "slippage_cost": slippage_cost,
-                    "fee_model": execution.get("fee_model"),
-                    "broker_commission": float(fee_components.get("broker_commission", 0.0) or 0.0),
-                    "sec_fee": float(fee_components.get("sec_fee", 0.0) or 0.0),
-                    "finra_taf": float(fee_components.get("finra_taf", 0.0) or 0.0),
-                    "finra_cat": float(fee_components.get("finra_cat", 0.0) or 0.0),
-                    "clearing_fee": float(fee_components.get("clearing_fee", 0.0) or 0.0),
-                    "pass_through_fee": float(fee_components.get("pass_through_fee", 0.0) or 0.0),
-                    "exchange_fee": float(fee_components.get("exchange_fee", 0.0) or 0.0),
-                    "fee": fee,
-                    "total_cost_cash": total_cost_cash,
-                    "cost": float(cost_rate),
-                }
                 group_trade_rows.append(trade_row)
                 trades_rows.append(trade_row)
 
             traded_abs = float(delta.abs().sum())
-            total_cost = float(sum(r["cost"] for r in group_trade_rows))
-            total_fee = float(sum(r["fee"] for r in group_trade_rows))
-            total_slippage = float(sum(r["slippage_cost"] for r in group_trade_rows))
-            cost_rows.append({
-                "date": pd.Timestamp(effective_date).strftime("%Y-%m-%d"),
-                "decision_date": pd.Timestamp(decision_date).strftime("%Y-%m-%d"),
-                "group": group_name,
-                "traded_weight": traded_abs,
-                "turnover": float(turnover),
-                "portfolio_value": portfolio_value,
-                "fee_model": execution.get("fee_model"),
-                "slippage_model": execution.get("slippage_model"),
-                "avg_slippage_bps": (
-                    float(np.mean([r["slippage_bps"] for r in group_trade_rows]))
-                    if group_trade_rows else 0.0
-                ),
-                "total_slippage_cost": total_slippage,
-                "total_fee": total_fee,
-                "total_cost_cash": total_slippage + total_fee,
-                "cost": float(total_cost),
-            })
+            append_cost_row(
+                group_trade_rows,
+                date=pd.Timestamp(effective_date),
+                decision_date=pd.Timestamp(decision_date),
+                group=group_name,
+                traded_weight=traded_abs,
+                turnover=turnover,
+                event_type="REBALANCE",
+            )
 
             prev_weights[group_name] = new_weights
+
+        consume_forced_exits(
+            pd.Timestamp(effective_date),
+            max_priority_at_cutoff=2,
+        )
+
+    if len(return_dates):
+        consume_forced_exits(
+            pd.Timestamp(return_dates[-1]),
+            max_priority_at_cutoff=2,
+        )
+    if event_cursor != len(events):
+        remaining = events.iloc[event_cursor:]
+        raise ValueError(
+            "Membership-exit events fall outside the measured horizon: "
+            f"{remaining[['execution_date', 'ticker']].head(10).to_dict('records')}"
+        )
 
     holdings = pd.DataFrame(holdings_rows)
     trades = pd.DataFrame(trades_rows)
@@ -478,6 +990,8 @@ def _strict_equal_weight_group_returns(
 
 
 def _cfg_get(obj: object, key: str, default):
+    if isinstance(obj, Mapping):
+        return obj.get(key, default)
     try:
         return getattr(obj, key)
     except Exception:  # noqa: BLE001
@@ -493,6 +1007,7 @@ def build_tradable_mask(
     open_df: pd.DataFrame | None = None,
     volume_df: pd.DataFrame | None = None,
     timing: str = "close",
+    tradability: Mapping[str, object] | object | None = None,
 ) -> pd.DataFrame:
     """
     Build a decision-date tradability mask.
@@ -500,7 +1015,11 @@ def build_tradable_mask(
     Every rule uses only information known by the decision-date close. Future
     execution-price availability is validated by the fill engine, after ranking.
     """
-    cfg = _cfg_get(CONFIG.backtest, "tradability", {})
+    cfg = (
+        tradability
+        if tradability is not None
+        else _cfg_get(CONFIG.backtest, "tradability", {})
+    )
     enabled = bool(_cfg_get(cfg, "enabled", True))
     mask = pd.DataFrame(True, index=index, columns=columns)
     if not enabled:
@@ -551,6 +1070,8 @@ def quintile_backtest(
     price_df: pd.DataFrame | None = None,
     volume_df: pd.DataFrame | None = None,
     tradable_mask: pd.DataFrame | None = None,
+    membership_mask: pd.DataFrame | None = None,
+    membership_events: pd.DataFrame | None = None,
     benchmark_returns: pd.Series | None = None,
     rebalance_mode: str | None = None,
     execution: dict | None = None,
@@ -617,13 +1138,6 @@ def quintile_backtest(
         tradable_mask = tradable_mask.reindex(
             index=common_dates, columns=common_cols, fill_value=False
         )
-    benchmark_base = (
-        benchmark_returns.reindex(common_dates)
-        if benchmark_returns is not None
-        else r.where(tradable_mask.shift(1).fillna(False)).mean(axis=1)
-    )
-    benchmark_base.name = "Benchmark"
-
     # 分组：以 t 日因子分组，持仓从 t+1 日生效 —— 故对 assign 做 shift(1)
     assign = _assign_groups_on_rebalance(
         f,
@@ -638,6 +1152,22 @@ def quintile_backtest(
         mode=rebalance_mode,
         step_days=rebalance_days,
     )
+    r, forced_exit_events = _apply_membership_exit_policy(
+        r,
+        assign_held,
+        membership_mask=membership_mask,
+        membership_events=membership_events,
+        rebalance_dates=rebal_dates,
+        open_df=open_df,
+        close_df=price_df,
+        policy=exec_cfg["membership_exit_policy"],
+    )
+    benchmark_base = (
+        benchmark_returns.reindex(common_dates)
+        if benchmark_returns is not None
+        else r.where(tradable_mask.shift(1).fillna(False)).mean(axis=1)
+    )
+    benchmark_base.name = "Benchmark"
 
     # 各组日收益（严格等权，不因缺失收益事后重分配权重）
     group_cols = [f"Q{g}" for g in range(1, n_groups + 1)]
@@ -658,6 +1188,8 @@ def quintile_backtest(
         execution=exec_cfg,
         execution_price_df=open_df if exec_cfg["timing"] == "next_open" else price_df,
         volume_df=volume_df,
+        forced_exit_events=forced_exit_events,
+        membership_mask=membership_mask,
     )
     cost_df = pd.DataFrame(0.0, index=gross_ret.index, columns=group_cols)
     if not costs_detail.empty:

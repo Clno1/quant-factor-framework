@@ -1,27 +1,30 @@
 # SG 生产运维总览
 
-更新日期：2026-08-08
+更新日期：2026-08-09
 
 ## 1. 当前部署状态
 
 | 范围 | 状态 |
 |---|---|
-| 本地 `/Users/huozhihong/Documents/Quant` | 统一存储与最终页面修复已完成；完整测试 326 项通过 |
-| SG `/home/projects/quant` | 统一存储主基线 `1028487`；Web 和六个正式 timer 已部署、验证并恢复 |
+| 本地 `/Users/huozhihong/Documents/Quant` | 研究池分层、NASDAQ100 和因子数据浏览器代码已实现；399 项测试通过，正式数据重发待完成 |
+| SG `/home/projects/quant` | 仍是基线 `bd8fdd6` 加动量白名单；本轮研究池改造尚未部署 |
 
-SG 发布使用精确 `git archive`，不是从未推送的本地 `main` 做远端 `git pull`。部署标记保存在
-`/home/projects/quant/.deploy-commit`。当前代码已经部署，但本地提交尚未推到共享 `origin/main`。
+SG 发布使用精确白名单 rsync，不从未推送的本地 `main` 做远端 `git pull`。部署标记保存在
+`/home/projects/quant/.deploy-commit`；后缀表示它包含尚未提交的本次白名单改动。
 
 ## 2. 目标生产拓扑
 
 ```mermaid
 flowchart TD
     TIMER["systemd timers"] --> LIQ["07:15 US_LIQUID_5M"]
-    TIMER --> MARKET["08:15 SP500 PIT + market data"]
-    TIMER --> FACTOR["08:45 factor research"]
+    TIMER --> MARKET["08:15 SP500 + NASDAQ100 PIT and market data"]
+    TIMER --> FACTOR["08:45 two-pool factor research + cross assessment"]
     TIMER --> GROUP["09:15 group analytics"]
     TIMER --> PAPER["10:30 paper trading"]
     TIMER --> REQUEST["every 5m data requests"]
+    TIMER --> PREMARKET["09:20 ET momentum digest"]
+    TIMER --> HOURLY["hourly momentum alerts"]
+    TIMER --> INTRADAY["minute monitor"]
 
     MARKET --> FACTOR
     MARKET --> GROUP
@@ -34,6 +37,7 @@ flowchart TD
     WEB["quant-web.service"] --> LAKE
     WEB --> OUTPUT
     WEB --> SQLITE
+    INTRADAY --> MOMENTUM_SQLITE["minute outbox + observations"]
 ```
 
 ## 3. 预期服务
@@ -42,12 +46,14 @@ flowchart TD
 |---|---|---|
 | `quant-web.service` | enabled + active | FastAPI 页面/API |
 | `quant-us-daily-refresh.timer` | enabled | `US_LIQUID_5M` 正式版本 |
-| `quant-market-data.timer` | enabled | SP500 PIT、SP500/MAG7 行情 |
-| `quant-factor-research.timer` | enabled | 主因子整批研究发布 |
+| `quant-market-data.timer` | enabled | SP500/NASDAQ100 PIT、SP500/NASDAQ100/MAG7 行情 |
+| `quant-factor-research.timer` | enabled | 两个核心池研究、MAG7 参考结果和跨池发布 |
 | `quant-group-analytics-eod.timer` | enabled | 读取正式 SP500 version 的板块研究 |
 | `quant-paper-trading.timer` | enabled | active 模拟盘账户 |
 | `quant-data-requests.timer` | enabled | Watchlist 缺数队列 |
-| `quant-premarket-digest.timer` | disabled | 外发 Discord 暂停 |
+| `quant-premarket-digest.timer` | enabled | 只发送 momentum 盘前摘要 |
+| `quant-momentum-alerts.timer` | enabled | 10:00–15:59 ET 小时摘要 |
+| `quant-intraday-momentum-monitor.timer` | enabled | 分钟 shadow 与五日自动晋级 |
 
 服务器应以 `systemctl list-unit-files 'quant-*'`、`systemctl list-timers --all 'quant-*'` 和 journal
 为事实来源。
@@ -58,10 +64,11 @@ flowchart TD
 |---|---|---|
 | DuckDB catalog | `/home/projects/quant/data/catalog/quant.duckdb` | 版本指针和质量审计 |
 | Parquet lake | `/home/projects/quant/data/lake/` | 正式不可变行情和 PIT 冻结副本 |
-| PIT publication | `/home/projects/quant/data/pit_universes/` | 当前 SP500 PIT 与 metadata |
+| PIT publication | `/home/projects/quant/data/pit_universes/` | SP500/NASDAQ100 PIT 与 metadata |
 | SQLite app DB | `/home/projects/quant/outputs/quant_app.sqlite3` | 策略、Watchlist、回测、模拟盘、请求队列 |
 | Research outputs | `/home/projects/quant/outputs/universes/` | 当前 factor publication 与 generation |
 | Backtest artifacts | `/home/projects/quant/outputs/backtests/` | 大型结果和日志 |
+| Intraday momentum state | `/home/projects/quant/outputs/intraday_momentum_monitor/state.sqlite3` | 信号、outbox、逐分钟观测、五日晋级证据 |
 
 DuckDB 和 SQLite 都是嵌入式文件，不需要独立 daemon。Parquet 也是文件格式。数据只存在部署它们
 的机器磁盘上，除非另行做备份或同步；本地和 SG 不是自动共享数据库。
@@ -78,9 +85,26 @@ DuckDB 和 SQLite 都是嵌入式文件，不需要独立 daemon。Parquet 也�
 历史影子观察是迁移审计证据，不再是每日生产健康检查。当前检查命令已经收敛为：
 
 ```bash
-.venv-worker/bin/python scripts/run_data_pipeline.py status
-.venv-worker/bin/python scripts/check_app_storage.py
+.venv/bin/python scripts/run_data_pipeline.py status
+.venv/bin/python scripts/check_app_storage.py
 ```
+
+### 5.1 待部署的研究池改造
+
+本地新增 Research Universe registry、NASDAQ100 严格 PIT、四文件哈希、历史行业覆盖审计、跨池
+原子 publication 和新版研究/交易页面。它们尚未进入 SG，不能引用本地页面或本地测试来证明
+服务器已经具备这些能力。
+
+当前本地 NASDAQ100 candidate 因 FMP 为 `EA`、Nasdaq 官方为 `HONA` 而失败。这是预期的
+fail-closed 结果。部署后也不得绕过；只有来源重新一致或加入有正式公告支持的精确规则后，才能
+发布 NASDAQ100。
+
+完整部署顺序见
+[`research_universe_redesign_implementation.md`](research_universe_redesign_implementation.md)。
+
+因子数据浏览器也尚未部署到 SG。本地 `/research/factor-data` 已完成日期截面、单股历史、CSV 和
+旧单股入口收敛，但它只接受当前完整 publication 合同。SG 上线和性能门槛见
+[`factor_data_explorer_implementation.md`](factor_data_explorer_implementation.md)。
 
 ## 6. 2026-08-08 SG 发布与验收记录
 
@@ -97,7 +121,7 @@ DuckDB 副本、各次精确 release archive 和 `SHA256SUMS`。发布过程排�
 验收结果：
 
 - `systemd-analyze verify` 通过；唯一提示来自腾讯云 `tat_agent.service` 的旧 `/var/run` 路径。
-- SG 使用 `.venv` 运行 Web、`.venv-worker` 运行 writer/research/paper worker。
+- SG 的 Web、writer、research、paper 和动量 worker 全部使用同一个 `.venv`。
 - 最终完整测试为 `326 passed`；新版 Starlette 只有测试客户端弃用 warning。
 - 页面验收发现冻结策略快照的成分行缺少方向字段，导致成功回测详情页 500；补齐字段并增加模板
   回归测试后，未认证首页返回 401，认证后的六个主页面及真实 Strategy、Watchlist、Backtest、
@@ -150,6 +174,8 @@ Watchlist 专属数据池是
 - 当前部署来自校验归档，本地提交尚未推送到共享远端仓库。
 - Web 原始 18823 端口若直接公网 HTTP 暴露，Basic Auth 不能提供传输加密。
 - 统一告警尚未覆盖所有 systemd 失败。
+- 研究池改造尚未部署；SG 当前没有正式 NASDAQ100 PIT、行情、8 因子研究或跨池结论。
+- 因子数据浏览器尚未部署；不得用本地隔离测试结果声称 SG 已提供该页面。
 
 日常命令见 [`server_daily_runbook.md`](server_daily_runbook.md)，存储细节见
 [`unified_data_storage.md`](unified_data_storage.md)。

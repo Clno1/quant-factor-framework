@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pandas as pd
 
@@ -16,7 +16,12 @@ from src.data.foundation import (
     MarketDataWriter,
     _filter_non_xnys_bars,
 )
-from src.data.access import MarketDataNotReadyError, load_published_bundle
+from src.data.access import (
+    MarketDataNotReadyError,
+    load_published_bundle,
+    load_published_daily_data,
+    validate_daily_data_contract,
+)
 from src.utils.market_calendar import latest_publishable_xnys_session
 
 
@@ -95,6 +100,168 @@ class DataFoundationTests(unittest.TestCase):
                 "Technology",
             )
             self.assertTrue(wide["returns"].iloc[0].isna().all())
+
+            filtered = reader.load_bars(
+                "TEST",
+                tickers=["bbb"],
+                start="2026-07-20",
+                end="2026-07-20",
+                version=result.version,
+            )
+            self.assertEqual(filtered[["date", "ticker"]].to_dict("records"), [
+                {"date": pd.Timestamp("2026-07-20"), "ticker": "BBB"},
+            ])
+            self.assertTrue(
+                reader.load_bars("TEST", tickers=[], version=result.version).empty
+            )
+
+    def test_reader_rejects_tampered_version_files(self):
+        def fetcher(ticker: str, start: str, end: str) -> pd.DataFrame:
+            return _bars(ticker, ["2026-07-20"])
+
+        for target in ("bars_path", "universe_path", "manifest_path"):
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                _, writer, reader = self._components(root, fetcher)
+                result = writer.update_universe(
+                    "TEST",
+                    target_session="2026-07-20",
+                    universe_frame=_universe(),
+                    initial_start="2026-07-20",
+                )
+                path = Path(getattr(result.version, target))
+                path.write_bytes(path.read_bytes() + b"tampered")
+                with self.assertRaises(DataFoundationError, msg=target):
+                    reader.require_version("TEST", result.version.version_id)
+
+    def test_reader_rejects_tampered_membership_at_version_resolution(self):
+        membership = pd.DataFrame(
+            {
+                "date": pd.Timestamp("2026-07-20"),
+                "ticker": ["AAA", "BBB"],
+                "active": True,
+            }
+        )
+
+        def fetcher(ticker: str, start: str, end: str) -> pd.DataFrame:
+            return _bars(ticker, ["2026-07-20"])
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, writer, reader = self._components(root, fetcher)
+            result = writer.update_universe(
+                "TEST",
+                target_session="2026-07-20",
+                universe_frame=_universe(),
+                initial_start="2026-07-20",
+                membership_frame=membership,
+                membership_source="unit-test",
+            )
+            path = Path(result.version.membership_path)
+            path.write_bytes(path.read_bytes() + b"tampered")
+
+            with self.assertRaises(DataFoundationError, msg="membership_path"):
+                reader.require_version("TEST", result.version.version_id)
+
+    def test_old_catalog_schema_is_readable_but_missing_v2_hashes(self):
+        import duckdb
+
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "legacy.duckdb"
+            connection = duckdb.connect(str(path))
+            connection.execute(
+                """
+                CREATE TABLE dataset_versions (
+                    version_id VARCHAR PRIMARY KEY,
+                    run_id VARCHAR NOT NULL,
+                    universe VARCHAR NOT NULL,
+                    provider VARCHAR NOT NULL,
+                    status VARCHAR NOT NULL,
+                    target_session DATE NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL,
+                    row_count BIGINT NOT NULL,
+                    ticker_count BIGINT NOT NULL,
+                    min_date DATE,
+                    max_date DATE,
+                    target_coverage DOUBLE NOT NULL,
+                    bars_path VARCHAR NOT NULL,
+                    universe_path VARCHAR NOT NULL,
+                    membership_path VARCHAR,
+                    membership_checksum_sha256 VARCHAR,
+                    manifest_path VARCHAR NOT NULL,
+                    checksum_sha256 VARCHAR NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE published_versions (
+                    universe VARCHAR PRIMARY KEY,
+                    version_id VARCHAR NOT NULL,
+                    published_at TIMESTAMPTZ NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO dataset_versions VALUES (
+                    'legacy-v1', 'legacy-run', 'SP500', 'fmp', 'PUBLISHED',
+                    DATE '2026-07-20', current_timestamp, 10, 2,
+                    DATE '2026-07-17', DATE '2026-07-20', 1.0,
+                    'bars.parquet', 'universe.parquet', NULL, NULL,
+                    'manifest.json', 'bars-sha'
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO published_versions
+                VALUES ('SP500', 'legacy-v1', current_timestamp)
+                """
+            )
+            connection.close()
+
+            version = MarketDataCatalog(path).latest_version("SP500")
+            self.assertIsNotNone(version)
+            self.assertIsNone(version.universe_checksum_sha256)
+            self.assertIsNone(version.manifest_checksum_sha256)
+
+    def test_historical_metadata_uses_explicit_unknown_instead_of_null(self):
+        membership = pd.DataFrame(
+            {
+                "date": pd.to_datetime(
+                    ["2026-07-17", "2026-07-17", "2026-07-20", "2026-07-20"]
+                ),
+                "ticker": ["AAA", "OLD", "AAA", "BBB"],
+                "active": [True, True, True, True],
+            }
+        )
+
+        def fetcher(ticker: str, start: str, end: str) -> pd.DataFrame:
+            return _bars(ticker, ["2026-07-17", "2026-07-20"])
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, writer, reader = self._components(root, fetcher)
+            with patch(
+                "src.data.foundation.point_in_time_required",
+                return_value=True,
+            ):
+                result = writer.update_universe(
+                    "TEST",
+                    target_session="2026-07-20",
+                    universe_frame=_universe(),
+                    initial_start="2026-07-17",
+                    membership_frame=membership,
+                    membership_source="unit-test",
+                )
+            metadata = reader.load_universe(
+                "TEST", current_only=False, version=result.version
+            ).set_index("ticker")
+            self.assertEqual(metadata.loc["OLD", "sector"], "UNKNOWN")
+            self.assertEqual(metadata.loc["OLD", "source"], "explicit_unknown")
+            self.assertFalse(bool(metadata.loc["OLD", "classification_known"]))
+            self.assertTrue(pd.notna(metadata.loc["OLD", "effective_from"]))
 
     def test_observed_membership_does_not_penalize_pre_listing_sessions(self):
         def fetcher(ticker: str, start: str, end: str) -> pd.DataFrame:
@@ -400,6 +567,63 @@ class DataFoundationTests(unittest.TestCase):
                         reader=reader,
                     )
 
+    def test_daily_bundle_is_bulk_loaded_and_stays_pinned_after_pointer_moves(self):
+        target_dates = ["2026-07-20"]
+
+        def fetcher(ticker: str, start: str, end: str) -> pd.DataFrame:
+            return _bars(ticker, target_dates)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, writer, reader = self._components(root, fetcher)
+            first = writer.update_universe(
+                "TEST",
+                target_session="2026-07-20",
+                universe_frame=_universe(),
+                initial_start="2026-07-20",
+            )
+            reader.load_bars = Mock(wraps=reader.load_bars)
+            with patch(
+                "src.data.access._expected_session",
+                return_value=pd.Timestamp("2026-07-20"),
+            ):
+                bundle = load_published_daily_data(
+                    requested_universe="TEST",
+                    dataset_version_id=first.version.version_id,
+                    reader=reader,
+                )
+
+            self.assertEqual(reader.load_bars.call_count, 1)
+            self.assertEqual(set(bundle.bars["ticker"]), {"AAA", "BBB"})
+            self.assertEqual(
+                bundle.contract.dataset_version_id,
+                first.version.version_id,
+            )
+
+            target_dates[:] = ["2026-07-20", "2026-07-21"]
+            second = writer.update_universe(
+                "TEST",
+                target_session="2026-07-21",
+                universe_frame=_universe(),
+                initial_start="2026-07-20",
+            )
+
+            self.assertNotEqual(
+                bundle.contract.dataset_version_id,
+                second.version.version_id,
+            )
+            self.assertEqual(bundle.bars["date"].max(), pd.Timestamp("2026-07-20"))
+            validated = validate_daily_data_contract(
+                bundle.contract,
+                reader=reader,
+            )
+            self.assertEqual(validated.version_id, first.version.version_id)
+
+            tampered = bundle.contract.to_dict()
+            tampered["bars_sha256"] = "sha256:tampered"
+            with self.assertRaises(MarketDataNotReadyError):
+                validate_daily_data_contract(tampered, reader=reader)
+
     def test_runtime_factor_bundle_rejects_short_membership_history(self):
         def fetcher(ticker: str, start: str, end: str) -> pd.DataFrame:
             return _bars(ticker, ["2026-07-20"])
@@ -437,6 +661,52 @@ class DataFoundationTests(unittest.TestCase):
                         dataset_version_id=result.version.version_id,
                         reader=reader,
                     )
+            self.assertIn(
+                "insufficient_membership_history",
+                raised.exception.coverage.failures,
+            )
+
+    def test_explicit_history_contract_rejects_short_market_dataset(self):
+        def fetcher(ticker: str, start: str, end: str) -> pd.DataFrame:
+            return _bars(ticker, ["2026-07-20"])
+
+        membership = pd.DataFrame(
+            {
+                "date": pd.Timestamp("2026-07-20"),
+                "ticker": ["AAA", "BBB"],
+                "active": True,
+            }
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _, writer, reader = self._components(root, fetcher)
+            result = writer.update_universe(
+                "TEST",
+                target_session="2026-07-20",
+                universe_frame=_universe(),
+                initial_start="2026-07-20",
+                membership_frame=membership,
+                membership_source="unit-test",
+            )
+            with patch(
+                "src.data.access._expected_session",
+                return_value=pd.Timestamp("2026-07-20"),
+            ):
+                with self.assertRaises(MarketDataNotReadyError) as raised:
+                    load_published_bundle(
+                        requested_universe="TEST",
+                        start="2026-01-01",
+                        end="2026-07-20",
+                        exact_universe=True,
+                        required_history_start="2026-01-01",
+                        dataset_version_id=result.version.version_id,
+                        reader=reader,
+                    )
+
+            self.assertIn(
+                "insufficient_bar_history",
+                raised.exception.coverage.failures,
+            )
             self.assertIn(
                 "insufficient_membership_history",
                 raised.exception.coverage.failures,
@@ -488,6 +758,66 @@ class DataFoundationTests(unittest.TestCase):
                 set(reader.load_wide_tables("SP500")["close"].columns),
                 {"AAA", "BBB", "CCC"},
             )
+
+    def test_pit_event_ledger_is_frozen_and_authenticated(self):
+        membership = pd.DataFrame(
+            {
+                "date": pd.to_datetime(["2026-07-17", "2026-07-17"]),
+                "ticker": ["AAA", "BBB"],
+                "active": [True, True],
+            }
+        )
+        events = pd.DataFrame(
+            {
+                "effective_date": pd.to_datetime(["2026-07-17"]),
+                "added_ticker": ["AAA"],
+                "removed_ticker": ["OLD"],
+                "reason": ["Acquired by Alpha"],
+            }
+        )
+
+        def fetcher(ticker: str, start: str, end: str) -> pd.DataFrame:
+            return _bars(ticker, ["2026-07-17"])
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "SP500.parquet"
+            membership.to_parquet(source, index=False)
+            _, writer, reader = self._components(root, fetcher)
+            with (
+                patch(
+                    "src.data.foundation.load_point_in_time_membership",
+                    return_value=(membership, source),
+                ),
+                patch(
+                    "src.data.foundation._load_membership_events_for_version",
+                    return_value=events,
+                ),
+            ):
+                result = writer.update_universe(
+                    "SP500",
+                    target_session="2026-07-17",
+                    universe_frame=_universe(),
+                    initial_start="2026-07-17",
+                )
+
+            frozen = reader.load_membership_events(
+                "SP500",
+                version=result.version,
+            )
+            self.assertIsNotNone(frozen)
+            self.assertEqual(frozen.iloc[0]["removed_ticker"], "OLD")
+            manifest = reader.verify_version(result.version)
+            event_path = Path(result.version.manifest_path).parent / str(
+                manifest["membership_events_path"]
+            )
+            with event_path.open("ab") as stream:
+                stream.write(b"modified")
+            with self.assertRaisesRegex(
+                DataFoundationError,
+                "checksum mismatch",
+            ):
+                reader.verify_version(result.version)
 
     def test_required_pit_missing_fails_before_publication(self):
         def fetcher(ticker: str, start: str, end: str) -> pd.DataFrame:

@@ -46,10 +46,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def _configured_universes() -> list[str]:
-    from src.config import CONFIG
+    from src.research_universes import research_universe_registry
 
-    values = list(CONFIG.universes.enabled)
-    return list(dict.fromkeys(str(value).strip().upper() for value in values))
+    return research_universe_registry().ids()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -115,6 +114,8 @@ def main(argv: list[str] | None = None) -> int:
 
             research_failures = run_pipeline(
                 only_universe=universe,
+                dataset_version_ids={universe: version.version_id},
+                target_session=expected,
             )
             if research_failures:
                 raise RuntimeError(
@@ -143,6 +144,32 @@ def main(argv: list[str] | None = None) -> int:
                     "error": str(exc),
                 }
             )
+
+    try:
+        from src.research_universes.service import (
+            publish_cross_universe_assessments,
+        )
+
+        cross = publish_cross_universe_assessments(target_session=expected)
+        results.append(
+            {
+                "universe": "CROSS_UNIVERSE",
+                "status": "PUBLISHED",
+                "target_session": cross.get("target_session"),
+                "data_version_id": cross.get("generation_id"),
+                "verdict_counts": cross.get("verdict_counts"),
+            }
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.exception("Cross-universe publication failed: %s", exc)
+        failures.append("CROSS_UNIVERSE")
+        results.append(
+            {
+                "universe": "CROSS_UNIVERSE",
+                "status": "FAILED",
+                "error": str(exc),
+            }
+        )
 
     payload = {"results": results, "failures": sorted(set(failures))}
     if args.json:

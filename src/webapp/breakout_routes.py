@@ -29,6 +29,7 @@ from src.breakouts.application import (
 )
 from src.breakouts.scanner import load_daily_frame
 from src.config import CONFIG
+from src.research_universes.registry import research_universe_registry
 from src.visualization.plots_plotly import fig_to_json
 from src.webapp.results_store import list_universes
 
@@ -54,10 +55,7 @@ def _sanitize(obj: Any) -> Any:
 
 
 def _enabled_breakout_universes() -> list[str]:
-    try:
-        configured = [str(value).upper() for value in (CONFIG.universes.enabled or [])]
-    except Exception:  # noqa: BLE001
-        configured = []
+    configured = research_universe_registry().ids()
     seen: dict[str, None] = {}
     for universe in [*configured, *list_universes()]:
         seen.setdefault(str(universe).upper(), None)

@@ -5,6 +5,7 @@ Mutable task state lives in SQLite. Large immutable result tables stay under
 """
 from __future__ import annotations
 
+from copy import deepcopy
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +15,7 @@ from uuid import uuid4
 import pandas as pd
 
 from src.config import CONFIG, PROJECT_ROOT
+from src.execution import resolve_execution_config
 from src.storage import app_database
 from src.strategies.definition import StrategyDefinition
 from src.utils.identifiers import canonical_uuid
@@ -93,17 +95,43 @@ def create_task(
     name: str | None = None,
     watchlist_snapshot: dict[str, Any] | None = None,
     execution: dict[str, Any] | None = None,
+    research_evidence_snapshot: dict[str, Any] | None = None,
+    target_universe_snapshot: dict[str, Any] | None = None,
+    risk_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create one pending task with frozen strategy and universe inputs."""
     task_id = str(uuid4())
     now = datetime.now().isoformat(timespec="seconds")
+    frozen_risk = {
+        "require_point_in_time_universe": bool(
+            getattr(CONFIG.backtest, "require_point_in_time_universe", True)
+        ),
+        "tradability": deepcopy(
+            dict(getattr(CONFIG.backtest, "tradability", {}))
+        ),
+    }
+    if risk_config is not None:
+        supplied_risk = deepcopy(risk_config)
+        frozen_risk.update(
+            {
+                key: value
+                for key, value in supplied_risk.items()
+                if key != "tradability"
+            }
+        )
+        if "tradability" in supplied_risk:
+            frozen_tradability = dict(frozen_risk["tradability"])
+            frozen_tradability.update(supplied_risk["tradability"] or {})
+            frozen_risk["tradability"] = frozen_tradability
     task = {
         "id": task_id,
         "name": (name or "").strip() or f"{strategy.name} @ {universe}",
         "strategy_id": strategy.id,
         "strategy_snapshot": strategy.to_dict(),
         "universe": universe,
-        "watchlist_snapshot": watchlist_snapshot,
+        "watchlist_snapshot": deepcopy(watchlist_snapshot),
+        "research_evidence_snapshot": deepcopy(research_evidence_snapshot),
+        "target_universe_snapshot": deepcopy(target_universe_snapshot),
         "date_range": {
             "start": start,
             "end": end,
@@ -114,7 +142,8 @@ def create_task(
         "rebalance_mode": rebalance_mode,
         "rebalance_days": rebalance_days,
         "top_group": top_group,
-        "execution": execution,
+        "execution": resolve_execution_config(deepcopy(execution) or {}),
+        "risk_config": frozen_risk,
         "status": STATUS_PENDING,
         "created_at": now,
         "started_at": None,
@@ -125,6 +154,7 @@ def create_task(
         "diagnostics": None,
         "data_contract": None,
         "data_request_id": None,
+        "schema_version": 2,
     }
     _database().put_record(
         _RECORD_KIND,

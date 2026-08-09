@@ -1,11 +1,13 @@
 """Data helpers for the internal paper trading simulator."""
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime
 import math
 from typing import Any
 from uuid import uuid4
 
+from src.config import CONFIG
 from src.execution import resolve_execution_config
 from src.strategies.definition import StrategyDefinition
 from src.utils.identifiers import (
@@ -81,6 +83,9 @@ def create_account_payload(
     top_group: int,
     rebalance_mode: str,
     execution: dict[str, Any] | None,
+    research_evidence_snapshot: dict[str, Any] | None = None,
+    target_universe_snapshot: dict[str, Any] | None = None,
+    risk_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     name = (name or "").strip()
     if not name:
@@ -122,13 +127,36 @@ def create_account_payload(
     strategy.validate()
     account_id = str(uuid4())
     now = now_iso()
+    frozen_risk = {
+        "require_point_in_time_universe": bool(
+            getattr(CONFIG.backtest, "require_point_in_time_universe", True)
+        ),
+        "tradability": deepcopy(
+            dict(getattr(CONFIG.backtest, "tradability", {}))
+        ),
+    }
+    if risk_config is not None:
+        supplied_risk = deepcopy(risk_config)
+        frozen_risk.update(
+            {
+                key: value
+                for key, value in supplied_risk.items()
+                if key != "tradability"
+            }
+        )
+        if "tradability" in supplied_risk:
+            frozen_tradability = dict(frozen_risk["tradability"])
+            frozen_tradability.update(supplied_risk["tradability"] or {})
+            frozen_risk["tradability"] = frozen_tradability
     return {
         "id": account_id,
         "name": name,
         "strategy_id": strategy.id,
         "strategy_snapshot": strategy.to_dict(),
         "universe": universe,
-        "watchlist_snapshot": watchlist_snapshot,
+        "watchlist_snapshot": deepcopy(watchlist_snapshot),
+        "research_evidence_snapshot": deepcopy(research_evidence_snapshot),
+        "target_universe_snapshot": deepcopy(target_universe_snapshot),
         "initial_cash": initial_cash,
         "cash": initial_cash,
         "last_equity": initial_cash,
@@ -136,7 +164,8 @@ def create_account_payload(
         "n_groups": n_groups,
         "top_group": top_group,
         "rebalance_mode": rebalance_mode,
-        "execution": normalize_execution(execution),
+        "execution": normalize_execution(deepcopy(execution)),
+        "risk_config": frozen_risk,
         "created_at": now,
         "updated_at": now,
         "last_run_at": None,
@@ -146,7 +175,7 @@ def create_account_payload(
         "diagnostics": None,
         "data_contract": None,
         "data_request_id": None,
-        "schema_version": 1,
+        "schema_version": 2,
     }
 
 

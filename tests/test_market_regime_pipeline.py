@@ -18,8 +18,10 @@ from src.market_regime_research.models import (
 )
 from src.market_regime_research.pipeline import (
     _align_available_bundle,
+    _validate_full_pit_feature_coverage,
     _load_validated_pit_metadata,
     _validate_source_manifest,
+    _wide_tables_from_daily_bars,
     build_research_dataset,
 )
 from src.market_regime_research.pit import membership_metadata_path
@@ -123,6 +125,27 @@ def test_cross_section_inputs_cannot_be_partially_supplied():
         )
 
 
+def test_version_bound_daily_bars_are_pivoted_in_memory():
+    bars = pd.DataFrame(
+        {
+            "date": pd.to_datetime(
+                ["2026-01-02", "2026-01-02", "2026-01-05", "2026-01-05"]
+            ),
+            "ticker": ["B", "A", "B", "A"],
+            "adj_close": [20.0, 10.0, 21.0, 11.0],
+            "high": [21.0, 11.0, 22.0, 12.0],
+            "low": [19.0, 9.0, 20.0, 10.0],
+            "volume": [200.0, 100.0, 210.0, 110.0],
+        }
+    )
+
+    wide = _wide_tables_from_daily_bars(bars)
+
+    assert set(wide) == {"adj_close", "high", "low", "volume"}
+    assert list(wide["adj_close"].columns) == ["A", "B"]
+    assert wide["adj_close"].loc[pd.Timestamp("2026-01-05"), "A"] == 11.0
+
+
 def test_available_data_is_not_forward_filled_indefinitely():
     source_index = pd.DatetimeIndex(["2026-01-02"])
     target_index = pd.date_range("2026-01-02", periods=10, freq="B")
@@ -210,7 +233,7 @@ def test_source_manifest_hash_mismatch_fails_closed(tmp_path):
 
 
 def test_pit_publication_metadata_is_bound_to_membership_hash(tmp_path):
-    membership_path = tmp_path / "SP500.parquet"
+    membership_path = tmp_path / "SP500_MARKET_REGIME.parquet"
     pd.DataFrame(
         {
             "date": [pd.Timestamp("2026-01-05")],
@@ -226,10 +249,19 @@ def test_pit_publication_metadata_is_bound_to_membership_hash(tmp_path):
             "quality_status": "PASS",
             "strict": True,
             "asof": "2026-01-05",
+            "start": "2026-01-05",
             "membership_sha256": file_sha256(membership_path),
             "diagnostics": {
                 "quality_status": "PASS",
                 "inconsistency_count": 0,
+                "scope": "market_regime",
+                "strict": True,
+                "start": "2026-01-05",
+                "asof": "2026-01-05",
+            },
+            "source": {
+                "scope": "market_regime",
+                "publication_id": "SP500_MARKET_REGIME",
             },
         },
     )
@@ -237,6 +269,9 @@ def test_pit_publication_metadata_is_bound_to_membership_hash(tmp_path):
     result = _load_validated_pit_metadata(
         membership_path,
         expected_asof=pd.Timestamp("2026-01-05"),
+        expected_start=pd.Timestamp("2026-01-05"),
+        expected_scope="market_regime",
+        expected_publication_id="SP500_MARKET_REGIME",
     )
     assert result["quality_status"] == "PASS"
 
@@ -251,4 +286,120 @@ def test_pit_publication_metadata_is_bound_to_membership_hash(tmp_path):
         _load_validated_pit_metadata(
             membership_path,
             expected_asof=pd.Timestamp("2026-01-05"),
+            expected_start=pd.Timestamp("2026-01-05"),
+            expected_scope="market_regime",
+            expected_publication_id="SP500_MARKET_REGIME",
+        )
+
+
+def test_main_factor_pit_scope_cannot_satisfy_market_regime_contract(tmp_path):
+    membership_path = tmp_path / "SP500_MARKET_REGIME.parquet"
+    pd.DataFrame(
+        {
+            "date": [pd.Timestamp("1990-01-01")],
+            "ticker": ["A"],
+            "active": [True],
+        }
+    ).to_parquet(membership_path, index=False)
+    write_strict_json(
+        membership_metadata_path(membership_path),
+        {
+            "schema_version": "1.0.0",
+            "quality_status": "PASS",
+            "strict": True,
+            "asof": "2026-01-05",
+            "start": "1990-01-01",
+            "membership_sha256": file_sha256(membership_path),
+            "diagnostics": {
+                "quality_status": "PASS",
+                "inconsistency_count": 0,
+                "scope": "main_factor",
+                "strict": True,
+                "start": "1990-01-01",
+                "asof": "2026-01-05",
+            },
+            "source": {
+                "scope": "main_factor",
+                "publication_id": "SP500",
+            },
+        },
+    )
+
+    with pytest.raises(DataContractError, match="diagnostics scope"):
+        _load_validated_pit_metadata(
+            membership_path,
+            expected_asof=pd.Timestamp("2026-01-05"),
+            expected_start=pd.Timestamp("1990-01-01"),
+            expected_scope="market_regime",
+            expected_publication_id="SP500_MARKET_REGIME",
+        )
+
+
+def test_market_regime_pit_must_cover_the_configured_history_start(tmp_path):
+    membership_path = tmp_path / "SP500_MARKET_REGIME.parquet"
+    pd.DataFrame(
+        {
+            "date": [pd.Timestamp("2020-01-01")],
+            "ticker": ["A"],
+            "active": [True],
+        }
+    ).to_parquet(membership_path, index=False)
+    write_strict_json(
+        membership_metadata_path(membership_path),
+        {
+            "schema_version": "1.0.0",
+            "quality_status": "PASS",
+            "strict": True,
+            "asof": "2026-01-05",
+            "start": "2020-01-01",
+            "membership_sha256": file_sha256(membership_path),
+            "diagnostics": {
+                "quality_status": "PASS",
+                "inconsistency_count": 0,
+                "scope": "market_regime",
+                "strict": True,
+                "start": "2020-01-01",
+                "asof": "2026-01-05",
+            },
+            "source": {
+                "scope": "market_regime",
+                "publication_id": "SP500_MARKET_REGIME",
+            },
+        },
+    )
+
+    with pytest.raises(DataContractError, match="begins after"):
+        _load_validated_pit_metadata(
+            membership_path,
+            expected_asof=pd.Timestamp("2026-01-05"),
+            expected_start=pd.Timestamp("1990-01-01"),
+            expected_scope="market_regime",
+            expected_publication_id="SP500_MARKET_REGIME",
+        )
+
+
+def test_full_pit_feature_coverage_gate_rejects_partial_cross_section():
+    index = pd.date_range("2020-01-01", periods=10, freq="B")
+    values = pd.DataFrame(
+        {
+            "breadth_feature": [np.nan] * 9 + [1.0],
+            "cross_section_feature": 1.0,
+            "positioning_feature": 1.0,
+        },
+        index=index,
+    )
+    registry = [
+        FeatureDefinition("breadth_feature", "breadth", "fixture", "x", 1, "x"),
+        FeatureDefinition(
+            "cross_section_feature", "cross_section", "fixture", "x", 1, "x"
+        ),
+        FeatureDefinition(
+            "positioning_feature", "positioning_stress", "fixture", "x", 1, "x"
+        ),
+    ]
+
+    with pytest.raises(DataContractError, match="coverage is below"):
+        _validate_full_pit_feature_coverage(
+            FeatureBundle(values=values, registry=registry),
+            minimum_coverage=0.95,
         )

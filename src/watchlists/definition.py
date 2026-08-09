@@ -4,6 +4,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
+import hashlib
 import math
 from typing import Any, Iterable
 
@@ -71,6 +72,8 @@ class WatchlistDefinition:
             "name": self.name,
             "description": self.description,
             "items": [it.to_dict() for it in self.items],
+            "universe_type": "TARGET",
+            "ticker_revision_sha256": self.ticker_revision_sha256(),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "schema_version": self.schema_version,
@@ -110,6 +113,18 @@ class WatchlistDefinition:
 
     def tickers(self) -> list[str]:
         return [it.ticker for it in self.items]
+
+    def ticker_revision_sha256(self) -> str:
+        """Hash the canonical ticker set that defines this target-pool revision."""
+        normalized = sorted(
+            {
+                str(item.ticker).strip().upper()
+                for item in self.items
+                if str(item.ticker).strip()
+            }
+        )
+        digest = hashlib.sha256(",".join(normalized).encode("utf-8")).hexdigest()
+        return f"sha256:{digest}"
 
     def set_equal_weights(self) -> None:
         """一键等权。"""

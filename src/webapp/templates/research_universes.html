@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+
+{% block content %}
+<header class="research-page-header">
+    <div>
+        <h1 class="page-title">研究股票池</h1>
+        <p class="page-meta">主研究池与次级验证池共同形成跨池证据；参考观察池不参与总判断。</p>
+    </div>
+</header>
+
+<section class="research-reading-guide" aria-labelledby="universe-guide-title">
+    <div>
+        <h2 id="universe-guide-title">什么是研究股票池</h2>
+        <p><strong>股票池是一份用于计算和比较的证券名单，不是系统建议买入的股票清单。</strong>例如，在某个交易日，标普500股票池包含当时属于该指数的公司；系统会在这些证券之间比较每个因子的高低。</p>
+    </div>
+    <dl class="research-guide-grid">
+        <div><dt>当前成分证券数</dt><dd>数据截止日当天仍属于该股票池的证券数量。</dd></div>
+        <div><dt>历史出现证券总数</dt><dd>整个研究区间内曾经进入过该股票池的不同证券数量。</dd></div>
+        <div><dt>按历史时点变化</dt><dd>每一天使用当时真实的成分名单，避免把今天的名单错误套到历史。</dd></div>
+    </dl>
+</section>
+
+<div class="research-table-wrap">
+    <table class="data research-table">
+        <thead>
+            <tr>
+                <th>研究股票池</th>
+                <th>角色</th>
+                <th>当前成分证券数</th>
+                <th>历史出现证券总数</th>
+                <th>成分名单口径</th>
+                <th>行业覆盖</th>
+                <th>数据版本</th>
+                <th>研究发布</th>
+                <th>对照指数</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for item in universes %}
+            <tr>
+                <td><a href="/research/universes/{{ item.universe_id }}"><strong>{{ universe_label(item.universe_id) }}</strong></a></td>
+                <td><span class="role-label role-{{ item.role|lower }}" title="系统代码：{{ item.role }}">{{ research_label(item.role) }}</span></td>
+                <td>{{ item.current_members if item.current_members is not none else '—' }}</td>
+                <td>{{ item.historical_union if item.historical_union is not none else '—' }}</td>
+                <td title="系统代码：{{ item.membership_type }}">{{ research_label(item.membership_type) }}</td>
+                <td>{% if item.industry_coverage is not none %}{{ '%.1f%%'|format(item.industry_coverage * 100) }}{% else %}—{% endif %}</td>
+                <td>
+                    <span class="pool-verdict verdict-{{ item.data_status|lower }}" title="系统代码：{{ item.data_status }}">{{ research_label(item.data_status) }}</span>
+                    <div class="cell-note mono">{{ (item.data_version_id or '—')[:12] }}</div>
+                </td>
+                <td>
+                    <span class="pool-verdict verdict-{{ item.research.status|lower }}" title="系统代码：{{ item.research.status }}">{{ research_label(item.research.status) }}</span>
+                    <div class="cell-note mono">{{ item.research.target_session or '—' }}</div>
+                </td>
+                <td>{{ item.benchmark }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

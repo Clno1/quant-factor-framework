@@ -26,7 +26,7 @@
     {% elif task.execution %}
     · 成交：<span class="mono">{{ task.execution.timing or 'default' }}</span>
     {% else %}
-    · <span style="color: var(--text-2);">成交模型：legacy（旧任务，按 close-to-close 无摩擦）</span>
+    · <span class="neg">INVALID 旧任务：没有冻结成交与成本配置</span>
     {% endif %}
 </div>
 
@@ -135,7 +135,7 @@
     </div>
     <div class="holdings-grid">
         {% for t in task.diagnostics.latest_holding_tickers %}
-        <a class="holding-chip mono" href="/stock/{{ t }}?universe={{ task.universe }}">{{ t }}</a>
+        <a class="holding-chip mono" href="/research/factor-data?mode=history&amp;universe={{ task.universe }}&amp;ticker={{ t }}">{{ t }}</a>
         {% endfor %}
     </div>
 </section>
@@ -172,6 +172,9 @@
     </table>
 </section>
 
+{% set frozen_execution = task.execution or {} %}
+{% include "_run_contract.html" %}
+
 {% if task.status == 'success' and task.diagnostics %}
 <section class="chart-panel">
     <div class="panel-title"><span>执行诊断</span></div>
@@ -193,6 +196,149 @@
         {% endif %}
     </div>
 </section>
+{% endif %}
+
+{% if task.status == 'success' %}
+<details class="chart-panel paper-details" open>
+    <summary class="panel-title">
+        <span>逐票成交与费用明细</span>
+        <span class="mono panel-meta">最近 {{ trades_detail|length }} 行</span>
+    </summary>
+    {% if trades_detail %}
+    <div class="table-wrap audit-table-wrap">
+        <table class="data compact execution-ledger-table">
+            <thead>
+                <tr>
+                    <th>决策日</th>
+                    <th>成交日</th>
+                    <th>股票</th>
+                    <th>方向</th>
+                    <th>原权重</th>
+                    <th>新权重</th>
+                    <th>估算股数</th>
+                    <th>开盘原价</th>
+                    <th>成交价</th>
+                    <th>参与率</th>
+                    <th>滑点 bps</th>
+                    <th>滑点成本</th>
+                    <th>券商佣金</th>
+                    <th>SEC</th>
+                    <th>FINRA TAF</th>
+                    <th>FINRA CAT</th>
+                    <th>清算</th>
+                    <th>转付</th>
+                    <th>交易所</th>
+                    <th>总费用</th>
+                    <th>总摩擦成本</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for trade in trades_detail %}
+                <tr>
+                    <td class="mono">{{ trade.get('decision_date') or '—' }}</td>
+                    <td class="mono">{{ trade.get('date') or '—' }}</td>
+                    <td class="mono">{{ trade.get('ticker') or '—' }}</td>
+                    <td class="{{ 'pos' if trade.get('side') == 'BUY' else 'neg' }}">{{ trade.get('side') or '—' }}</td>
+                    <td class="mono">{{ '%.3f%%'|format((trade.get('old_weight') or 0) * 100) }}</td>
+                    <td class="mono">{{ '%.3f%%'|format((trade.get('new_weight') or 0) * 100) }}</td>
+                    <td class="mono">{{ '%.3f'|format(trade.get('estimated_quantity') or 0) }}</td>
+                    <td class="mono">{{ '%.4f'|format(trade.get('raw_price') or 0) }}</td>
+                    <td class="mono">{{ '%.4f'|format(trade.get('fill_price') or 0) }}</td>
+                    <td class="mono">{{ '%.4f%%'|format((trade.get('participation_rate') or 0) * 100) }}</td>
+                    <td class="mono">{{ '%.3f'|format(trade.get('slippage_bps') or 0) }}</td>
+                    <td class="mono">{{ '%.4f'|format(trade.get('slippage_cost') or 0) }}</td>
+                    <td class="mono">{{ '%.4f'|format(trade.get('broker_commission') or 0) }}</td>
+                    <td class="mono">{{ '%.4f'|format(trade.get('sec_fee') or 0) }}</td>
+                    <td class="mono">{{ '%.4f'|format(trade.get('finra_taf') or 0) }}</td>
+                    <td class="mono">{{ '%.4f'|format(trade.get('finra_cat') or 0) }}</td>
+                    <td class="mono">{{ '%.4f'|format(trade.get('clearing_fee') or 0) }}</td>
+                    <td class="mono">{{ '%.4f'|format(trade.get('pass_through_fee') or 0) }}</td>
+                    <td class="mono">{{ '%.4f'|format(trade.get('exchange_fee') or 0) }}</td>
+                    <td class="mono">{{ '%.4f'|format(trade.get('fee') or 0) }}</td>
+                    <td class="mono">{{ '%.4f'|format(trade.get('total_cost_cash') or 0) }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty"><p>本任务没有逐票成交产物。</p></div>
+    {% endif %}
+</details>
+
+<details class="chart-panel paper-details">
+    <summary class="panel-title">
+        <span>调仓成本汇总</span>
+        <span class="mono panel-meta">最近 {{ costs_detail|length }} 行</span>
+    </summary>
+    {% if costs_detail %}
+    <div class="table-wrap">
+        <table class="data compact">
+            <thead>
+                <tr>
+                    <th>决策日</th>
+                    <th>成交日</th>
+                    <th>换手率</th>
+                    <th>交易权重</th>
+                    <th>平均滑点 bps</th>
+                    <th>滑点成本</th>
+                    <th>费用</th>
+                    <th>总成本</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in costs_detail %}
+                <tr>
+                    <td class="mono">{{ row.get('decision_date') or '—' }}</td>
+                    <td class="mono">{{ row.get('date') or '—' }}</td>
+                    <td class="mono">{{ '%.3f%%'|format((row.get('turnover') or 0) * 100) }}</td>
+                    <td class="mono">{{ '%.3f%%'|format((row.get('traded_weight') or 0) * 100) }}</td>
+                    <td class="mono">{{ '%.3f'|format(row.get('avg_slippage_bps') or 0) }}</td>
+                    <td class="mono">{{ '%.4f'|format(row.get('total_slippage_cost') or 0) }}</td>
+                    <td class="mono">{{ '%.4f'|format(row.get('total_fee') or 0) }}</td>
+                    <td class="mono">{{ '%.4f'|format(row.get('total_cost_cash') or 0) }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty"><p>本任务没有调仓成本产物。</p></div>
+    {% endif %}
+</details>
+
+<details class="chart-panel paper-details">
+    <summary class="panel-title">
+        <span>逐票目标持仓</span>
+        <span class="mono panel-meta">最近 {{ holdings_detail|length }} 行</span>
+    </summary>
+    {% if holdings_detail %}
+    <div class="table-wrap">
+        <table class="data compact">
+            <thead>
+                <tr>
+                    <th>决策日</th>
+                    <th>生效日</th>
+                    <th>股票</th>
+                    <th>目标权重</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in holdings_detail %}
+                <tr>
+                    <td class="mono">{{ row.get('decision_date') or '—' }}</td>
+                    <td class="mono">{{ row.get('date') or '—' }}</td>
+                    <td class="mono">{{ row.get('ticker') or '—' }}</td>
+                    <td class="mono">{{ '%.4f%%'|format((row.get('target_weight') or 0) * 100) }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty"><p>本任务没有逐票持仓产物。</p></div>
+    {% endif %}
+</details>
 {% endif %}
 
 </div>

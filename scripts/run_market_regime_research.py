@@ -36,7 +36,6 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.config import CONFIG, PROJECT_ROOT  # noqa: E402
 from src.data.fmp import (
     get_historical_sp500_constituent_changes,
     get_sp500_constituents,
@@ -46,6 +45,7 @@ from src.market_regime_research.pipeline import (  # noqa: E402
     run_market_regime_research,
 )
 from src.market_regime_research.pit import (
+    MARKET_REGIME_PIT_SCOPE,
     publish_validated_membership,
     reconstruct_with_settings,
 )  # noqa: E402
@@ -60,7 +60,7 @@ from src.market_regime_research.sources import (  # noqa: E402
     prepare_market_sources,
     utc_now_iso,
 )
-from src.utils.identifiers import safe_path_component  # noqa: E402
+from src.utils.file_lock import file_lock  # noqa: E402
 from src.utils.market_calendar import latest_completed_xnys_session  # noqa: E402
 
 
@@ -132,10 +132,7 @@ def _print(value: dict[str, Any], *, error: bool = False) -> None:
 
 
 def _membership_target(settings: MarketRegimeResearchSettings) -> Path:
-    configured = Path(str(CONFIG.universe.point_in_time.membership_dir))
-    root = configured if configured.is_absolute() else PROJECT_ROOT / configured
-    universe = safe_path_component(settings.pit.universe, label="PIT universe")
-    return root / f"{universe}.parquet"
+    return settings.pit_membership_path
 
 
 def _frame_sha256(frame: pd.DataFrame) -> str:
@@ -187,6 +184,13 @@ def _run_pit(
         settings=settings.pit,
         strict=False,
     )
+    result.diagnostics.update(
+        {
+            "scope": MARKET_REGIME_PIT_SCOPE,
+            "publication_id": settings.pit.publication_id,
+            "data_universe": settings.pit.data_universe,
+        }
+    )
     staging_root = settings.raw_root / "pit"
     staging_root.mkdir(parents=True, exist_ok=True)
     candidate_path = staging_root / f"{settings.pit.universe}_candidate.parquet"
@@ -226,20 +230,32 @@ def _run_pit(
         settings=settings.pit,
         strict=True,
     )
-    membership_path, metadata_path = publish_validated_membership(
-        strict_result,
-        target,
-        source_metadata={
-            "provider": "FMP",
-            "current_constituents_endpoint": "sp500-constituent",
-            "historical_changes_endpoint": "historical-sp500-constituent",
-            "current_rows": len(current),
-            "change_rows": len(changes),
-            "current_payload_sha256": _frame_sha256(current),
-            "changes_payload_sha256": _frame_sha256(changes),
-            "fetched_at": utc_now_iso(),
-        },
+    strict_result.diagnostics.update(
+        {
+            "scope": MARKET_REGIME_PIT_SCOPE,
+            "publication_id": settings.pit.publication_id,
+            "data_universe": settings.pit.data_universe,
+        }
     )
+    lock_path = target.parent / f".{target.stem.lower()}-writer.lock"
+    with file_lock(lock_path):
+        membership_path, metadata_path = publish_validated_membership(
+            strict_result,
+            target,
+            source_metadata={
+                "scope": MARKET_REGIME_PIT_SCOPE,
+                "publication_id": settings.pit.publication_id,
+                "data_universe": settings.pit.data_universe,
+                "provider": "FMP",
+                "current_constituents_endpoint": "sp500-constituent",
+                "historical_changes_endpoint": "historical-sp500-constituent",
+                "current_rows": len(current),
+                "change_rows": len(changes),
+                "current_payload_sha256": _frame_sha256(current),
+                "changes_payload_sha256": _frame_sha256(changes),
+                "fetched_at": utc_now_iso(),
+            },
+        )
     payload["published"] = True
     payload["membership_path"] = str(membership_path)
     payload["metadata_path"] = str(metadata_path)

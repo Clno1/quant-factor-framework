@@ -1,6 +1,6 @@
 # 大盘顶底研究系统：第一阶段实现说明
 
-> 实现日期：2026-08-01
+> 实现日期：2026-08-01；数据契约修订：2026-08-09
 > 当前状态：市场核心数据、标签和 P0 特征已经可运行；完整 PIT 横截面研究仍被数据质量门禁阻止；尚未接入页面或交易。
 
 第二轮独立代码复审、修复项和剩余风险见：
@@ -21,6 +21,11 @@
     -> P0 市场状态特征
     -> 不可变研究产物
 ```
+
+三类存储在这里的边界是：指数/ETF/Cboe/FRED 长历史保留在独立、带哈希的
+`data/raw/market_regime`；横截面行情通过 DuckDB 发布指针绑定
+`SP500_MARKET_REGIME` Curated Parquet；最终特征、标签和筛选结果继续作为不可变
+Parquet/JSON 研究产物。当前研究没有可变订单或账户状态，因此不写业务 SQLite。
 
 对应代码：
 
@@ -156,8 +161,12 @@ data/raw/market_regime/pit/SP500_diagnostics.json
 只有 `quality_status=PASS` 才允许发布到：
 
 ```text
-data/pit_universes/SP500.parquet
+data/pit_universes/SP500_MARKET_REGIME.parquet
 ```
+
+主因子链继续独占 `data/pit_universes/SP500.parquet`。市场研究 metadata 必须同时证明
+`scope=market_regime`、`publication_id=SP500_MARKET_REGIME` 和不晚于 1990-01-01 的
+起点；主因子 `scope=main_factor` 即使 PASS 且哈希正确，也不能被完整模式接受。
 
 ## 四、顶底标签
 
@@ -283,9 +292,14 @@ python scripts/run_market_regime_research.py run
 只有以下条件全部满足才会成功：
 
 1. 长期市场、Cboe、信用数据齐全；
-2. `high/low` 宽表已重建；
-3. PIT membership 已通过事件一致性；
-4. 历史成分并集的行情全部存在。
+2. 专属 `SP500_MARKET_REGIME` DatasetVersion 已在 DuckDB 发布；
+3. 该版本行情和冻结 membership 都覆盖 1990-01-01；
+4. 专属 PIT membership 已通过事件一致性、scope、publication ID 和哈希校验；
+5. Curated manifest 绑定的是同一份专属 PIT 源哈希；
+6. breadth、cross-section、positioning-stress 每列非空覆盖率均不低于 95%。
+
+当前专属 1990 PIT 和 DatasetVersion 尚未发布，因此完整命令应明确失败；可运行入口仍是
+`--core-only`。不能用主因子 2020 PIT 或 2021 年起的 SP500 Curated 版本绕过门禁。
 
 ## 七、研究产物
 
@@ -306,7 +320,9 @@ diagnostics.json
 run.json
 ```
 
-`data_manifest.json` 记录输入来源、输入文件 SHA256 和三个核心 Parquet 的 SHA256。
+`data_manifest.json` 记录输入来源、输入文件 SHA256、完整 `DataContract`（version ID、
+run ID、target session、bars/membership hash 和历史覆盖诊断）以及三个核心 Parquet 的
+SHA256。
 `latest.json` 只在完整 run 原子发布成功后更新。
 
 2026-08-01 市场核心 smoke run：
@@ -331,6 +347,9 @@ algorithm_version: 0.1.1
 - Cboe/FRED 字段和 available_at；
 - removal-only 事件不能误判为 addition；
 - PIT 倒推方向和严格失败；
+- 主因子 PIT scope 不能冒充市场研究 PIT；
+- PIT/Curated 历史晚于 1990 时完整模式失败；
+- 横截面特征覆盖率不足 95% 时不得标记并发布 `full_pit`；
 - first-touch 顺序和同日歧义；
 - 标签条件无前视；
 - P0 价格特征无前视；
@@ -344,7 +363,7 @@ algorithm_version: 0.1.1
 以下内容故意没有提前接入生产：
 
 1. 修复/替换 FMP PIT 事件源；
-2. 下载历史成分并集和退市股票行情；
+2. 发布专属 `SP500_MARKET_REGIME` 历史成分并集和退市股票行情版本；
 3. 正式接通 HY OAS，并补 EBP；
 4. G7 参数扰动与 G8 增量模型比较；
 5. G9 含 next-open、滑点和费用的经济价值；

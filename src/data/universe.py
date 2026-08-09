@@ -3,6 +3,7 @@
 
 支持的股票池：
   - SP500   : S&P 500 成分股（FMP 抓取，含 GICS sector / sub_industry）
+  - NASDAQ100: NASDAQ-100 成分证券（FMP 抓取，发布前另做 Nasdaq 官方对账）
   - US_ACTIVE: NASDAQ/NYSE/AMEX 活跃挂牌股票与 ETF（含海外公司 ADR）
   - MAG7    : Magnificent 7（AAPL/MSFT/GOOGL/AMZN/META/NVDA/TSLA）
   - CUSTOM  : 从配置 universe.custom_tickers 读取自定义列表
@@ -56,6 +57,10 @@ _BUILTIN_UNIVERSES: dict[str, list[tuple[str, str, str]]] = {
 
 def _sp500_cache_path() -> Path:
     return _CACHE_DIR / "sp500.parquet"
+
+
+def _nasdaq100_cache_path() -> Path:
+    return _CACHE_DIR / "nasdaq100.parquet"
 
 
 def _us_active_cache_path() -> Path:
@@ -122,6 +127,21 @@ def _get_sp500(force_refresh: bool = False) -> pd.DataFrame:
     return df
 
 
+def _get_nasdaq100(force_refresh: bool = False) -> pd.DataFrame:
+    cache = _nasdaq100_cache_path()
+    ensure_dir(cache)
+    if not force_refresh and is_cache_fresh(cache, CONFIG.universe.cache_days):
+        log.info("Loading NASDAQ-100 universe from cache: %s", cache)
+        return pd.read_parquet(cache)
+
+    from src.data.fmp import get_nasdaq100_constituents
+
+    frame = get_nasdaq100_constituents()
+    frame.to_parquet(cache)
+    log.info("Saved %d NASDAQ-100 securities to %s", len(frame), cache)
+    return frame
+
+
 def _get_us_active(force_refresh: bool = False) -> pd.DataFrame:
     cache = _us_active_cache_path()
     ensure_dir(cache)
@@ -167,7 +187,9 @@ def _get_builtin(name: str) -> pd.DataFrame:
 
 def list_universe_names() -> list[str]:
     """框架已支持的所有股票池名（用于前端切换）。"""
-    return ["SP500", "US_ACTIVE"] + sorted(_BUILTIN_UNIVERSES.keys())
+    return ["SP500", "NASDAQ100", "US_ACTIVE"] + sorted(
+        _BUILTIN_UNIVERSES.keys()
+    )
 
 
 def get_universe(name: str, force_refresh: bool = False) -> pd.DataFrame:
@@ -194,6 +216,9 @@ def get_universe(name: str, force_refresh: bool = False) -> pd.DataFrame:
 
     if name == "SP500":
         return _get_sp500(force_refresh=force_refresh)
+
+    if name == "NASDAQ100":
+        return _get_nasdaq100(force_refresh=force_refresh)
 
     if name == "US_ACTIVE":
         return _get_us_active(force_refresh=force_refresh)

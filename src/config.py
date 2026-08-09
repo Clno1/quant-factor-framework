@@ -3,7 +3,7 @@
 
 用法：
     from src.config import CONFIG
-    print(CONFIG.universes.default)      # 属性访问
+    print(CONFIG.research_universes.registry_path)  # 属性访问
     print(CONFIG["universe"]["name"])    # 字典访问
     CONFIG.reload()                      # 强制重载
 """

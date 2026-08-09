@@ -9,7 +9,8 @@ from typing import Any, Iterable, Mapping
 import numpy as np
 import pandas as pd
 
-from src.data.foundation import DataFoundationError, MarketDataReader
+from src.breakouts.daily_data import load_breakout_daily_dataset
+from src.data.foundation import DataFoundationError
 from src.data.universe_ids import US_LIQUID_5M, resolve_market_data_universe
 from src.utils.logger import get_logger
 
@@ -80,29 +81,19 @@ def load_daily_frames(
             if str(ticker).strip()
         )
     )
-    resolved = resolve_market_data_universe(data_universe)
+    if not normalized:
+        return {}
     try:
-        bars = MarketDataReader().load_bars(
-            resolved,
+        dataset = load_breakout_daily_dataset(
+            requested_universe=data_universe,
+            data_universe=resolve_market_data_universe(data_universe),
             tickers=normalized,
-            version=dataset_version_id,
+            dataset_version_id=dataset_version_id,
         )
     except DataFoundationError as exc:
-        log.warning("Published breakout data unavailable for %s: %s", resolved, exc)
+        log.warning("Published breakout data unavailable for %s: %s", data_universe, exc)
         return {}
-
-    frames: dict[str, pd.DataFrame] = {}
-    for ticker, group in bars.groupby("ticker", sort=False):
-        frame = (
-            group.set_index("date")[
-                ["open", "high", "low", "close", "adj_close", "volume"]
-            ]
-            .sort_index()
-        )
-        normalized_frame = _normalize_daily(frame)
-        if not normalized_frame.empty:
-            frames[str(ticker).upper()] = normalized_frame
-    return frames
+    return dataset.frames
 
 
 def load_daily_frame(
@@ -338,21 +329,34 @@ def scan_breakouts(
     sectors: Mapping[str, str] | None = None,
     data_universe: str = US_LIQUID_5M,
     dataset_version_id: str | None = None,
+    frames: Mapping[str, pd.DataFrame] | None = None,
 ) -> dict[str, Any]:
     filters = (filters or BreakoutFilters()).normalized()
     normalized_tickers = list(dict.fromkeys(str(t).strip().upper() for t in tickers if str(t).strip()))
-    frames = load_daily_frames(
-        normalized_tickers,
-        data_universe=data_universe,
-        dataset_version_id=dataset_version_id,
+    normalized_set = set(normalized_tickers)
+    loaded_frames = (
+        {
+            str(ticker).strip().upper(): _normalize_daily(frame)
+            for ticker, frame in frames.items()
+            if str(ticker).strip().upper() in normalized_set
+        }
+        if frames is not None
+        else load_daily_frames(
+            normalized_tickers,
+            data_universe=data_universe,
+            dataset_version_id=dataset_version_id,
+        )
     )
-    decision_date = _latest_covered_date(frames, asof)
+    loaded_frames = {
+        ticker: frame for ticker, frame in loaded_frames.items() if not frame.empty
+    }
+    decision_date = _latest_covered_date(loaded_frames, asof)
 
     rows: list[dict[str, Any]] = []
     stale: list[str] = []
     insufficient: list[str] = []
     for ticker in normalized_tickers:
-        frame = frames.get(ticker)
+        frame = loaded_frames.get(ticker)
         if frame is None:
             insufficient.append(ticker)
             continue
@@ -386,7 +390,7 @@ def scan_breakouts(
         "asof": decision_date.strftime("%Y-%m-%d"),
         "filters": asdict(filters),
         "universe_count": len(normalized_tickers),
-        "loaded_count": len(frames),
+        "loaded_count": len(loaded_frames),
         "candidate_count": len(rows),
         "breakout_count": sum(row["status"] == "BREAKOUT" for row in rows),
         "ready_count": sum(row["status"] == "READY" for row in rows),
@@ -406,14 +410,19 @@ def load_market_regime(
     fetch_missing: bool = True,
     data_universe: str = US_LIQUID_5M,
     dataset_version_id: str | None = None,
+    frame: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     """Evaluate the Qullamaggie market filter on daily QQQ/IWM data."""
     symbol = symbol.upper().strip()
     target = pd.Timestamp(asof).normalize()
-    frame = load_daily_frame(
-        symbol,
-        data_universe=data_universe,
-        dataset_version_id=dataset_version_id,
+    frame = (
+        frame.copy()
+        if frame is not None
+        else load_daily_frame(
+            symbol,
+            data_universe=data_universe,
+            dataset_version_id=dataset_version_id,
+        )
     )
     covered = not frame.empty and pd.Timestamp(frame.index.max()).normalize() >= target
 

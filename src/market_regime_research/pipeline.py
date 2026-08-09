@@ -9,8 +9,9 @@ import numpy as np
 import pandas as pd
 
 from src.config import PROJECT_ROOT
+from src.data.access import DataContract, load_published_daily_data
 from src.data.foundation import DatasetVersion, MarketDataReader
-from src.data.pit import build_membership_mask, find_membership_file
+from src.data.pit import build_membership_mask
 from src.market_regime_research import SCHEMA_VERSION
 from src.market_regime_research.artifacts import file_sha256, publish_research_run
 from src.market_regime_research.features import (
@@ -28,7 +29,10 @@ from src.market_regime_research.models import (
     FeatureBundle,
     ResearchRunResult,
 )
-from src.market_regime_research.pit import membership_metadata_path
+from src.market_regime_research.pit import (
+    MARKET_REGIME_PIT_SCOPE,
+    membership_metadata_path,
+)
 from src.market_regime_research.settings import MarketRegimeResearchSettings
 from src.market_regime_research.sources import (
     load_prepared_credit,
@@ -36,7 +40,11 @@ from src.market_regime_research.sources import (
     load_prepared_volatility,
     price_path,
 )
-from src.utils.identifiers import safe_path_component
+
+
+FULL_PIT_FEATURE_GROUPS = frozenset(
+    {"breadth", "cross_section", "positioning_stress"}
+)
 
 
 def _primary_index(
@@ -92,6 +100,74 @@ def _validate_wide_contract(wide_tables: Mapping[str, pd.DataFrame]) -> None:
             raise DataContractError(
                 f"SP500 {name} matrix does not align with adj_close"
             )
+
+
+def _wide_tables_from_daily_bars(bars: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """Pivot one version-bound long table without consulting another data source."""
+    required = ("date", "ticker", "adj_close", "high", "low", "volume")
+    missing = sorted(set(required) - set(bars.columns))
+    if bars.empty or missing:
+        raise DataContractError(
+            f"Published daily bars are empty or missing fields: {missing}"
+        )
+    work = bars[list(required)].copy()
+    work["date"] = pd.to_datetime(work["date"], errors="coerce").dt.normalize()
+    work["ticker"] = work["ticker"].astype(str).str.upper()
+    if work[["date", "ticker"]].isna().any().any():
+        raise DataContractError("Published daily bars contain invalid date/ticker keys")
+    if work.duplicated(["date", "ticker"]).any():
+        raise DataContractError(
+            "Published daily bars contain duplicate date/ticker keys"
+        )
+    index = pd.DatetimeIndex(sorted(work["date"].unique()), name="date")
+    columns = pd.Index(sorted(work["ticker"].unique()), name="ticker")
+    return {
+        field: work.pivot(index="date", columns="ticker", values=field)
+        .reindex(index=index, columns=columns)
+        .sort_index()
+        for field in ("adj_close", "high", "low", "volume")
+    }
+
+
+def _validate_full_pit_feature_coverage(
+    features: FeatureBundle,
+    *,
+    minimum_coverage: float,
+) -> dict[str, Any]:
+    """Reject a nominal full-PIT run whose cross-sectional history is partial."""
+    groups: dict[str, list[str]] = {}
+    for definition in features.registry:
+        if definition.group in FULL_PIT_FEATURE_GROUPS:
+            groups.setdefault(definition.group, []).append(definition.feature_name)
+    missing_groups = sorted(FULL_PIT_FEATURE_GROUPS - set(groups))
+    if missing_groups:
+        raise DataContractError(
+            f"Full PIT feature registry is missing groups: {missing_groups}"
+        )
+
+    diagnostics: dict[str, Any] = {
+        "minimum_required": float(minimum_coverage),
+        "groups": {},
+    }
+    failures: dict[str, float] = {}
+    for group, columns in sorted(groups.items()):
+        coverage = features.values[columns].notna().mean()
+        minimum = float(coverage.min())
+        diagnostics["groups"][group] = {
+            "columns": len(columns),
+            "minimum": minimum,
+            "median": float(coverage.median()),
+            "maximum": float(coverage.max()),
+        }
+        if minimum < float(minimum_coverage):
+            failures[group] = minimum
+    if failures:
+        formatted = {name: round(value, 6) for name, value in failures.items()}
+        raise DataContractError(
+            "Full PIT cross-sectional feature coverage is below the required "
+            f"{minimum_coverage:.2%}: {formatted}"
+        )
+    return diagnostics
 
 
 def build_research_dataset(
@@ -305,6 +381,9 @@ def _load_validated_pit_metadata(
     membership_path: Path,
     *,
     expected_asof: pd.Timestamp,
+    expected_start: pd.Timestamp,
+    expected_scope: str,
+    expected_publication_id: str,
 ) -> dict[str, Any]:
     metadata_path = membership_metadata_path(membership_path)
     metadata = _read_json_object(metadata_path)
@@ -326,6 +405,18 @@ def _load_validated_pit_metadata(
         raise DataContractError(
             "PIT snapshot asof predates the primary research end date"
         )
+    try:
+        metadata_start = pd.Timestamp(metadata.get("start")).normalize()
+    except Exception as exc:  # noqa: BLE001
+        raise DataContractError("PIT metadata contains an invalid start date") from exc
+    if pd.isna(metadata_start):
+        raise DataContractError("PIT metadata contains an invalid start date")
+    if metadata_start.tzinfo is not None:
+        metadata_start = metadata_start.tz_localize(None)
+    if metadata_start > expected_start.normalize():
+        raise DataContractError(
+            "PIT publication begins after the market-regime research start"
+        )
     if metadata.get("membership_sha256") != file_sha256(membership_path):
         raise DataContractError(
             "PIT membership hash differs from its publication metadata"
@@ -336,8 +427,57 @@ def _load_validated_pit_metadata(
     if (
         diagnostics.get("quality_status") != "PASS"
         or diagnostics.get("inconsistency_count") != 0
+        or diagnostics.get("strict") is not True
     ):
         raise DataContractError("PIT metadata diagnostics are not clean")
+    try:
+        diagnostics_start = pd.Timestamp(diagnostics.get("start")).normalize()
+        diagnostics_asof = pd.Timestamp(diagnostics.get("asof")).normalize()
+    except Exception as exc:  # noqa: BLE001
+        raise DataContractError(
+            "PIT diagnostics contain invalid start/asof dates"
+        ) from exc
+    if diagnostics_start.tzinfo is not None:
+        diagnostics_start = diagnostics_start.tz_localize(None)
+    if diagnostics_asof.tzinfo is not None:
+        diagnostics_asof = diagnostics_asof.tz_localize(None)
+    if diagnostics_start != metadata_start or diagnostics_asof != metadata_asof:
+        raise DataContractError(
+            "PIT diagnostics dates do not match publication metadata"
+        )
+    if diagnostics.get("scope") != expected_scope:
+        raise DataContractError(
+            "PIT diagnostics scope does not match market-regime research"
+        )
+    source = metadata.get("source")
+    if not isinstance(source, Mapping):
+        raise DataContractError("PIT metadata source must be an object")
+    if source.get("scope") != expected_scope:
+        raise DataContractError(
+            "PIT source scope does not match market-regime research"
+        )
+    if source.get("publication_id") != expected_publication_id:
+        raise DataContractError(
+            "PIT source publication_id does not match market-regime research"
+        )
+
+    membership_dates = pd.read_parquet(membership_path, columns=["date"])
+    if membership_dates.empty:
+        raise DataContractError("PIT membership publication is empty")
+    observed_dates = pd.to_datetime(
+        membership_dates["date"],
+        errors="coerce",
+    )
+    observed_start = observed_dates.min()
+    observed_asof = observed_dates.max()
+    if pd.isna(observed_start) or pd.isna(observed_asof):
+        raise DataContractError("PIT membership contains no valid snapshot dates")
+    observed_start = pd.Timestamp(observed_start).tz_localize(None).normalize()
+    observed_asof = pd.Timestamp(observed_asof).tz_localize(None).normalize()
+    if observed_start != metadata_start or observed_asof != metadata_asof:
+        raise DataContractError(
+            "PIT metadata dates do not match the membership publication"
+        )
     return dict(metadata)
 
 
@@ -350,6 +490,8 @@ def _input_manifest(
     pit_diagnostics: Mapping[str, Any] | None,
     pit_publication: Mapping[str, Any] | None,
     market_version: DatasetVersion | None,
+    market_data_contract: DataContract | None,
+    pit_membership_path: Path | None,
 ) -> dict[str, Any]:
     inputs: list[dict[str, Any]] = []
     for instrument in settings.instruments:
@@ -375,9 +517,9 @@ def _input_manifest(
             }
         )
     if full_pit:
-        if market_version is None:
+        if market_version is None or market_data_contract is None:
             raise DataContractError(
-                "Full PIT research has no bound market-data version"
+                "Full PIT research has no bound market-data contract"
             )
         published_inputs = {
             "bars": market_version.bars_path,
@@ -388,30 +530,30 @@ def _input_manifest(
         for name, path_value in published_inputs.items():
             if path_value is None:
                 raise DataContractError(
-                    f"Published {settings.pit.universe} version has no {name} file"
+                    f"Published {market_version.universe} version has no {name} file"
                 )
             path = _published_path(path_value)
             inputs.append(
                 {
-                    "name": f"{settings.pit.universe}:{name}",
+                    "name": f"{market_version.universe}:{name}",
                     "sha256": file_sha256(path),
                 }
             )
-        membership_path = find_membership_file(settings.pit.universe)
-        if membership_path is None:
+        membership_path = pit_membership_path
+        if membership_path is None or not membership_path.is_file():
             raise FileNotFoundError(
-                f"No PIT membership file found for {settings.pit.universe}"
+                "No dedicated market-regime PIT membership publication found"
             )
         inputs.append(
             {
-                "name": f"{settings.pit.universe}:membership",
+                "name": f"{settings.pit.publication_id}:membership",
                 "sha256": file_sha256(membership_path),
             }
         )
         metadata_path = membership_metadata_path(membership_path)
         inputs.append(
             {
-                "name": f"{settings.pit.universe}:membership_metadata",
+                "name": f"{settings.pit.publication_id}:membership_metadata",
                 "sha256": file_sha256(metadata_path),
             }
         )
@@ -432,6 +574,11 @@ def _input_manifest(
             if market_version is not None
             else None
         ),
+        "market_data_contract": (
+            market_data_contract.to_dict()
+            if market_data_contract is not None
+            else None
+        ),
     }
 
 
@@ -441,6 +588,7 @@ def run_market_regime_research(
     core_only: bool = False,
     include_credit: bool = True,
     run_id: str | None = None,
+    data_reader: MarketDataReader | None = None,
 ) -> ResearchRunResult:
     """Load prepared inputs, enforce PIT gates, calculate, and publish."""
     if not settings.enabled:
@@ -464,31 +612,43 @@ def run_market_regime_research(
     pit_diagnostics: dict[str, Any] | None = None
     pit_publication: dict[str, Any] | None = None
     market_version: DatasetVersion | None = None
+    market_data_contract: DataContract | None = None
+    membership_path: Path | None = None
     if not core_only:
-        reader = MarketDataReader()
-        market_version = reader.require_latest(settings.pit.universe)
-        wide_tables = reader.load_wide_tables(
-            settings.pit.universe,
-            version=market_version,
-        )
-        _validate_wide_contract(wide_tables)
-        published_membership = reader.load_membership(
-            settings.pit.universe,
-            version=market_version,
-        )
-        if published_membership is None:
-            raise DataContractError(
-                f"Published {settings.pit.universe} version has no PIT membership"
-            )
-        membership_path = find_membership_file(settings.pit.universe)
-        if membership_path is None:
+        membership_path = settings.pit_membership_path
+        if not membership_path.is_file():
             raise FileNotFoundError(
-                f"No PIT membership file found for {settings.pit.universe}"
+                "Dedicated market-regime PIT publication is missing: "
+                f"{membership_path}. Run the PIT diagnostic command; full mode "
+                "must remain disabled until the 1990 reconstruction passes."
             )
         pit_publication = _load_validated_pit_metadata(
             membership_path,
             expected_asof=primary_index.max(),
+            expected_start=pd.Timestamp(settings.pit.start),
+            expected_scope=MARKET_REGIME_PIT_SCOPE,
+            expected_publication_id=settings.pit.publication_id,
         )
+        reader = data_reader or MarketDataReader()
+        published = load_published_daily_data(
+            requested_universe=settings.pit.universe,
+            data_universe=settings.pit.data_universe,
+            start=settings.pit.start,
+            end=primary_index.max(),
+            exact_universe=True,
+            required_history_start=settings.pit.start,
+            include_membership=True,
+            reader=reader,
+        )
+        market_version = published.version
+        market_data_contract = published.contract
+        wide_tables = _wide_tables_from_daily_bars(published.bars)
+        _validate_wide_contract(wide_tables)
+        published_membership = published.membership
+        if published_membership is None:
+            raise DataContractError(
+                f"Published {settings.pit.data_universe} version has no PIT membership"
+            )
         version_manifest = _read_json_object(
             _published_path(market_version.manifest_path)
         )
@@ -504,7 +664,7 @@ def run_market_regime_research(
         membership_mask, diagnostics = build_membership_mask(
             wide_tables["adj_close"].index,
             wide_tables["adj_close"].columns,
-            settings.pit.universe,
+            settings.pit.publication_id,
             required=True,
             membership_override=published_membership,
             membership_source=market_version.membership_path,
@@ -526,6 +686,11 @@ def run_market_regime_research(
         ),
         membership_mask=membership_mask,
     )
+    if not core_only:
+        diagnostics["full_pit_coverage"] = _validate_full_pit_feature_coverage(
+            features,
+            minimum_coverage=settings.screening.minimum_feature_coverage,
+        )
     manifest = _input_manifest(
         settings,
         source_manifest=source_manifest,
@@ -534,6 +699,8 @@ def run_market_regime_research(
         pit_diagnostics=pit_diagnostics,
         pit_publication=pit_publication,
         market_version=market_version,
+        market_data_contract=market_data_contract,
+        pit_membership_path=membership_path,
     )
     return publish_research_run(
         output_root=settings.output_root,

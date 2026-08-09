@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+
+{% block content %}
+<header class="research-page-header">
+    <div>
+        <h1 class="page-title">{{ title }}</h1>
+        {% if publication %}
+        <p class="page-meta">研究版本 <span class="mono">{{ publication.generation_id }}</span> · 数据截止交易日 <span class="mono">{{ publication.target_session }}</span></p>
+        {% elif publication_error %}
+        <p class="page-meta status-fail">{{ research_text(publication_error) }}</p>
+        {% endif %}
+    </div>
+</header>
+
+<section class="research-reading-guide" aria-labelledby="research-guide-title">
+    <div>
+        <h2 id="research-guide-title">这张表在回答什么</h2>
+        <p><strong>每一行代表一个因子，也就是一种选股评分规则，不是一只股票。</strong>系统把同一个因子分别放进两个研究股票池检验，再综合判断它是否具有跨股票池的稳定性。</p>
+    </div>
+    <dl class="research-guide-grid">
+        <div><dt>标普500单池结论</dt><dd>只看该因子在标普500历史成分股中的研究结果。</dd></div>
+        <div><dt>纳斯达克100单池结论</dt><dd>只看该因子在纳斯达克100历史成分股中的研究结果。</dd></div>
+        <div><dt>跨池结论</dt><dd>比较两个单池的方向、显著性和经济意义后形成的总判断。</dd></div>
+    </dl>
+</section>
+
+<details class="research-glossary" open>
+    <summary>结论词典</summary>
+    <div class="research-glossary-grid">
+        <section>
+            <h3>跨池结论</h3>
+            <dl>
+                <div><dt>跨池稳健</dt><dd>标普500与纳斯达克100都通过，而且因子预测方向一致。</dd></div>
+                <div><dt>仅主研究池通过</dt><dd>标普500通过，纳斯达克100方向相同但证据还不够强。</dd></div>
+                <div><dt>仅次级验证池通过</dt><dd>纳斯达克100通过，但标普500尚未通过，可能只适用于特定市场结构。</dd></div>
+                <div><dt>跨池证据冲突</dt><dd>两个股票池出现不可忽略的反向或显著性冲突。</dd></div>
+                <div><dt>证据不足</dt><dd>数据缺失、日期不可比，或现有统计证据尚不足以定性。</dd></div>
+                <div><dt>不建议采用</dt><dd>两个正式研究池都没有通过单池置信评估。</dd></div>
+            </dl>
+        </section>
+        <section>
+            <h3>单池结论</h3>
+            <dl>
+                <div><dt>通过</dt><dd>该股票池内的预测力、稳定性、经济意义、可交易性和数据质量达到综合门槛。</dd></div>
+                <div><dt>继续观察</dt><dd>有一定证据，但综合分或关键统计门槛还不足以正式通过。</dd></div>
+                <div><dt>未通过</dt><dd>该股票池内的综合证据较弱，当前不应据此投入策略。</dd></div>
+                <div><dt>缺失 / 已过期 / 无效</dt><dd>这是数据或研究发布状态，不是因子结论；需要先补数据、更新发布或修复完整性。</dd></div>
+            </dl>
+        </section>
+    </div>
+</details>
+
+<form class="research-filters" method="get" action="/research">
+    <label>
+        <span>跨池结论</span>
+        <select name="verdict" onchange="this.form.submit()">
+            <option value="">全部</option>
+            {% for value in ['ROBUST', 'PRIMARY_ONLY', 'SEGMENT_SPECIFIC', 'CONFLICT', 'INSUFFICIENT', 'REJECT'] %}
+            <option value="{{ value }}" {% if selected_verdict == value %}selected{% endif %}>{{ research_label(value) }}</option>
+            {% endfor %}
+        </select>
+    </label>
+    <label>
+        <span>因子类别</span>
+        <select name="category" onchange="this.form.submit()">
+            <option value="">全部</option>
+            {% for value in categories %}
+            <option value="{{ value }}" {% if selected_category == value %}selected{% endif %}>{{ value }}</option>
+            {% endfor %}
+        </select>
+    </label>
+    <label>
+        <span>单一研究池</span>
+        <select name="pool" onchange="this.form.submit()">
+            <option value="">全部</option>
+            {% for value in ['SP500', 'NASDAQ100'] %}
+            <option value="{{ value }}" {% if selected_pool == value %}selected{% endif %}>{{ universe_label(value) }}</option>
+            {% endfor %}
+        </select>
+    </label>
+    <label>
+        <span>单池结论</span>
+        <select name="pool_verdict" onchange="this.form.submit()">
+            <option value="">全部</option>
+            {% for value in ['PASS', 'WATCH', 'FAIL', 'MISSING', 'STALE', 'INVALID'] %}
+            <option value="{{ value }}" {% if selected_pool_verdict == value %}selected{% endif %}>{{ research_label(value) }}</option>
+            {% endfor %}
+        </select>
+    </label>
+</form>
+
+<div class="research-table-wrap">
+    <table class="data research-table">
+        <thead>
+            <tr>
+                <th>因子（选股规则）</th>
+                <th>跨池结论</th>
+                <th>标普500单池结论</th>
+                <th>纳斯达克100单池结论</th>
+                <th title="标普500内每日横截面 IC 的平均值">标普500平均 IC</th>
+                <th title="标普500的 IC 均值除以 IC 波动">标普500 ICIR</th>
+                <th title="对多因子检验进行校正后的显著性指标">标普500 q 值</th>
+                <th title="标普500最高分组减最低分组，并扣除交易成本后的年化夏普比率">标普500扣费后多空夏普</th>
+                <th>研究截止日</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for row in rows %}
+            <tr>
+                <td>
+                    <a href="/research/factors/{{ row.factor_id }}"><strong>{{ row.display_name }}</strong></a>
+                    <div class="cell-note"><span class="mono">{{ row.factor_id }}</span> · {{ row.category }}</div>
+                </td>
+                <td>
+                    <span class="research-verdict verdict-{{ row.verdict|lower }}" title="系统代码：{{ row.verdict }}">{{ research_label(row.verdict) }}</span>
+                    {% if row.direction_consistent is sameas false %}<div class="cell-note status-fail">方向冲突</div>{% endif %}
+                </td>
+                {% set sp500_verdict = row.sp500.verdict or row.sp500.status or 'MISSING' %}
+                {% set nasdaq100_verdict = row.nasdaq100.verdict or row.nasdaq100.status or 'MISSING' %}
+                <td><span class="pool-verdict verdict-{{ sp500_verdict|lower }}" title="系统代码：{{ sp500_verdict }}">{{ research_label(sp500_verdict) }}</span></td>
+                <td><span class="pool-verdict verdict-{{ nasdaq100_verdict|lower }}" title="系统代码：{{ nasdaq100_verdict }}">{{ research_label(nasdaq100_verdict) }}</span></td>
+                <td>{{ row.ic_mean_display }}</td>
+                <td>{{ row.ic_ir_display }}</td>
+                <td>{{ row.q_value_display }}</td>
+                <td>{{ row.ls_sharpe_display }}</td>
+                <td class="mono">{{ row.target_session or '—' }}</td>
+            </tr>
+        {% else %}
+            <tr><td colspan="9" class="empty-table-cell">没有符合筛选条件的因子</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

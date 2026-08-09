@@ -20,7 +20,7 @@ FMP
 
 硬约束：
 
-1. `scripts/run_data_pipeline.py update` 是 SP500/MAG7 的正式日线写入入口。
+1. `scripts/run_data_pipeline.py update` 是 SP500/NASDAQ100/MAG7 的正式日线写入入口。
 2. `scripts/refresh_us_active.py` 和缺数 worker 也必须复用同一个 `MarketDataWriter`。
 3. `scripts/run_mvp.py`、回测、排行、group analytics 和模拟盘只读 published version。
 4. 候选版本未通过质量门禁时可以留作审计，但不得推进正式指针。
@@ -118,25 +118,33 @@ SP500 发布前必须先有有效的 `data/pit_universes/SP500.parquet`。Writer
 
 ## 7. Reader 契约
 
-消费者通常先调用：
+业务消费者通常调用 `src/data/access.py`，由统一入口同时执行版本绑定、覆盖门禁和契约生成：
 
 ```python
-reader = MarketDataReader()
-version = reader.require_latest("SP500")
-bars = reader.load_bars(version=version)
-membership = reader.load_membership(version=version)
+bundle = load_published_daily_data(
+    requested_universe="SP500",
+    lookback_calendar_days=400,
+)
+version = bundle.version
+contract = bundle.contract
 ```
 
-一次业务运行应把 `version` 继续传下去，不要在流程中反复查询“最新”。这样开始与结束不会因为
-刚好发生一次新发布而使用两套输入。
+因子消费者使用 `load_published_bundle()`；动量突破通过
+`load_breakout_daily_dataset()` 得到 universe、ticker frames 和同一份 `DataContract`。一次业务
+运行应把 `version` 或 contract 继续传下去，不要在流程中反复查询“最新”。
 
 Reader 会拒绝：版本不存在、文件缺失、checksum 不符、universe 不符和无 PIT 的动态池。
+`load_bars()` 会把 ticker、start 和 end 条件下推给 DuckDB，避免先把完整 Parquet 载入 Pandas。
 
 ## 8. 常用命令
 
 ```bash
-# 只构建/发布主 SP500 PIT
+# 构建/发布注册表中全部 PIT 研究池
 python scripts/run_data_pipeline.py pit
+
+# 只检查 NASDAQ100 候选，不替换正式 PIT
+python scripts/run_data_pipeline.py pit \
+  --universe NASDAQ100 --candidate-only --json
 
 # 增量发布配置中的 SP500 和 MAG7
 python scripts/run_data_pipeline.py update
@@ -159,6 +167,9 @@ python scripts/run_data_pipeline.py status --json
 |---|---|---:|---:|---:|---|
 | SP500 | 2026-07-31 | 711,247 | 591 历史并集 | 100% 当前成分 | `511ee86d...` |
 | MAG7 | 2026-07-31 | 8,785 | 7 | 100% | `f4eeb46c...` |
+
+本机尚无 `US_LIQUID_5M` 正式版本，所以全美股动量监控必须在 refresh 成功发布后才能启动；系统
+不会回退到旧逐票文件。
 
 本地旧 `data/raw/ohlcv` 和 `data/processed` 已归档移出，代码也不再依赖它们。SG 是否处于同一
 commit 和同一清理状态，必须通过服务器部署验收单独确认。

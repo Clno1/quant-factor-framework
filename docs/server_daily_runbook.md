@@ -1,9 +1,9 @@
 # SG 服务器日常运维速查
 
-更新日期：2026-08-08
+更新日期：2026-08-09
 
-适用部署：`root@SG`、项目 `/home/projects/quant`、Web 环境 `.venv`、worker 环境
-`.venv-worker`。完整架构和本地/服务器差异见
+适用部署：`root@SG`、项目 `/home/projects/quant`、所有 Web 与 worker 统一使用
+`.venv`。完整架构和本地/服务器差异见
 [`sg_operations_overview.md`](sg_operations_overview.md)。
 
 ## 1. 每日健康检查
@@ -15,35 +15,43 @@ cd /home/projects/quant
 systemctl status quant-web.service --no-pager
 systemctl list-timers --all 'quant-*'
 
-.venv-worker/bin/python scripts/run_data_pipeline.py status
-.venv-worker/bin/python scripts/check_app_storage.py
+.venv/bin/python scripts/run_data_pipeline.py status
+.venv/bin/python scripts/check_app_storage.py
 ```
 
 预期：
 
 - `quant-web.service` 是 `active (running)`；
-- 六个生产 timer 有下一次触发时间；
-- 行情 status 有 SP500、MAG7 和已经正式发布的 `US_LIQUID_5M`；
+- 九个生产 timer 有下一次触发时间；
+- 当前 SG 基线的行情 status 有 SP500、MAG7 和 `US_LIQUID_5M`；研究池改造部署完成后还必须有
+  NASDAQ100；
 - SQLite 报告 `passed=true`、`sqlite_integrity=["ok"]`、`issues=[]`。
 
 ## 2. 生产时间线
 
-目标 unit 时间均为新加坡时间：
+日线类 unit 使用新加坡时间；美股盘前和盘中 unit 直接使用 `America/New_York`：
 
 | 时间 | Timer | 作用 |
 |---|---|---|
 | Tue-Sat 07:15 | `quant-us-daily-refresh.timer` | 发布 `US_LIQUID_5M` |
-| Tue-Sat 08:15 | `quant-market-data.timer` | SP500 PIT + SP500/MAG7 行情 |
-| Tue-Sat 08:45 | `quant-factor-research.timer` | 发布主因子研究 |
+| Tue-Sat 08:15 | `quant-market-data.timer` | SP500/NASDAQ100 PIT + SP500/NASDAQ100/MAG7 行情 |
+| Tue-Sat 08:45 | `quant-factor-research.timer` | 发布 SP500/NASDAQ100 因子研究、MAG7 参考结果和跨池结论 |
 | Tue-Sat 09:15 | `quant-group-analytics-eod.timer` | 读取正式 SP500 version，发布板块研究 |
 | Tue-Sat 10:30 | `quant-paper-trading.timer` | 运行 active 模拟盘账户 |
 | 每 5 分钟 | `quant-data-requests.timer` | 处理 Watchlist 缺数请求 |
+| Mon-Fri 09:20 ET | `quant-premarket-digest.timer` | 只发送 momentum 盘前摘要 |
+| 每小时 :35 SGT | `quant-momentum-alerts.timer` | worker 内部只保留 10:00–15:59 ET |
+| Mon-Fri 09:20 ET | `quant-intraday-momentum-monitor.timer` | 分钟 shadow；五日通过后自动晋级 |
 
-`quant-premarket-digest.timer` 当前应保持 disabled，除非明确重新启用外发 Discord。仓库内的盘中
-monitor 模板不等于 SG 已安装。
+分钟 monitor 使用独立 SQLite outbox。环境开关、五个连续交易日和 `--auto` 三重条件必须同时
+满足才会发送 Discord；否则始终是 shadow。
 
 本地 2026-08-08 已把 group timer 改为 09:15；SG 在部署这次 commit 前仍可能是上次审计的
 07:45 unit。以服务器上的 `systemctl cat quant-group-analytics-eod.timer` 为准。
+
+研究池改造尚未部署到 SG。NASDAQ100 PIT 任一门禁失败时，08:15 service 可以继续发布彼此独立的
+SP500/MAG7，但 unit 最终应为失败，NASDAQ100 不得前移；08:45 仍需发布可审计的
+`INSUFFICIENT` 跨池结论，不能沿用昨天的绿色状态。
 
 ## 3. 查看最近结果和错误
 
@@ -54,6 +62,9 @@ systemctl show quant-factor-research.service -p Result -p ExecMainStatus -p Acti
 systemctl show quant-group-analytics-eod.service -p Result -p ExecMainStatus -p ActiveState
 systemctl show quant-paper-trading.service -p Result -p ExecMainStatus -p ActiveState
 systemctl show quant-data-requests.service -p Result -p ExecMainStatus -p ActiveState
+systemctl show quant-premarket-digest.service -p Result -p ExecMainStatus -p ActiveState
+systemctl show quant-momentum-alerts.service -p Result -p ExecMainStatus -p ActiveState
+systemctl show quant-intraday-momentum-monitor.service -p Result -p ExecMainStatus -p ActiveState
 ```
 
 oneshot 成功后 `ActiveState=inactive` 正常，关键是：
@@ -71,6 +82,9 @@ journalctl -u quant-factor-research.service -n 200 --no-pager
 journalctl -u quant-data-requests.service -n 200 --no-pager
 journalctl -u quant-paper-trading.service -n 200 --no-pager
 journalctl -u quant-web.service -n 200 --no-pager
+journalctl -u quant-premarket-digest.service -n 200 --no-pager
+journalctl -u quant-momentum-alerts.service -n 200 --no-pager
+journalctl -u quant-intraday-momentum-monitor.service -n 300 --no-pager
 ```
 
 ## 4. Web 检查
@@ -104,6 +118,15 @@ systemctl start quant-paper-trading.service
 
 任务有依赖顺序。上游失败时不要强行启动下游来制造陈旧结果。
 
+NASDAQ100 首次正式发布前先运行候选检查：
+
+```bash
+.venv/bin/python scripts/run_data_pipeline.py pit \
+  --universe NASDAQ100 --candidate-only --json
+```
+
+只有当前成分、10 组官方历史事件和全部质量门禁通过后，才能运行正式 `pit`、行情和研究任务。
+
 ## 6. 发布新代码
 
 这次本地旧存储清理不会自动同步到 SG。推荐发布步骤：
@@ -117,6 +140,22 @@ systemctl start quant-paper-trading.service
 7. 重启 Web，手动验收核心页面。
 8. 再按同样的外部归档策略移动 SG 旧目录，不直接 `rm -rf`。
 
+研究池改造的首次重发顺序和完成门槛见
+[`research_universe_redesign_implementation.md`](research_universe_redesign_implementation.md)。
+
+因子数据浏览器部署后还要检查：
+
+```bash
+curl -u "$QUANT_USER:$QUANT_PASSWORD" -sS \
+  http://127.0.0.1:18823/api/research/factor-data/meta
+curl -u "$QUANT_USER:$QUANT_PASSWORD" -sS -o /dev/null -w 'HTTP %{http_code}\n' \
+  'http://127.0.0.1:18823/research/factor-data?universe=SP500&factor=MOM_12M&date=latest'
+```
+
+随后在浏览器抽查 SP500 正向因子、SP500 负向因子、NASDAQ100 和一个历史退出证券。若正式数据
+尚未重发，页面必须显示可理解的无效/未发布状态，不能出现 500 或临时 FMP 回退。完整清单见
+[`factor_data_explorer_implementation.md`](factor_data_explorer_implementation.md)。
+
 unit 校验示例：
 
 ```bash
@@ -127,7 +166,10 @@ systemd-analyze verify \
   /etc/systemd/system/quant-factor-research.service \
   /etc/systemd/system/quant-group-analytics-eod.service \
   /etc/systemd/system/quant-paper-trading.service \
-  /etc/systemd/system/quant-data-requests.service
+  /etc/systemd/system/quant-data-requests.service \
+  /etc/systemd/system/quant-premarket-digest.service \
+  /etc/systemd/system/quant-momentum-alerts.service \
+  /etc/systemd/system/quant-intraday-momentum-monitor.service
 ```
 
 然后：
@@ -141,7 +183,10 @@ systemctl enable --now \
   quant-factor-research.timer \
   quant-group-analytics-eod.timer \
   quant-paper-trading.timer \
-  quant-data-requests.timer
+  quant-data-requests.timer \
+  quant-premarket-digest.timer \
+  quant-momentum-alerts.timer \
+  quant-intraday-momentum-monitor.timer
 ```
 
 ## 7. 不能直接做的事

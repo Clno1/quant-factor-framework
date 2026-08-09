@@ -1,0 +1,140 @@
+<section class="chart-panel run-audit-panel">
+    <div class="panel-title">
+        <span>创建时冻结的研究与数据契约</span>
+        {% if research_snapshot and target_snapshot %}
+        <span class="status-pill status-success">已冻结</span>
+        {% else %}
+        <span class="status-pill status-failed">旧记录不完整</span>
+        {% endif %}
+    </div>
+
+    {% if research_snapshot %}
+    {% set cross = research_snapshot.get('cross_publication') or {} %}
+    <div class="audit-block">
+        <div class="audit-block-title">研究证据</div>
+        <div class="diag-grid">
+            <div><span>冻结时间</span><span class="mono">{{ research_snapshot.get('captured_at') or '—' }}</span></div>
+            <div><span>跨池目标交易日</span><span class="mono">{{ cross.get('target_session') or '—' }}</span></div>
+            <div><span>跨池发布代号</span><span class="mono break-value">{{ cross.get('generation_id') or '—' }}</span></div>
+            <div><span>发布状态</span><span class="mono">{{ cross.get('status') or ('INVALID' if research_snapshot.get('publication_error') else 'MISSING') }}</span></div>
+        </div>
+        {% if research_snapshot.get('publication_error') %}
+        <div class="audit-alert">{{ research_snapshot.get('publication_error') }}</div>
+        {% endif %}
+        <div class="table-wrap audit-table-wrap">
+            <table class="data compact audit-table">
+                <thead>
+                    <tr>
+                        <th>因子</th>
+                        <th>权重</th>
+                        <th>SP500</th>
+                        <th>NASDAQ100</th>
+                        <th>跨池结论</th>
+                        <th>研究交易日</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in research_snapshot.get('components', []) %}
+                    <tr>
+                        <td class="mono">{{ item.get('factor_id') }}</td>
+                        <td class="mono">{{ '%.4f'|format(item.get('weight') or 0) }}</td>
+                        {% set sp_verdict = item.get('sp500_verdict') or 'MISSING' %}
+                        {% set ndx_verdict = item.get('nasdaq100_verdict') or 'MISSING' %}
+                        {% set cross_verdict = item.get('verdict') or 'INSUFFICIENT' %}
+                        <td><span class="pool-verdict verdict-{{ sp_verdict|lower }}">{{ sp_verdict }}</span></td>
+                        <td><span class="pool-verdict verdict-{{ ndx_verdict|lower }}">{{ ndx_verdict }}</span></td>
+                        <td><span class="pool-verdict verdict-{{ cross_verdict|lower }}">{{ cross_verdict }}</span></td>
+                        <td class="mono">{{ item.get('research_target_session') or '—' }}</td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="6" class="empty-table-cell">没有冻结的因子研究行</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% else %}
+    <div class="audit-alert">该旧记录没有创建时研究快照，不能证明当时使用了哪一版跨股票池结论。</div>
+    {% endif %}
+
+    <div class="audit-block">
+        <div class="audit-block-title">目标股票池快照</div>
+        {% if target_snapshot %}
+        <div class="diag-grid">
+            <div><span>类型</span><span class="mono">{{ target_snapshot.get('universe_type') or target_snapshot.get('role') or '—' }}</span></div>
+            <div><span>请求标识</span><span class="mono break-value">{{ target_snapshot.get('requested_universe') or target_snapshot.get('universe_id') or '—' }}</span></div>
+            <div><span>名称</span><span>{{ target_snapshot.get('name') or target_snapshot.get('universe_id') or '—' }}</span></div>
+            <div><span>冻结股票数</span><span class="mono">{{ target_snapshot.get('items', [])|length if target_snapshot.get('items') is not none else '—' }}</span></div>
+        </div>
+        {% if target_snapshot.get('ticker_revision_sha256') %}
+        <dl class="hash-list audit-hashes">
+            <div><dt>目标股票清单 SHA-256</dt><dd class="mono break-value">{{ target_snapshot.get('ticker_revision_sha256') }}</dd></div>
+        </dl>
+        {% endif %}
+        {% else %}
+        <div class="audit-alert">该旧记录没有目标股票池修订快照。</div>
+        {% endif %}
+    </div>
+
+    <div class="audit-block">
+        <div class="audit-block-title">行情与因子数据契约</div>
+        {% if data_contract %}
+        <div class="diag-grid">
+            <div><span>请求股票池</span><span class="mono break-value">{{ data_contract.get('requested_universe') or '—' }}</span></div>
+            <div><span>行情股票池</span><span class="mono break-value">{{ data_contract.get('data_universe') or '—' }}</span></div>
+            <div><span>目标交易日</span><span class="mono">{{ data_contract.get('target_session') or '—' }}</span></div>
+            <div><span>数据版本</span><span class="mono break-value">{{ data_contract.get('dataset_version_id') or '—' }}</span></div>
+            <div><span>摄取批次</span><span class="mono break-value">{{ data_contract.get('dataset_run_id') or '—' }}</span></div>
+            <div><span>因子发布</span><span class="mono break-value">{{ data_contract.get('factor_publication_id') or data_contract.get('runtime_factor_id') or '—' }}</span></div>
+        </div>
+        <dl class="hash-list audit-hashes">
+            <div><dt>Bars SHA-256</dt><dd class="mono break-value">{{ data_contract.get('bars_sha256') or '—' }}</dd></div>
+            <div><dt>Universe SHA-256</dt><dd class="mono break-value">{{ data_contract.get('universe_sha256') or '—' }}</dd></div>
+            <div><dt>Membership SHA-256</dt><dd class="mono break-value">{{ data_contract.get('membership_sha256') or '—' }}</dd></div>
+            <div><dt>Manifest SHA-256</dt><dd class="mono break-value">{{ data_contract.get('manifest_sha256') or '—' }}</dd></div>
+        </dl>
+        {% if data_contract.get('factor_generations') %}
+        <div class="factor-generation-list">
+            {% for factor_id, generation_id in data_contract.get('factor_generations', {}).items() %}
+            <span class="mono">{{ factor_id }} = {{ generation_id }}</span>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% else %}
+        <div class="audit-alert">尚未绑定不可变行情版本；等待数据的任务会在正式执行前写入该契约。</div>
+        {% endif %}
+    </div>
+
+    {% set tradability = risk_config.get('tradability') if risk_config else {} %}
+    <div class="audit-block">
+        <div class="audit-block-title">冻结执行与风险口径</div>
+        {% if frozen_execution or risk_config %}
+        <div class="diag-grid">
+            <div><span>成交时机</span><span class="mono">{{ frozen_execution.get('timing') or '—' }}</span></div>
+            <div><span>费用模型</span><span class="mono">{{ frozen_execution.get('fee_model') or '—' }}</span></div>
+            <div><span>滑点模型</span><span class="mono">{{ frozen_execution.get('slippage_model') or '—' }}</span></div>
+            <div><span>强制 PIT</span><span class="mono">{% if risk_config and 'require_point_in_time_universe' in risk_config %}{{ 'TRUE' if risk_config.get('require_point_in_time_universe') else 'FALSE' }}{% else %}UNKNOWN{% endif %}</span></div>
+            <div><span>可交易过滤</span><span class="mono">{% if tradability and 'enabled' in tradability %}{{ 'TRUE' if tradability.get('enabled') else 'FALSE' }}{% else %}UNKNOWN{% endif %}</span></div>
+            <div><span>最低价格 / 日均成交额</span><span class="mono">{{ tradability.get('min_price', '—') if tradability else '—' }} / {{ tradability.get('min_dollar_volume', '—') if tradability else '—' }}</span></div>
+        </div>
+        <details class="config-disclosure">
+            <summary>查看完整冻结配置</summary>
+            <div class="config-json-grid">
+                <div>
+                    <div class="config-json-title">execution</div>
+                    <pre class="contract-json">{{ frozen_execution|tojson(indent=2) }}</pre>
+                </div>
+                <div>
+                    <div class="config-json-title">risk</div>
+                    <pre class="contract-json">{{ risk_config|tojson(indent=2) }}</pre>
+                </div>
+            </div>
+        </details>
+        {% if not frozen_execution or not risk_config %}
+        <div class="audit-alert">INVALID：该旧记录只保存了部分执行或风险配置，缺失字段按 UNKNOWN 展示，不能按当前口径复现。</div>
+        {% endif %}
+        {% else %}
+        <div class="audit-alert">INVALID：该旧记录没有完整冻结执行配置，不能按当前全真成本口径复现。</div>
+        {% endif %}
+    </div>
+</section>

@@ -12,8 +12,13 @@ import pandas as pd
 
 from src.alerts.config import AlertSettings
 from src.breakouts import BreakoutFilters, evaluate_daily_setup, load_market_regime
+from src.breakouts.daily_data import (
+    BreakoutDailyDataset,
+    load_breakout_daily_dataset,
+)
 from src.breakouts.scanner import load_daily_frame
 from src.config import PROJECT_ROOT
+from src.data.foundation import DataFoundationError
 
 from .models import SourceGateError
 from .settings import PremarketDigestSettings
@@ -21,6 +26,7 @@ from .settings import PremarketDigestSettings
 
 _STATUS_ORDER = {"BREAKOUT": 0, "READY": 1, "SETUP": 2, "FORMING": 3}
 _UNIVERSE_MANIFEST_SCHEMA = 1
+DailyDatasetLoader = Callable[..., BreakoutDailyDataset]
 
 
 def _sha256_path(path: Path) -> str:
@@ -163,6 +169,7 @@ class CompletedSessionMomentumSource:
         universe_loader: Callable[[str], pd.DataFrame] = _load_cached_universe,
         frame_loader: Callable[[str], pd.DataFrame] = load_daily_frame,
         regime_loader: Callable[..., dict[str, Any]] = load_market_regime,
+        dataset_loader: DailyDatasetLoader = load_breakout_daily_dataset,
     ) -> None:
         self.settings = settings
         # The CLI has already loaded its explicitly selected environment file.
@@ -174,16 +181,46 @@ class CompletedSessionMomentumSource:
         self.universe_loader = universe_loader
         self.frame_loader = frame_loader
         self.regime_loader = regime_loader
+        self.dataset_loader = dataset_loader
+        self.use_published_dataset = (
+            universe_loader is _load_cached_universe
+            and frame_loader is load_daily_frame
+        )
 
     def load(self, source_session: str) -> dict[str, Any]:
-        loaded_universe = self.universe_loader(self.settings.momentum_universe)
-        universe_cache_mtime_utc = loaded_universe.attrs.get("cache_mtime_utc")
-        universe_manifest_source_session = loaded_universe.attrs.get(
-            "manifest_source_session"
-        )
-        universe_manifest_refreshed_at = loaded_universe.attrs.get(
-            "manifest_refreshed_at"
-        )
+        daily: BreakoutDailyDataset | None = None
+        if self.use_published_dataset:
+            try:
+                daily = self.dataset_loader(
+                    requested_universe=self.settings.momentum_universe,
+                    end=source_session,
+                    min_latest_coverage=(
+                        self.settings.momentum_min_exact_asof_coverage
+                    ),
+                )
+            except DataFoundationError as exc:
+                raise SourceGateError(
+                    "MOMENTUM_PUBLISHED_DATA_NOT_READY",
+                    "the version-bound completed-session dataset is unavailable",
+                    details={
+                        "universe": self.settings.momentum_universe,
+                        "source_session": source_session,
+                        "error_type": type(exc).__name__,
+                    },
+                ) from None
+            loaded_universe = daily.universe
+            universe_cache_mtime_utc = daily.version.created_at.isoformat()
+            universe_manifest_source_session = daily.contract.target_session
+            universe_manifest_refreshed_at = daily.version.created_at.isoformat()
+        else:
+            loaded_universe = self.universe_loader(self.settings.momentum_universe)
+            universe_cache_mtime_utc = loaded_universe.attrs.get("cache_mtime_utc")
+            universe_manifest_source_session = loaded_universe.attrs.get(
+                "manifest_source_session"
+            )
+            universe_manifest_refreshed_at = loaded_universe.attrs.get(
+                "manifest_refreshed_at"
+            )
         target = pd.Timestamp(source_session).normalize()
         if (
             universe_manifest_source_session is not None
@@ -250,7 +287,7 @@ class CompletedSessionMomentumSource:
         stale_tickers: list[str] = []
         insufficient_history_tickers: list[str] = []
         for ticker in universe["ticker"].tolist():
-            frame = self.frame_loader(ticker)
+            frame = daily.frame(ticker) if daily is not None else self.frame_loader(ticker)
             if frame is None or frame.empty:
                 missing_tickers.append(ticker)
                 continue
@@ -356,10 +393,19 @@ class CompletedSessionMomentumSource:
             )
 
         try:
+            regime_arguments: dict[str, Any] = {
+                "asof": source_session,
+                "symbol": "QQQ",
+                "fetch_missing": False,
+            }
+            if daily is not None:
+                regime_arguments.update({
+                    "data_universe": daily.data_universe,
+                    "dataset_version_id": daily.dataset_version_id,
+                    "frame": daily.frame("QQQ"),
+                })
             regime = self.regime_loader(
-                asof=source_session,
-                symbol="QQQ",
-                fetch_missing=False,
+                **regime_arguments,
             )
         except Exception:  # source failure is informational for this field
             regime = {
@@ -382,6 +428,11 @@ class CompletedSessionMomentumSource:
         return {
             "source_session": source_session,
             "universe": self.settings.momentum_universe,
+            "data_universe": daily.data_universe if daily is not None else None,
+            "dataset_version_id": (
+                daily.dataset_version_id if daily is not None else None
+            ),
+            "data_contract": daily.contract.to_dict() if daily is not None else None,
             "asset_scope": (
                 "stocks_and_etfs" if self.settings.momentum_include_etfs else "stocks"
             ),

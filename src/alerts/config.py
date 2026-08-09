@@ -35,6 +35,7 @@ class AlertSettings:
     broad_min_return_20d: float = 10.0
     broad_min_adr_20d: float = 4.5
     broad_min_current_dollar_volume: float = 5_000_000.0
+    min_exact_daily_coverage: float = 0.80
     min_avg_dollar_volume: float = 10_000_000.0
     broad_max_symbols: int = 600
     strict_min_return_20d: float = 20.0
@@ -94,11 +95,14 @@ class AlertSettings:
             broad_min_current_dollar_volume=float(
                 _nested(root, "broad_scan", "min_current_dollar_volume_m", default=5.0)
             ) * 1_000_000,
+            min_exact_daily_coverage=float(
+                _nested(root, "daily_data", "min_exact_coverage", default=0.80)
+            ),
             min_avg_dollar_volume=float(
-                _nested(root, "broad_scan", "min_avg_dollar_volume_m", default=10.0)
+                _nested(root, "daily_data", "min_avg_dollar_volume_m", default=10.0)
             ) * 1_000_000,
             broad_max_symbols=min(1000, max(1, int(
-                _nested(root, "broad_scan", "max_symbols", default=600)
+                _nested(root, "daily_data", "max_symbols", default=600)
             ))),
             strict_min_return_20d=float(_nested(root, "strict_scan", "min_return_20d", default=20.0)),
             strict_min_adr_20d=float(_nested(root, "strict_scan", "min_adr_20d", default=6.0)),

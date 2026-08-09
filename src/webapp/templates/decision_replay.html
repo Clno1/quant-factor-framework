@@ -17,7 +17,7 @@
     <div class="toolbar-row replay-header-actions">
         <a class="btn" href="{{ back_href }}">返回详情</a>
         {% if source_kind == 'backtest' and strategy.id %}
-        <a class="btn" href="/strategies/{{ strategy.id }}/ranking">当前策略预览</a>
+        <a class="btn" href="/strategies/{{ strategy.id }}">查看策略定义</a>
         {% endif %}
     </div>
 </header>

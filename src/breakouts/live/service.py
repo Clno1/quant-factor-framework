@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 import time as monotonic_time
 from typing import Any, Callable
@@ -17,6 +17,10 @@ from src.breakouts.live.detector import (
     PARAMETER_VERSION,
     BreakoutDetector,
 )
+from src.breakouts.live.delivery import (
+    SignalNotifier,
+    build_signal_discord_payload,
+)
 from src.breakouts.live.feeds import FmpRestFeed, IntradayFeed
 from src.breakouts.live.models import (
     DailyCandidate,
@@ -25,14 +29,19 @@ from src.breakouts.live.models import (
 )
 from src.breakouts.live.rolling import RollingIntradayBars
 from src.breakouts.live.selector import select_active_pool
-from src.breakouts.live.session import expected_source_session
+from src.breakouts.live.session import (
+    expected_source_session,
+    xnys_session_schedule,
+)
 from src.breakouts.live.settings import IntradayMonitorSettings
 from src.breakouts.live.state import IntradayMonitorState
+from src.data.access import validate_daily_data_contract
 from src.utils.io import atomic_save_json
 
 
 CandidateBuilder = Callable[..., dict[str, Any]]
 SourceSessionResolver = Callable[[str], str]
+ContractValidator = Callable[[dict[str, Any]], Any]
 
 
 class IntradayMomentumMonitor:
@@ -44,8 +53,15 @@ class IntradayMomentumMonitor:
         state: IntradayMonitorState | None = None,
         candidate_builder: CandidateBuilder = build_daily_candidate_snapshot,
         source_session_resolver: SourceSessionResolver = expected_source_session,
+        contract_validator: ContractValidator = validate_daily_data_contract,
+        delivery_mode: str = "shadow",
+        notifier: SignalNotifier | None = None,
     ) -> None:
         self.settings = settings.validate()
+        if delivery_mode not in {"shadow", "live"}:
+            raise ValueError("delivery_mode must be shadow or live")
+        if delivery_mode == "live" and notifier is None:
+            raise ValueError("live delivery requires a notifier")
         self.feed = feed or FmpRestFeed(
             quote_chunk_size=settings.quote_chunk_size,
             max_concurrent_requests=settings.max_concurrent_requests,
@@ -53,6 +69,9 @@ class IntradayMomentumMonitor:
         self.state = state or IntradayMonitorState(settings.state_path)
         self.candidate_builder = candidate_builder
         self.source_session_resolver = source_session_resolver
+        self.contract_validator = contract_validator
+        self.delivery_mode = delivery_mode
+        self.notifier = notifier
         self.detector = BreakoutDetector(settings)
         self.timezone = ZoneInfo(settings.timezone)
         self.candidate_snapshot: dict[str, Any] | None = None
@@ -67,12 +86,34 @@ class IntradayMomentumMonitor:
         self.started_at = datetime.now(self.timezone)
         self.cycle_count = 0
 
+    async def _snapshot_is_valid(
+        self,
+        snapshot: dict[str, Any] | None,
+        *,
+        source_session: str,
+    ) -> bool:
+        if (
+            snapshot is None
+            or snapshot.get("source_data_date") != source_session
+            or not isinstance(snapshot.get("data_contract"), dict)
+        ):
+            return False
+        try:
+            await asyncio.to_thread(
+                self.contract_validator,
+                snapshot["data_contract"],
+            )
+        except Exception:  # invalid persisted inputs must be rebuilt fail-closed
+            return False
+        return True
+
     async def _ensure_candidates(self, session_date: str) -> None:
         source_session = self.source_session_resolver(session_date)
         if (
             self.candidate_snapshot is not None
             and self.candidate_snapshot.get("session_date") == session_date
             and self.candidate_snapshot.get("source_data_date") == source_session
+            and isinstance(self.candidate_snapshot.get("data_contract"), dict)
         ):
             return
         snapshot = self.state.load_candidate_snapshot(
@@ -80,9 +121,9 @@ class IntradayMomentumMonitor:
             ALGORITHM_VERSION,
             PARAMETER_VERSION,
         )
-        if (
-            snapshot is not None
-            and snapshot.get("source_data_date") != source_session
+        if not await self._snapshot_is_valid(
+            snapshot,
+            source_session=source_session,
         ):
             snapshot = None
         if snapshot is None:
@@ -95,6 +136,13 @@ class IntradayMomentumMonitor:
             if snapshot.get("source_data_date") != source_session:
                 raise RuntimeError(
                     "candidate builder returned the wrong source session"
+                )
+            if not await self._snapshot_is_valid(
+                snapshot,
+                source_session=source_session,
+            ):
+                raise RuntimeError(
+                    "candidate builder returned an invalid daily data contract"
                 )
             self.state.save_candidate_snapshot(snapshot)
         self.candidate_snapshot = snapshot
@@ -171,14 +219,22 @@ class IntradayMomentumMonitor:
             if self.candidate_snapshot
             else None
         )
+        data_contract = (
+            self.candidate_snapshot.get("data_contract") or {}
+            if self.candidate_snapshot
+            else {}
+        )
         return {
-            "mode": "shadow",
+            "mode": self.delivery_mode,
             "phase": phase,
             "algorithm_version": ALGORITHM_VERSION,
             "parameter_version": PARAMETER_VERSION,
             "started_at": self.started_at.isoformat(timespec="seconds"),
             "session_date": session_date,
             "source_data_date": source_data_date,
+            "data_universe": data_contract.get("data_universe"),
+            "dataset_version_id": data_contract.get("dataset_version_id"),
+            "bars_sha256": data_contract.get("bars_sha256"),
             "market_open": bool(self.market_status.get("isMarketOpen")),
             "feed": self.feed.source_name,
             "candidate_count": len(self.candidates),
@@ -204,6 +260,55 @@ class IntradayMomentumMonitor:
         atomic_save_json(payload, path)
         return path
 
+    async def _drain_outbox(
+        self,
+        *,
+        session_date: str,
+        now: datetime,
+    ) -> list[dict[str, Any]]:
+        if self.delivery_mode != "live" or self.notifier is None:
+            return []
+        results: list[dict[str, Any]] = []
+        for _ in range(self.settings.max_messages_per_cycle):
+            claim = self.state.claim_next_delivery(
+                session_date=session_date,
+                now=now,
+                cooldown_minutes=self.settings.cooldown_minutes,
+                max_attempts=self.settings.max_delivery_attempts,
+            )
+            if claim is None:
+                break
+            try:
+                result = await asyncio.to_thread(self.notifier.send, claim.payload)
+                message_id = str(result.get("message_id") or "").strip()
+                if not message_id:
+                    raise RuntimeError("Discord delivery returned no message ID")
+            except Exception as exc:  # transport exceptions are persisted without secrets
+                uncertain = bool(getattr(exc, "uncertain", True))
+                retryable = bool(getattr(exc, "retryable", False))
+                error_code = str(
+                    getattr(exc, "reason", type(exc).__name__)
+                ).upper()
+                self.state.mark_delivery_failed(
+                    claim,
+                    error_code=error_code,
+                    uncertain=uncertain,
+                    retryable=retryable,
+                )
+                results.append({
+                    "ticker": claim.ticker,
+                    "status": "UNKNOWN" if uncertain else "FAILED",
+                    "error_code": error_code,
+                })
+                continue
+            self.state.mark_delivery_sent(claim, message_id=message_id)
+            results.append({
+                "ticker": claim.ticker,
+                "status": "SENT",
+                "message_id": message_id,
+            })
+        return results
+
     async def cycle(
         self,
         *,
@@ -223,8 +328,13 @@ class IntradayMomentumMonitor:
                 now=aware_now,
                 session_date=session_date,
                 phase="market_closed",
+                cycle_seconds=round(
+                    monotonic_time.perf_counter() - cycle_started,
+                    3,
+                ),
             )
             self.state.heartbeat(payload)
+            self.state.record_monitor_cycle(payload)
             return payload
         await self._ensure_candidates(session_date)
 
@@ -378,7 +488,23 @@ class IntradayMomentumMonitor:
                 state=MonitorSymbolState.TRIGGERED,
                 payload=signal.to_dict(),
             )
-            inserted = self.state.record_signal(signal, delivery_state="SHADOW")
+            initial_delivery_state = (
+                "SHADOW" if self.delivery_mode == "shadow" else "PENDING"
+            )
+            inserted = self.state.record_signal(
+                signal,
+                delivery_state=initial_delivery_state,
+            )
+            delivery_payload = build_signal_discord_payload(
+                signal,
+                role_id=self.settings.discord_role_id,
+                dashboard_base_url=self.settings.dashboard_base_url,
+            )
+            self.state.stage_signal_delivery(
+                signal,
+                delivery_payload,
+                shadow=self.delivery_mode == "shadow",
+            )
             self.state.set_symbol_state(
                 session_date=session_date,
                 ticker=ticker,
@@ -388,6 +514,11 @@ class IntradayMomentumMonitor:
             )
             if inserted:
                 new_signals.append(signal.to_dict())
+
+        delivery_results = await self._drain_outbox(
+            session_date=session_date,
+            now=aware_now,
+        )
 
         self.cycle_count += 1
         elapsed = monotonic_time.perf_counter() - cycle_started
@@ -402,27 +533,65 @@ class IntradayMomentumMonitor:
         payload["new_signal_count"] = len(new_signals)
         payload["broad_refreshed"] = broad_due
         payload["exact_confirmed"] = len(loaded) + len(fresh_exact)
+        payload["delivery_results"] = delivery_results
+        payload["delivery_count"] = len(delivery_results)
         self.state.heartbeat(payload)
+        self.state.record_monitor_cycle(payload)
         self._save_cycle_snapshot(payload, session_date=session_date)
         return payload
 
     async def run_forever(self) -> None:
         while True:
             now = datetime.now(self.timezone)
-            local_time = now.time()
-            if local_time >= time(16, 5):
+            session_date = now.strftime("%Y-%m-%d")
+            try:
+                schedule = xnys_session_schedule(
+                    session_date,
+                    timezone=self.settings.timezone,
+                )
+            except ValueError:
                 payload = self._heartbeat_payload(
                     now=now,
-                    session_date=now.strftime("%Y-%m-%d"),
-                    phase="completed_session",
+                    session_date=session_date,
+                    phase="not_a_trading_session",
                 )
                 self.state.heartbeat(payload)
                 return
-            if local_time < time(9, 30):
+            finalize_at = schedule.closes_at + timedelta(minutes=5)
+            if now >= finalize_at:
+                observation = self.state.finalize_session_observation(
+                    session_date=session_date,
+                    expected_open_cycles=schedule.expected_minutes,
+                    min_cycle_coverage=self.settings.observation_min_cycle_coverage,
+                    max_error_cycle_ratio=(
+                        self.settings.observation_max_error_cycle_ratio
+                    ),
+                    max_cycle_p95_seconds=(
+                        self.settings.observation_max_cycle_p95_seconds
+                    ),
+                )
                 payload = self._heartbeat_payload(
                     now=now,
-                    session_date=now.strftime("%Y-%m-%d"),
+                    session_date=session_date,
+                    phase="completed_session",
+                )
+                payload["session_observation"] = observation
+                self.state.heartbeat(payload)
+                return
+            if now < schedule.opens_at:
+                payload = self._heartbeat_payload(
+                    now=now,
+                    session_date=session_date,
                     phase="waiting_for_open",
+                )
+                self.state.heartbeat(payload)
+                await asyncio.sleep(self.settings.heartbeat_seconds)
+                continue
+            if now >= schedule.closes_at:
+                payload = self._heartbeat_payload(
+                    now=now,
+                    session_date=session_date,
+                    phase="waiting_to_finalize",
                 )
                 self.state.heartbeat(payload)
                 await asyncio.sleep(self.settings.heartbeat_seconds)

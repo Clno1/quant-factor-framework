@@ -66,6 +66,8 @@ class PITSettings:
     """Rules for publishing reconstructed historical universe membership."""
 
     universe: str = "SP500"
+    data_universe: str = "SP500_MARKET_REGIME"
+    publication_id: str = "SP500_MARKET_REGIME"
     start: str = "1990-01-01"
     strict: bool = True
     min_snapshot_members: int = 450
@@ -137,6 +139,21 @@ class MarketRegimeResearchSettings:
     @property
     def source_manifest_path(self) -> Path:
         return self.raw_root / "source_manifest.json"
+
+    @property
+    def pit_membership_path(self) -> Path:
+        """Dedicated PIT publication; never shares the main-factor SP500 file."""
+        configured = Path(str(CONFIG.universe.point_in_time.membership_dir))
+        root = (
+            configured
+            if configured.is_absolute()
+            else CONFIG.abs_path(str(configured))
+        )
+        publication_id = safe_path_component(
+            self.pit.publication_id,
+            label="market-regime PIT publication_id",
+        )
+        return root / f"{publication_id}.parquet"
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -259,6 +276,12 @@ def load_market_regime_research_settings(
         ),
         pit=PITSettings(
             universe=str(pit.get("universe", "SP500")).strip().upper(),
+            data_universe=str(
+                pit.get("data_universe", "SP500_MARKET_REGIME")
+            ).strip().upper(),
+            publication_id=str(
+                pit.get("publication_id", "SP500_MARKET_REGIME")
+            ).strip().upper(),
             start=str(pit.get("start", "1990-01-01")),
             strict=_bool(
                 pit.get("strict"),
@@ -407,6 +430,22 @@ def _validate(settings: MarketRegimeResearchSettings) -> None:
     if not 0 < settings.features.momentum_quantile < 0.5:
         raise ValueError("momentum_quantile must be in (0, 0.5)")
     safe_path_component(settings.pit.universe, label="PIT universe")
+    safe_path_component(
+        settings.pit.data_universe,
+        label="market-regime data universe",
+    )
+    safe_path_component(
+        settings.pit.publication_id,
+        label="market-regime PIT publication_id",
+    )
+    if settings.pit.data_universe == settings.pit.universe:
+        raise ValueError(
+            "market-regime data_universe must be isolated from the main universe"
+        )
+    if settings.pit.publication_id == settings.pit.universe:
+        raise ValueError(
+            "market-regime PIT publication_id must be isolated from the main universe"
+        )
     parse_date_str(settings.pit.start)
     if parse_date_str(settings.pit.start) > end:
         raise ValueError("PIT start cannot be after configured end")

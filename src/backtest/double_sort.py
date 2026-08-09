@@ -7,7 +7,11 @@ import numpy as np
 import pandas as pd
 
 from src.backtest.metrics import performance_summary
-from src.backtest.quintile import _resolve_execution, build_tradable_mask
+from src.backtest.quintile import (
+    _apply_membership_exit_policy,
+    _resolve_execution,
+    build_tradable_mask,
+)
 from src.backtest.rebalance import get_rebalance_dates
 from src.config import CONFIG
 
@@ -129,6 +133,8 @@ def double_sort_backtest(
     price_df: pd.DataFrame | None = None,
     volume_df: pd.DataFrame | None = None,
     tradable_mask: pd.DataFrame | None = None,
+    membership_mask: pd.DataFrame | None = None,
+    membership_events: pd.DataFrame | None = None,
     execution: dict | None = None,
 ) -> DoubleSortResult:
     """
@@ -176,7 +182,7 @@ def double_sort_backtest(
             index=common_dates, columns=common_cols, fill_value=False
         )
 
-    control_assign, factor_assign, _ = _assign_independent(
+    control_assign, factor_assign, rebal_dates = _assign_independent(
         c,
         f,
         n_control=n_control,
@@ -187,6 +193,17 @@ def double_sort_backtest(
     )
     control_held = control_assign.shift(1)
     factor_held = factor_assign.shift(1)
+    held_cell = control_held * 100.0 + factor_held
+    r, _ = _apply_membership_exit_policy(
+        r,
+        held_cell,
+        membership_mask=membership_mask,
+        membership_events=membership_events,
+        rebalance_dates=rebal_dates,
+        open_df=open_df,
+        close_df=price_df,
+        policy=exec_cfg["membership_exit_policy"],
+    )
 
     cell_returns: dict[str, pd.Series] = {}
     for i in range(1, n_control + 1):

@@ -106,6 +106,19 @@ class BreakoutIsolationTests(unittest.TestCase):
         )
         self.assertIn("src.breakouts.application", imports)
 
+    def test_breakout_runtimes_do_not_read_the_legacy_raw_universe(self):
+        paths = (
+            PROJECT_ROOT / "src" / "breakouts" / "application.py",
+            PROJECT_ROOT / "src" / "breakouts" / "live" / "candidates.py",
+            PROJECT_ROOT / "src" / "alerts" / "engine.py",
+        )
+        violations = [
+            str(path.relative_to(PROJECT_ROOT))
+            for path in paths
+            if "src.data.universe" in _imports(path)
+        ]
+        self.assertEqual(violations, [])
+
     def test_breakout_routes_have_single_owner(self):
         from src.webapp.breakout_routes import router as breakout_router
         from src.webapp.routes_v2 import router_v2

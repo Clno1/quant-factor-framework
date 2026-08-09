@@ -159,7 +159,7 @@ outputs/universes/SP500/factors/MOM_12M/
 data/
   catalog/                 # DuckDB 目录、writer lock、研究发布 lock
   lake/                    # 不可变 raw/curated 行情版本
-  pit_universes/           # 当前正式 SP500 PIT 文件和元数据
+  pit_universes/           # 当前正式 SP500/NASDAQ100 PIT 文件和元数据
   raw/pit/                 # PIT 供应商事件、修正和构建诊断
   raw/universe/            # FMP 当前证券快照，如 US_ACTIVE
   raw/market_regime/       # 独立大盘状态研究的外部原始源
@@ -215,7 +215,11 @@ scripts/run_data_requests.py
 src/data/access.py
   -> MarketDataReader
   -> 明确 DatasetVersion
+  -> DataContract
 ```
+
+动量突破再由 `src/breakouts/daily_data.py` 把同版本长表转换为内存 ticker frames；Web、盘前、
+小时提醒和分钟 monitor 不得各自重新解析 latest 或读取 raw universe。
 
 合法的直接 FMP 使用只剩供应商证券快照、搜索、quote、分钟线和独立外部研究源。它们不能在
 回测缺数时充当日线回退。
@@ -227,8 +231,8 @@ src/data/access.py
 | 时间 | 任务 | 做什么 |
 |---|---|---|
 | 07:15 | `quant-us-daily-refresh` | 刷新 US_ACTIVE 当前证券快照，按流动性生成 `US_LIQUID_5M` 成员，增量拉取日线，质量校验并发布不可变版本 |
-| 08:15 | `quant-market-data` | 重建并严格发布 SP500 PIT，再增量发布 SP500 和 MAG7 行情版本 |
-| 08:45 | `quant-factor-research` | 绑定刚发布的版本，重算 raw/clean factor、IC、置信评估和分组研究，原子发布 `research_publication.json` |
+| 08:15 | `quant-market-data` | 分别严格发布 SP500/NASDAQ100 PIT，再增量发布 SP500/NASDAQ100/MAG7 行情版本 |
+| 08:45 | `quant-factor-research` | 绑定当日版本，发布两池因子研究、MAG7 参考结果和跨池结论 |
 | 09:15 | `quant-group-analytics-eod` | 从正式 SP500 行情版本生成 sector/sub-industry 强弱产物 |
 | 10:30 | `quant-paper-trading` | 校验行情和研究版本后运行 active 模拟盘账户 |
 | 每 5 分钟 | `quant-data-requests` | 处理 Watchlist 缺数请求，成功后恢复等待中的消费者 |

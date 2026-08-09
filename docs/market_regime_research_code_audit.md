@@ -89,8 +89,8 @@ walk-forward 和页面也尚未开始。
 
 **原问题**
 
-PIT CLI 只在重建时检查 `quality_status`，完整研究运行只检查生产路径下是否存在
-`SP500.parquet`。手工放入同名文件即可绕过事件一致性检查。
+PIT CLI 只在重建时检查 `quality_status`，完整研究运行曾只检查生产路径下是否存在
+同名 Parquet。手工放入文件或复用主因子 PIT 即可绕过事件一致性检查。
 
 **风险**
 
@@ -102,8 +102,8 @@ PIT CLI 只在重建时检查 `quality_status`，完整研究运行只检查生�
 生产发布现在同时生成：
 
 ```text
-data/pit_universes/SP500.parquet
-data/pit_universes/SP500.metadata.json
+data/pit_universes/SP500_MARKET_REGIME.parquet
+data/pit_universes/SP500_MARKET_REGIME.metadata.json
 ```
 
 元数据绑定：
@@ -114,6 +114,9 @@ data/pit_universes/SP500.metadata.json
 - 成员文件 SHA256；
 - 完整诊断；
 - FMP 当前成分和历史事件输入哈希。
+- `scope=market_regime` 和 `publication_id=SP500_MARKET_REGIME`；
+- 与主因子 `SP500` 完全隔离的 Curated/DuckDB universe；
+- 1990 起始行情、冻结 membership 和横截面特征覆盖率门禁。
 
 完整研究运行会重新验证状态、日期、诊断和文件哈希。缺元数据、候选模式、哈希
 变化或诊断不干净都会失败。

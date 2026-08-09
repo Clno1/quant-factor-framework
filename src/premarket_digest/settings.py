@@ -129,9 +129,12 @@ def load_premarket_digest_settings(
             momentum.get("min_evaluable_coverage", 0.80)
         ),
         sector_rotation_enabled=_strict_bool(
-            rotation.get("enabled"),
+            os.environ.get(
+                "PREMARKET_SECTOR_ROTATION_ENABLED",
+                rotation.get("enabled"),
+            ),
             default=True,
-            field_name="premarket_digest.sector_rotation.enabled",
+            field_name="PREMARKET_SECTOR_ROTATION_ENABLED",
         ),
         group_universe=str(rotation.get("universe") or "SP500").upper(),
         group_taxonomy=str(rotation.get("taxonomy") or "FMP").upper(),

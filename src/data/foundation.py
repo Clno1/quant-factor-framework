@@ -26,7 +26,7 @@ from pathlib import Path
 import shutil
 import threading
 import time
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Mapping
 from uuid import uuid4
 
 import numpy as np
@@ -116,6 +116,8 @@ class DatasetVersion:
     membership_checksum_sha256: str | None
     manifest_path: str
     checksum_sha256: str
+    universe_checksum_sha256: str | None = None
+    manifest_checksum_sha256: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -214,7 +216,7 @@ def _verify_file_sha256(path: Path, expected: str) -> None:
     observed = _file_sha256(path)
     if observed != expected:
         raise DataFoundationError(
-            f"Published Parquet checksum mismatch: {path}; "
+            f"Published file checksum mismatch: {path}; "
             f"expected={expected}, observed={observed}"
         )
     with _VERIFIED_FILE_CACHE_LOCK:
@@ -291,7 +293,9 @@ class MarketDataCatalog:
                     membership_path VARCHAR,
                     membership_checksum_sha256 VARCHAR,
                     manifest_path VARCHAR NOT NULL,
-                    checksum_sha256 VARCHAR NOT NULL
+                    checksum_sha256 VARCHAR NOT NULL,
+                    universe_checksum_sha256 VARCHAR,
+                    manifest_checksum_sha256 VARCHAR
                 )
                 """
             )
@@ -306,6 +310,18 @@ class MarketDataCatalog:
                 """
                 ALTER TABLE dataset_versions
                 ADD COLUMN IF NOT EXISTS membership_checksum_sha256 VARCHAR
+                """
+            )
+            connection.execute(
+                """
+                ALTER TABLE dataset_versions
+                ADD COLUMN IF NOT EXISTS universe_checksum_sha256 VARCHAR
+                """
+            )
+            connection.execute(
+                """
+                ALTER TABLE dataset_versions
+                ADD COLUMN IF NOT EXISTS manifest_checksum_sha256 VARCHAR
                 """
             )
             connection.execute(
@@ -393,8 +409,9 @@ class MarketDataCatalog:
                  target_session, created_at, row_count, ticker_count,
                  min_date, max_date, target_coverage, bars_path,
                  universe_path, membership_path,
-                 membership_checksum_sha256, manifest_path, checksum_sha256)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 membership_checksum_sha256, manifest_path, checksum_sha256,
+                 universe_checksum_sha256, manifest_checksum_sha256)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     version.version_id,
@@ -415,6 +432,8 @@ class MarketDataCatalog:
                     version.membership_checksum_sha256,
                     version.manifest_path,
                     version.checksum_sha256,
+                    version.universe_checksum_sha256,
+                    version.manifest_checksum_sha256,
                 ],
             )
             for check in checks:
@@ -473,6 +492,51 @@ class MarketDataCatalog:
             ),
             manifest_path=str(row[16]),
             checksum_sha256=str(row[17]),
+            universe_checksum_sha256=(
+                str(row[18]) if row[18] is not None else None
+            ),
+            manifest_checksum_sha256=(
+                str(row[19]) if row[19] is not None else None
+            ),
+        )
+
+    @staticmethod
+    def _version_projection(connection: Any, *, alias: str = "") -> str:
+        """Read pre-v2 catalogs without mutating them from a reader process."""
+        available = {
+            str(row[1])
+            for row in connection.execute(
+                "PRAGMA table_info('dataset_versions')"
+            ).fetchall()
+        }
+        prefix = f"{alias}." if alias else ""
+        columns = [
+            "version_id",
+            "run_id",
+            "universe",
+            "provider",
+            "status",
+            "target_session",
+            "created_at",
+            "row_count",
+            "ticker_count",
+            "min_date",
+            "max_date",
+            "target_coverage",
+            "bars_path",
+            "universe_path",
+            "membership_path",
+            "membership_checksum_sha256",
+            "manifest_path",
+            "checksum_sha256",
+            "universe_checksum_sha256",
+            "manifest_checksum_sha256",
+        ]
+        return ", ".join(
+            f"{prefix}{column}"
+            if column in available
+            else f"NULL AS {column}"
+            for column in columns
         )
 
     def latest_version(self, universe: str) -> DatasetVersion | None:
@@ -481,14 +545,10 @@ class MarketDataCatalog:
             return None
         connection = self._connect(read_only=True)
         try:
+            projection = self._version_projection(connection, alias="d")
             row = connection.execute(
-                """
-                SELECT d.version_id, d.run_id, d.universe, d.provider, d.status,
-                       d.target_session, d.created_at, d.row_count,
-                       d.ticker_count, d.min_date, d.max_date,
-                       d.target_coverage, d.bars_path, d.universe_path,
-                       d.membership_path, d.membership_checksum_sha256,
-                       d.manifest_path, d.checksum_sha256
+                f"""
+                SELECT {projection}
                 FROM published_versions AS p
                 JOIN dataset_versions AS d ON d.version_id = p.version_id
                 WHERE p.universe = ?
@@ -517,14 +577,10 @@ class MarketDataCatalog:
             )
         connection = self._connect(read_only=True)
         try:
+            projection = self._version_projection(connection)
             row = connection.execute(
                 f"""
-                SELECT version_id, run_id, universe, provider, status,
-                       target_session, created_at, row_count, ticker_count,
-                       min_date, max_date, target_coverage, bars_path,
-                       universe_path, membership_path,
-                       membership_checksum_sha256, manifest_path,
-                       checksum_sha256
+                SELECT {projection}
                 FROM dataset_versions
                 WHERE version_id = ? AND status = 'PUBLISHED'{universe_clause}
                 """,
@@ -539,14 +595,10 @@ class MarketDataCatalog:
             return []
         connection = self._connect(read_only=True)
         try:
+            projection = self._version_projection(connection, alias="d")
             rows = connection.execute(
-                """
-                SELECT d.version_id, d.run_id, d.universe, d.provider, d.status,
-                       d.target_session, d.created_at, d.row_count,
-                       d.ticker_count, d.min_date, d.max_date,
-                       d.target_coverage, d.bars_path, d.universe_path,
-                       d.membership_path, d.membership_checksum_sha256,
-                       d.manifest_path, d.checksum_sha256
+                f"""
+                SELECT {projection}
                 FROM published_versions AS p
                 JOIN dataset_versions AS d ON d.version_id = p.version_id
                 ORDER BY d.universe
@@ -555,6 +607,34 @@ class MarketDataCatalog:
         finally:
             connection.close()
         return [self._version_from_row(row) for row in rows]
+
+    def list_ingestion_runs(
+        self,
+        universe: str,
+        *,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Return recent writer attempts for one universe, including failures."""
+        universe = safe_path_component(universe.upper(), label="universe")
+        if not self.path.exists():
+            return []
+        connection = self._connect(read_only=True)
+        try:
+            rows = connection.execute(
+                """
+                SELECT run_id, provider, target_session, status,
+                       started_at, finished_at, error_message
+                FROM ingestion_runs
+                WHERE universe = ?
+                ORDER BY started_at DESC
+                LIMIT ?
+                """,
+                [universe, max(1, min(int(limit), 100))],
+            ).fetchall()
+            columns = [item[0] for item in connection.description]
+        finally:
+            connection.close()
+        return [dict(zip(columns, row, strict=True)) for row in rows]
 
 
 def _normalize_universe_frame(
@@ -662,6 +742,64 @@ def _normalize_membership_frame(
             f"Membership override has no baseline on or before {start.date()}"
         )
     return out
+
+
+def _load_membership_events_for_version(
+    membership_path: str | Path | None,
+    *,
+    start: pd.Timestamp,
+    target: pd.Timestamp,
+) -> pd.DataFrame | None:
+    """Load and authenticate the PIT event ledger referenced by its metadata."""
+    if not membership_path:
+        return None
+    source = Path(membership_path)
+    if not source.is_absolute():
+        source = PROJECT_ROOT / source
+    metadata_path = source.with_suffix(".metadata.json")
+    if not metadata_path.exists():
+        return None
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        source_meta = metadata.get("source") or {}
+        raw_run_dir = Path(str(source_meta["raw_run_dir"]))
+        events_path = raw_run_dir / "normalized_events.parquet"
+        expected = str(source_meta["normalized_events_sha256"])
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise DataFoundationError(
+            f"PIT metadata does not contain an event-ledger contract: {metadata_path}"
+        ) from exc
+    if not raw_run_dir.is_absolute():
+        events_path = PROJECT_ROOT / events_path
+    if not events_path.exists():
+        raise DataFoundationError(
+            f"PIT event ledger referenced by metadata is missing: {events_path}"
+        )
+    observed = _file_sha256(events_path)
+    if expected.removeprefix("sha256:") != observed:
+        raise DataFoundationError(
+            f"PIT event ledger checksum mismatch: {events_path}"
+        )
+    events = pd.read_parquet(events_path)
+    required = {"effective_date", "removed_ticker", "reason"}
+    missing = sorted(required - set(events.columns))
+    if missing:
+        raise DataFoundationError(
+            f"PIT event ledger is missing required columns: {missing}"
+        )
+    events = events.copy()
+    events["effective_date"] = pd.to_datetime(
+        events["effective_date"], errors="coerce"
+    ).dt.normalize()
+    if events["effective_date"].isna().any():
+        raise DataFoundationError("PIT event ledger contains invalid dates")
+    return (
+        events.loc[
+            events["effective_date"].between(start, target)
+        ]
+        .sort_values(["effective_date", "removed_ticker"], na_position="last")
+        .reset_index(drop=True)
+    )
 
 
 def _observed_membership_frame(
@@ -1115,8 +1253,9 @@ def _write_curated_version(
     bars: pd.DataFrame,
     universe_frame: pd.DataFrame,
     membership_frame: pd.DataFrame | None,
+    membership_events_frame: pd.DataFrame | None,
     manifest: dict[str, Any],
-) -> tuple[Path, Path, Path | None, str | None, Path, str]:
+) -> tuple[Path, Path, Path | None, str | None, Path, str, str, str]:
     base = (
         lake_dir
         / "curated"
@@ -1138,27 +1277,50 @@ def _write_curated_version(
         if membership_frame is not None
         else None
     )
+    membership_events_path = (
+        staging / "membership_events.parquet"
+        if membership_events_frame is not None
+        else None
+    )
     bars.reindex(columns=BAR_COLUMNS).to_parquet(bars_path, index=False)
     universe_frame.to_parquet(universe_path, index=False)
     if membership_path is not None:
         membership_frame.to_parquet(membership_path, index=False)
+    if membership_events_path is not None:
+        membership_events_frame.to_parquet(
+            membership_events_path,
+            index=False,
+        )
     checksum = _file_sha256(bars_path)
+    universe_checksum = _file_sha256(universe_path)
     membership_checksum = (
         _file_sha256(membership_path)
         if membership_path is not None
         else None
     )
+    membership_events_checksum = (
+        _file_sha256(membership_events_path)
+        if membership_events_path is not None
+        else None
+    )
     payload = {
         **manifest,
         "bars_sha256": checksum,
-        "universe_sha256": _file_sha256(universe_path),
+        "universe_sha256": universe_checksum,
         "membership_sha256": membership_checksum,
+        "membership_events_path": (
+            membership_events_path.name
+            if membership_events_path is not None
+            else None
+        ),
+        "membership_events_sha256": membership_events_checksum,
     }
     manifest_path = staging / "manifest.json"
     manifest_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2, default=str),
         encoding="utf-8",
     )
+    manifest_checksum = _file_sha256(manifest_path)
     base.mkdir(parents=True, exist_ok=True)
     os.replace(staging, destination)
     return (
@@ -1172,6 +1334,8 @@ def _write_curated_version(
         membership_checksum,
         destination / manifest_path.name,
         checksum,
+        universe_checksum,
+        manifest_checksum,
     )
 
 
@@ -1184,10 +1348,12 @@ class MarketDataWriter:
         catalog: MarketDataCatalog | None = None,
         lake_dir: str | Path | None = None,
         fetcher: Fetcher | None = None,
+        profile_fetcher: Callable[[str], Mapping[str, Any] | None] | None = None,
     ):
         self.catalog = catalog or MarketDataCatalog()
         self.lake_dir = Path(lake_dir) if lake_dir is not None else default_lake_dir()
         self.fetcher = fetcher
+        self.profile_fetcher = profile_fetcher
 
     def _fetcher(self) -> Fetcher:
         if self.fetcher is not None:
@@ -1292,9 +1458,15 @@ class MarketDataWriter:
                         ].astype(str)
                     )
                     pit_path = membership_source or "explicit_membership_override"
+                    membership_events = None
                 else:
                     historical, pit_membership, pit_path = _historical_tickers(
                         universe, start=start, target=target
+                    )
+                    membership_events = _load_membership_events_for_version(
+                        pit_path,
+                        start=start,
+                        target=target,
                     )
                 current_tickers = set(current["ticker"].astype(str))
                 if point_in_time_required(universe):
@@ -1329,24 +1501,26 @@ class MarketDataWriter:
                             f"extra={extra}"
                         )
                 all_tickers = sorted(current_tickers | historical)
-                metadata = current.set_index("ticker", drop=False)
-                missing_metadata = sorted(set(all_tickers) - set(metadata.index))
-                if missing_metadata:
-                    historical_rows = pd.DataFrame(
-                        {
-                            "ticker": missing_metadata,
-                            "name": None,
-                            "sector": None,
-                            "sub_industry": None,
-                            "is_current_member": False,
-                            "snapshot_date": pd.Timestamp(target_date),
-                        }
-                    )
-                    metadata = pd.concat(
-                        [metadata.reset_index(drop=True), historical_rows],
-                        ignore_index=True,
-                    ).set_index("ticker", drop=False)
-                metadata = metadata.loc[all_tickers].reset_index(drop=True)
+                previous_metadata = None
+                if latest is not None:
+                    previous_universe_path = _resolve_path(latest.universe_path)
+                    if previous_universe_path.exists():
+                        previous_metadata = pd.read_parquet(previous_universe_path)
+                profile_fetcher = self.profile_fetcher
+                if profile_fetcher is None and self.fetcher is None:
+                    from src.data.fmp import get_security_profile
+
+                    profile_fetcher = get_security_profile
+                from src.data.security_master import build_version_security_master
+
+                metadata = build_version_security_master(
+                    current,
+                    tickers=all_tickers,
+                    target_session=target_date,
+                    membership=pit_membership,
+                    previous=previous_metadata,
+                    profile_fetcher=profile_fetcher,
+                )
 
                 previous = pd.DataFrame(columns=BAR_COLUMNS)
                 if latest is not None:
@@ -1544,7 +1718,7 @@ class MarketDataWriter:
                 version_id = uuid4().hex
                 created_at = _utc_now()
                 manifest = {
-                    "schema_version": 1,
+                    "schema_version": 2,
                     "version_id": version_id,
                     "run_id": run_id,
                     "universe": universe,
@@ -1566,10 +1740,18 @@ class MarketDataWriter:
                         if pit_membership is not None
                         else 0
                     ),
+                    "pit_membership_event_rows": (
+                        len(membership_events)
+                        if membership_events is not None
+                        else 0
+                    ),
                     "raw_ingestion_path": _portable_path(raw_path),
                     "failed_tickers": sorted(failures),
                     "quality_checks": [check.to_dict() for check in checks],
                 }
+                from src.data.security_master import classification_coverage
+
+                manifest["classification"] = classification_coverage(metadata)
                 (
                     bars_path,
                     universe_path,
@@ -1577,6 +1759,8 @@ class MarketDataWriter:
                     membership_checksum,
                     manifest_path,
                     checksum,
+                    universe_checksum,
+                    manifest_checksum,
                 ) = _write_curated_version(
                     lake_dir=self.lake_dir,
                     universe=universe,
@@ -1584,6 +1768,7 @@ class MarketDataWriter:
                     bars=candidate,
                     universe_frame=metadata,
                     membership_frame=pit_membership,
+                    membership_events_frame=membership_events,
                     manifest=manifest,
                 )
                 version = DatasetVersion(
@@ -1617,6 +1802,8 @@ class MarketDataWriter:
                     membership_checksum_sha256=membership_checksum,
                     manifest_path=_portable_path(manifest_path),
                     checksum_sha256=checksum,
+                    universe_checksum_sha256=universe_checksum,
+                    manifest_checksum_sha256=manifest_checksum,
                 )
                 self.catalog.register_version(version, checks, publish=passed)
                 if not passed:
@@ -1659,6 +1846,7 @@ class MarketDataReader:
                 f"`python scripts/run_data_pipeline.py update --universe "
                 f"{universe}` first. No legacy fallback is allowed."
             )
+        self.verify_version(version)
         return version
 
     def require_version(self, universe: str, version_id: str) -> DatasetVersion:
@@ -1668,7 +1856,94 @@ class MarketDataReader:
             raise DataFoundationError(
                 f"[{universe}] published data version does not exist: {version_id}"
             )
+        self.verify_version(version)
         return version
+
+    def verify_version(self, version: DatasetVersion) -> dict[str, Any]:
+        """Fail closed unless every immutable publication file is authenticated."""
+        required_hashes = {
+            "bars_sha256": version.checksum_sha256,
+            "universe_sha256": version.universe_checksum_sha256,
+            "manifest_sha256": version.manifest_checksum_sha256,
+        }
+        if version.membership_path is not None:
+            required_hashes["membership_sha256"] = (
+                version.membership_checksum_sha256
+            )
+        missing = sorted(key for key, value in required_hashes.items() if not value)
+        if missing:
+            raise DataFoundationError(
+                f"[{version.universe}] data version {version.version_id} predates "
+                f"the complete integrity contract; missing={missing}. Republish it."
+            )
+
+        files = {
+            "bars": (_resolve_path(version.bars_path), version.checksum_sha256),
+            "universe": (
+                _resolve_path(version.universe_path),
+                version.universe_checksum_sha256,
+            ),
+            "manifest": (
+                _resolve_path(version.manifest_path),
+                version.manifest_checksum_sha256,
+            ),
+        }
+        if version.membership_path is not None:
+            files["membership"] = (
+                _resolve_path(version.membership_path),
+                version.membership_checksum_sha256,
+            )
+        for label, (path, expected_sha256) in files.items():
+            if not path.exists():
+                raise DataFoundationError(
+                    f"Published {label} file is missing: {path}"
+                )
+            _verify_file_sha256(path, str(expected_sha256))
+
+        manifest_path = files["manifest"][0]
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise DataFoundationError(
+                f"Published manifest is unreadable: {manifest_path}"
+            ) from exc
+        expected = {
+            "version_id": version.version_id,
+            "run_id": version.run_id,
+            "universe": version.universe,
+            "target_session": version.target_session.isoformat(),
+            "bars_sha256": version.checksum_sha256,
+            "universe_sha256": version.universe_checksum_sha256,
+            "membership_sha256": version.membership_checksum_sha256,
+        }
+        mismatches = [
+            key
+            for key, value in expected.items()
+            if str(manifest.get(key)) != str(value)
+        ]
+        if mismatches:
+            raise DataFoundationError(
+                f"[{version.universe}] manifest/catalog mismatch for "
+                f"{version.version_id}: {mismatches}"
+            )
+        events_name = manifest.get("membership_events_path")
+        events_sha256 = manifest.get("membership_events_sha256")
+        if bool(events_name) != bool(events_sha256):
+            raise DataFoundationError(
+                f"[{version.universe}] incomplete membership-event contract"
+            )
+        if events_name:
+            events_path = (manifest_path.parent / str(events_name)).resolve()
+            if events_path.parent != manifest_path.parent.resolve():
+                raise DataFoundationError(
+                    f"[{version.universe}] invalid membership-event path"
+                )
+            if not events_path.exists():
+                raise DataFoundationError(
+                    f"Published membership-event file is missing: {events_path}"
+                )
+            _verify_file_sha256(events_path, str(events_sha256))
+        return manifest
 
     def _resolve_version(
         self,
@@ -1681,6 +1956,7 @@ class MarketDataReader:
                     f"Data version {version.version_id} belongs to "
                     f"{version.universe}, not {universe}"
                 )
+            self.verify_version(version)
             return version
         if isinstance(version, str):
             return self.require_version(universe, version)
@@ -1723,7 +1999,10 @@ class MarketDataReader:
         version: DatasetVersion | str | None = None,
     ) -> pd.DataFrame:
         selected = self._resolve_version(universe, version)
-        frame = self._read_parquet(selected.universe_path)
+        frame = self._read_parquet(
+            selected.universe_path,
+            expected_sha256=selected.universe_checksum_sha256,
+        )
         if current_only and "is_current_member" in frame.columns:
             frame = frame.loc[frame["is_current_member"].astype(bool)]
         return frame.reset_index(drop=True)
@@ -1753,6 +2032,42 @@ class MarketDataReader:
         frame["active"] = frame["active"].astype(bool)
         return frame.sort_values(["date", "ticker"]).reset_index(drop=True)
 
+    def load_membership_events(
+        self,
+        universe: str,
+        *,
+        version: DatasetVersion | str | None = None,
+    ) -> pd.DataFrame | None:
+        """Load the authenticated PIT add/remove event ledger, when published."""
+        selected = self._resolve_version(universe, version)
+        manifest = self.verify_version(selected)
+        events_name = manifest.get("membership_events_path")
+        events_sha256 = manifest.get("membership_events_sha256")
+        if not events_name:
+            return None
+        events_path = _resolve_path(selected.manifest_path).parent / str(events_name)
+        frame = self._read_parquet(
+            str(events_path),
+            expected_sha256=str(events_sha256),
+        )
+        required = {"effective_date", "removed_ticker", "reason"}
+        missing = sorted(required - set(frame.columns))
+        if missing:
+            raise DataFoundationError(
+                f"[{universe}] published membership events are missing {missing}"
+            )
+        frame["effective_date"] = pd.to_datetime(
+            frame["effective_date"], errors="coerce"
+        ).dt.normalize()
+        if frame["effective_date"].isna().any():
+            raise DataFoundationError(
+                f"[{universe}] published membership events contain invalid dates"
+            )
+        return frame.sort_values(
+            ["effective_date", "removed_ticker"],
+            na_position="last",
+        ).reset_index(drop=True)
+
     def load_bars(
         self,
         universe: str,
@@ -1763,19 +2078,50 @@ class MarketDataReader:
         version: DatasetVersion | str | None = None,
     ) -> pd.DataFrame:
         selected = self._resolve_version(universe, version)
-        frame = self._read_parquet(
-            selected.bars_path,
-            columns=BAR_COLUMNS,
-            expected_sha256=selected.checksum_sha256,
+        path = _resolve_path(selected.bars_path)
+        if not path.exists():
+            raise DataFoundationError(f"Published Parquet file is missing: {path}")
+        _verify_file_sha256(path, selected.checksum_sha256)
+
+        normalized_tickers = (
+            sorted({str(ticker).strip().upper() for ticker in tickers if str(ticker).strip()})
+            if tickers is not None
+            else None
         )
-        frame["date"] = pd.to_datetime(frame["date"]).dt.normalize()
-        if tickers is not None:
-            wanted = {str(ticker).upper() for ticker in tickers}
-            frame = frame.loc[frame["ticker"].astype(str).str.upper().isin(wanted)]
+        if normalized_tickers == []:
+            return pd.DataFrame(columns=BAR_COLUMNS)
+        conditions: list[str] = []
+        parameters: list[Any] = [str(path)]
+        if normalized_tickers is not None:
+            placeholders = ", ".join("?" for _ in normalized_tickers)
+            conditions.append(f"upper(ticker) IN ({placeholders})")
+            parameters.extend(normalized_tickers)
         if start is not None:
-            frame = frame.loc[frame["date"].ge(pd.Timestamp(start).normalize())]
+            conditions.append("date >= ?")
+            parameters.append(pd.Timestamp(start).normalize().date())
         if end is not None:
-            frame = frame.loc[frame["date"].le(pd.Timestamp(end).normalize())]
+            conditions.append("date <= ?")
+            parameters.append(pd.Timestamp(end).normalize().date())
+        where_clause = (
+            "WHERE " + " AND ".join(conditions)
+            if conditions
+            else ""
+        )
+        projection = ", ".join(f'"{column}"' for column in BAR_COLUMNS)
+        connection = self.catalog._connect(read_only=True)
+        try:
+            frame = connection.execute(
+                f"""
+                SELECT {projection}
+                FROM read_parquet(?, hive_partitioning = false)
+                {where_clause}
+                """,
+                parameters,
+            ).fetchdf()
+        finally:
+            connection.close()
+        frame["date"] = pd.to_datetime(frame["date"]).dt.normalize()
+        frame["ticker"] = frame["ticker"].astype(str).str.upper()
         return frame.sort_values(["date", "ticker"]).reset_index(drop=True)
 
     def load_wide_tables(

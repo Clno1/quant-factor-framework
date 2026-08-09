@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{% block content %}
+<header class="research-page-header">
+    <div><h1 class="page-title">决策回放</h1></div>
+</header>
+
+<div class="research-table-wrap">
+    <table class="data research-table">
+        <thead><tr><th>来源</th><th>名称</th><th>目标股票池</th><th>运行状态</th><th>快照</th><th></th></tr></thead>
+        <tbody>
+        {% for item in sources %}
+            <tr>
+                <td>{{ item.kind_label }}</td>
+                <td><strong>{{ item.name }}</strong><div class="cell-note mono">{{ item.id }}</div></td>
+                <td>{{ item.universe }}</td>
+                <td>{{ item.status }}</td>
+                <td><span class="pool-verdict verdict-{{ 'available' if item.available else 'missing' }}">{{ 'AVAILABLE' if item.available else 'MISSING' }}</span></td>
+                <td>{% if item.available %}<a class="btn small" href="{{ item.href }}">打开回放</a>{% endif %}</td>
+            </tr>
+        {% else %}
+            <tr><td colspan="6" class="empty-table-cell">尚无可回放的运行记录</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

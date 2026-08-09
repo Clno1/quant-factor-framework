@@ -5,6 +5,8 @@ Financial Modeling Prep (FMP) API 客户端。
 
 支持的 endpoint：
   - /stable/sp500-constituent              成分股 + sector + subSector
+  - /stable/nasdaq-constituent             NASDAQ-100 当前成分
+  - /stable/historical-nasdaq-constituent  NASDAQ-100 历史变更事件
   - /stable/company-screener               美股活跃股票 / ETF 筛选
   - /stable/historical-price-eod/dividend-adjusted   日线 OHLCV（含分红/拆股复权 close）
   - /stable/historical-price-eod/full      日线 OHLCV（仅拆股复权）
@@ -192,6 +194,98 @@ def get_historical_sp500_constituent_changes() -> pd.DataFrame:
         ["date", "symbol", "removedTicker"],
         ascending=[False, True, True],
     ).reset_index(drop=True)
+
+
+def get_nasdaq100_constituents() -> pd.DataFrame:
+    """Return FMP's current NASDAQ-100 constituents with classifications."""
+    log.info("Fetching NASDAQ-100 constituents from FMP ...")
+    data = _get("/nasdaq-constituent")
+    if not isinstance(data, list) or not data:
+        raise RuntimeError(
+            "FMP nasdaq-constituent returned empty / unexpected payload"
+        )
+
+    frame = pd.DataFrame(data).rename(
+        columns={
+            "symbol": "ticker",
+            "subSector": "sub_industry",
+        }
+    )
+    required = {"ticker", "name", "sector", "sub_industry"}
+    missing = required - set(frame.columns)
+    if missing:
+        raise RuntimeError(
+            f"FMP nasdaq-constituent missing fields: {sorted(missing)}"
+        )
+    optional = [
+        column
+        for column in ("cik", "dateFirstAdded", "founded", "headQuarter")
+        if column in frame.columns
+    ]
+    frame = frame[["ticker", "name", "sector", "sub_industry", *optional]].copy()
+    frame["ticker"] = (
+        frame["ticker"]
+        .astype(str)
+        .str.strip()
+        .str.upper()
+        .str.replace(".", "-", regex=False)
+    )
+    frame = frame[frame["ticker"].ne("")].drop_duplicates("ticker")
+    if not 90 <= len(frame) <= 110:
+        raise RuntimeError(
+            f"FMP nasdaq-constituent returned implausible row count: {len(frame)}"
+        )
+    log.info("FMP returned %d NASDAQ-100 securities.", len(frame))
+    return frame.sort_values("ticker").reset_index(drop=True)
+
+
+def get_historical_nasdaq100_constituent_changes() -> pd.DataFrame:
+    """
+    Return the raw FMP NASDAQ-100 constituent event history.
+
+    FMP's ``date`` is often the announcement date or the preceding Sunday.
+    ``dateAdded`` is the provider's explicit effective date and is therefore
+    retained separately for the PIT adapter to validate and normalize.
+    """
+    log.info("Fetching historical NASDAQ-100 constituent changes from FMP ...")
+    data = _get("/historical-nasdaq-constituent")
+    if not isinstance(data, list) or not data:
+        raise RuntimeError(
+            "FMP historical-nasdaq-constituent returned empty / unexpected payload"
+        )
+
+    frame = pd.DataFrame(data)
+    required = {
+        "date",
+        "dateAdded",
+        "symbol",
+        "addedSecurity",
+        "removedTicker",
+        "removedSecurity",
+    }
+    missing = required - set(frame.columns)
+    if missing:
+        raise RuntimeError(
+            "FMP historical-nasdaq-constituent missing fields: "
+            f"{sorted(missing)}"
+        )
+    provider_dates = pd.to_datetime(frame["date"], errors="coerce")
+    effective_dates = pd.to_datetime(frame["dateAdded"], errors="coerce")
+    if provider_dates.isna().any() or effective_dates.isna().any():
+        raise RuntimeError(
+            "FMP historical-nasdaq-constituent contains invalid dates"
+        )
+    order = pd.DataFrame(
+        {
+            "effective_date": effective_dates,
+            "symbol": frame["symbol"].fillna("").astype(str),
+            "removed": frame["removedTicker"].fillna("").astype(str),
+        }
+    ).sort_values(
+        ["effective_date", "symbol", "removed"],
+        ascending=[False, True, True],
+    )
+    return frame.loc[order.index].reset_index(drop=True)
 
 
 def get_us_active_equities(
@@ -699,6 +793,8 @@ __all__ = [
     "get_api_key",
     "get_sp500_constituents",
     "get_historical_sp500_constituent_changes",
+    "get_nasdaq100_constituents",
+    "get_historical_nasdaq100_constituent_changes",
     "get_us_active_equities",
     "get_security_profile",
     "get_historical_ohlcv",

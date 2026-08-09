@@ -16,8 +16,8 @@ Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONPATH=/home/projects/quant
 EnvironmentFile=/etc/quant/market-data.env
-ExecStartPre=/home/projects/quant/.venv-worker/bin/python -c "import duckdb, exchange_calendars, sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
-ExecStart=/home/projects/quant/.venv-worker/bin/python /home/projects/quant/scripts/run_data_requests.py --limit 10 --env-file /etc/quant/market-data.env
+ExecStartPre=/home/projects/quant/.venv/bin/python -c "import duckdb, exchange_calendars, sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
+ExecStart=/home/projects/quant/.venv/bin/python /home/projects/quant/scripts/run_data_requests.py --limit 10 --env-file /etc/quant/market-data.env
 TimeoutStartSec=2h
 Restart=on-failure
 RestartSec=5min

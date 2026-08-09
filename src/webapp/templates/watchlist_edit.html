@@ -2,7 +2,7 @@
 
 {% block content %}
 <h1 class="page-title">
-    {% if mode == 'new' %}新建股票组{% else %}编辑股票组{% endif %}
+    {% if mode == 'new' %}新建目标股票池{% else %}编辑目标股票池{% endif %}
 </h1>
 <div class="page-sub">
     两种添加方式：上传 CSV/TXT 文件，或搜索单只股票逐个添加。权重可选，后续可随时编辑。
@@ -58,7 +58,7 @@
 
     <!-- 右栏：元信息 + 当前列表 -->
     <section class="chart-panel strategy-form-pane">
-        <div class="panel-title"><span>股票组信息</span></div>
+        <div class="panel-title"><span>目标股票池信息</span></div>
 
         <div class="form-field">
             <label class="form-label">名称 <span class="req">*</span></label>

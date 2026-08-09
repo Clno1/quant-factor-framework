@@ -1,0 +1,86 @@
+schema_version: 1
+universe: NASDAQ100
+
+provider_contract:
+  current_endpoint: nasdaq-constituent
+  historical_endpoint: historical-nasdaq-constituent
+  effective_date_field: dateAdded
+
+official_current:
+  url: https://api.nasdaq.com/api/quote/list-type/nasdaq100
+  minimum_members: 90
+  maximum_members: 110
+  maximum_staleness_calendar_days: 7
+
+# These are semantic canaries, not a complete licensed constituent history.
+# Publication stops if FMP changes any reviewed effective date or event set.
+verified_event_groups:
+  - id: nasdaq100_2024_lin_replaces_splk
+    effective_date: "2024-03-18"
+    additions: [LIN]
+    removals: [SPLK]
+    sources:
+      - https://ir.nasdaq.com/news-releases/news-release-details/linde-plc-join-nasdaq-100-indexr-beginning-march-18-2024
+
+  - id: nasdaq100_2024_arm_replaces_siri
+    effective_date: "2024-06-24"
+    additions: [ARM]
+    removals: [SIRI]
+    sources:
+      - https://ir.nasdaq.com/news-releases/news-release-details/arm-holdings-plc-join-nasdaq-100-indexr-beginning-june-24-2024
+
+  - id: nasdaq100_2024_smci_replaces_wba
+    effective_date: "2024-07-22"
+    additions: [SMCI]
+    removals: [WBA]
+    sources:
+      - https://ir.nasdaq.com/news-releases/news-release-details/super-micro-computer-inc-join-nasdaq-100-indexr-beginning-july
+
+  - id: nasdaq100_2024_app_replaces_dltr
+    effective_date: "2024-11-18"
+    additions: [APP]
+    removals: [DLTR]
+    sources:
+      - https://ir.nasdaq.com/news-releases/news-release-details/applovin-corporation-join-nasdaq-100-indexr-beginning-november
+
+  - id: nasdaq100_2024_annual_reconstitution
+    effective_date: "2024-12-23"
+    additions: [AXON, MSTR, PLTR]
+    removals: [ILMN, MRNA, SMCI]
+    sources:
+      - https://www.nasdaq.com/press-release/annual-changes-nasdaq-100-indexr-2024-12-13
+
+  - id: nasdaq100_2025_shop_replaces_mdb
+    effective_date: "2025-05-19"
+    additions: [SHOP]
+    removals: [MDB]
+    sources:
+      - https://ir.nasdaq.com/node/108996
+
+  - id: nasdaq100_2025_tri_replaces_anss
+    effective_date: "2025-07-28"
+    additions: [TRI]
+    removals: [ANSS]
+    sources:
+      - https://ir.nasdaq.com/node/109321
+
+  - id: nasdaq100_2025_annual_reconstitution
+    effective_date: "2025-12-22"
+    additions: [ALNY, FER, INSM, MPWR, STX, WDC]
+    removals: [BIIB, CDW, GFS, LULU, "ON", TTD]
+    sources:
+      - https://ir.nasdaq.com/news-releases/news-release-details/annual-changes-nasdaq-100-indexr-2
+
+  - id: nasdaq100_2026_wmt_replaces_azn
+    effective_date: "2026-01-20"
+    additions: [WMT]
+    removals: [AZN]
+    sources:
+      - https://ir.nasdaq.com/node/109851
+
+  - id: nasdaq100_2026_june_quarterly_rebalance
+    effective_date: "2026-06-22"
+    additions: [ALAB, CRWV, NBIS, RKLB, TER]
+    removals: [CHTR, CTSH, INSM, VRSK, ZS]
+    sources:
+      - https://www.nasdaq.com/press-release/nasdaq-100-indexr-june-2026-quarterly-changes-2026-06-12

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run or inspect the isolated intraday momentum monitor in shadow mode."""
+"""Run or inspect the isolated, promotion-gated intraday momentum monitor."""
 from __future__ import annotations
 
 import argparse
@@ -7,13 +7,17 @@ import asyncio
 import json
 from pathlib import Path
 import sys
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from src.alerts.discord import DiscordNotifier  # noqa: E402
 from src.breakouts.live.service import IntradayMomentumMonitor  # noqa: E402
+from src.breakouts.live.session import previous_xnys_sessions  # noqa: E402
 from src.breakouts.live.settings import IntradayMonitorSettings  # noqa: E402
 from src.breakouts.live.state import IntradayMonitorState  # noqa: E402
 from src.utils.env import load_local_env  # noqa: E402
@@ -21,7 +25,18 @@ from src.utils.env import load_local_env  # noqa: E402
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--shadow", action="store_true", help="Run without Discord delivery.")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--shadow", action="store_true", help="Run without Discord delivery.")
+    mode.add_argument(
+        "--live",
+        action="store_true",
+        help="Deliver minute signals after the five-session promotion gate passes.",
+    )
+    mode.add_argument(
+        "--auto",
+        action="store_true",
+        help="Run shadow until the promotion gate passes, then start live delivery.",
+    )
     parser.add_argument("--once", action="store_true", help="Execute one monitor cycle.")
     parser.add_argument("--status", action="store_true", help="Print persisted monitor status.")
     parser.add_argument(
@@ -39,13 +54,58 @@ def main() -> int:
         load_local_env()
     settings = IntradayMonitorSettings.load()
     state = IntradayMonitorState(settings.state_path)
+    reference_date = datetime.now(ZoneInfo(settings.timezone)).strftime("%Y-%m-%d")
+    expected_sessions = previous_xnys_sessions(
+        reference_date,
+        settings.required_shadow_sessions,
+    )
+    promotion = state.promotion_status(expected_sessions)
     if args.status:
-        print(json.dumps(state.status(), ensure_ascii=False, indent=2, sort_keys=True))
+        status = state.status()
+        status["promotion"] = promotion
+        status["configured_mode"] = "auto"
+        status["delivery_armed"] = settings.delivery_enabled
+        status["effective_auto_mode"] = (
+            "live"
+            if settings.delivery_enabled and promotion["eligible"]
+            else "shadow"
+        )
+        print(json.dumps(status, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
-    if not args.shadow:
-        parser.error("--shadow is required; Discord delivery is intentionally gated")
+    if not settings.enabled:
+        parser.error("intraday_momentum_monitor.enabled must be true")
+    if not args.shadow and not args.live and not args.auto:
+        parser.error("one of --shadow, --live or --auto is required")
+    notifier = None
+    delivery_mode = "shadow"
+    wants_live = args.live or (
+        args.auto and settings.delivery_enabled and promotion["eligible"]
+    )
+    if args.auto and settings.delivery_enabled and not settings.discord_webhook_url:
+        parser.error(
+            "INTRADAY_MOMENTUM_DISCORD_WEBHOOK_URL is required for auto promotion"
+        )
+    if wants_live:
+        if not settings.delivery_enabled:
+            parser.error("INTRADAY_MOMENTUM_DISCORD_ENABLED must be true for --live")
+        if not settings.discord_webhook_url:
+            parser.error(
+                "INTRADAY_MOMENTUM_DISCORD_WEBHOOK_URL is required for --live"
+            )
+        if not promotion["eligible"]:
+            parser.error(
+                "five-session shadow promotion gate has not passed: "
+                + json.dumps(promotion, ensure_ascii=False, sort_keys=True)
+            )
+        notifier = DiscordNotifier(settings.discord_webhook_url)
+        delivery_mode = "live"
 
-    monitor = IntradayMomentumMonitor(settings, state=state)
+    monitor = IntradayMomentumMonitor(
+        settings,
+        state=state,
+        delivery_mode=delivery_mode,
+        notifier=notifier,
+    )
     if args.once:
         result = asyncio.run(monitor.cycle(
             allow_closed=args.allow_closed,

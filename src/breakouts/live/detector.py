@@ -11,7 +11,7 @@ from src.breakouts.live.settings import IntradayMonitorSettings
 
 
 ALGORITHM_VERSION = "legacy-breakout-shadow-v1"
-PARAMETER_VERSION = "2026-07-28.2"
+PARAMETER_VERSION = "2026-08-08.1"
 TRIGGER_FAMILY = "MOMENTUM_BREAKOUT"
 
 

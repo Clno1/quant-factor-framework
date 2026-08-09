@@ -407,6 +407,14 @@ def _run_task(task_id: str) -> None:
     )
     top_group = int(task.get("top_group") or n_groups)
     exec_cfg = _resolve_execution_config(task.get("execution") or {})
+    risk_cfg = task.get("risk_config") or {}
+    tradability_cfg = risk_cfg.get("tradability")
+    require_point_in_time = bool(
+        risk_cfg.get(
+            "require_point_in_time_universe",
+            getattr(CONFIG.backtest, "require_point_in_time_universe", False),
+        )
+    )
     require_open = exec_cfg["timing"] == "next_open"
     data_contract = task.get("data_contract") or {}
 
@@ -526,17 +534,12 @@ def _run_task(task_id: str) -> None:
             universe=universe,
             start=r_start,
             end=r_end,
+            expected_generations=bundle.contract.factor_generations,
         )
         composite = comp_result.composite
         pit_required = point_in_time_required(
             universe,
-            strict=bool(
-                getattr(
-                    CONFIG.backtest,
-                    "require_point_in_time_universe",
-                    False,
-                )
-            ),
+            strict=require_point_in_time,
         )
         membership_mask, pit_result = build_membership_mask(
             composite.index,
@@ -644,6 +647,7 @@ def _run_task(task_id: str) -> None:
         open_df=open_prices,
         volume_df=volumes,
         timing=exec_cfg["timing"],
+        tradability=tradability_cfg,
     )
     decision_tradable_mask &= membership_mask.reindex(
         index=composite.index,
@@ -660,6 +664,8 @@ def _run_task(task_id: str) -> None:
         price_df=prices,
         volume_df=volumes,
         tradable_mask=decision_tradable_mask,
+        membership_mask=membership_mask,
+        membership_events=bundle.membership_events,
         execution=exec_cfg,
     )
 

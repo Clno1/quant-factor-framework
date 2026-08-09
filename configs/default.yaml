@@ -3,7 +3,7 @@
 # 所有模块统一从此文件读取参数，避免硬编码
 #
 # 阅读提示：
-#   1. universes / date_range / data 控制“数据准备”。
+#   1. research_universes / date_range / data 控制“数据准备”。
 #   2. factors / preprocessing / ic_analysis / factor_confidence 控制“因子研究”。
 #   3. backtest / backtest.execution / backtest.tradability 控制“回测成交假设”。
 #   4. webapp 控制“网页服务和 outputs 读取位置”。
@@ -19,20 +19,24 @@ universe:
   cache_days: 7
   point_in_time:
     membership_dir: "data/pit_universes"   # 可放 SP500.parquet/csv，至少包含 date,ticker
-    required_universes: [SP500, US_LIQUID_5M] # 动态成分池：缺历史快照或历史股票行情时拒绝回测
+    # 动态成分池：缺历史快照或历史股票行情时拒绝。
+    required_universes:
+      - SP500
+      - NASDAQ100
+      - SP500_MARKET_REGIME
+      - US_LIQUID_5M
     static_universes: [MAG7]                # 明确固定不变的研究池，不要求 PIT 文件
     # 主多因子 PIT 使用固定起点，避免相对日期 "5Y" 每天前移后丢掉旧发布版本的基线快照。
     # 1990 年宽基顶底研究仍使用 market_regime_research.point_in_time.start，
     # 两条研究链不会共用或覆盖各自的诊断结论。
     main_factor_start: "2020-01-01"
     sp500_corrections: "configs/sp500_pit_corrections.yaml"
+    nasdaq100_verification: "configs/nasdaq100_pit_verification.yaml"
 
-# 多股票池配置（新版本，pipeline 会循环跑每一个）
-universes:
-  enabled:
-    - SP500                        # 503 只 - 完整大盘统计
-    - MAG7                         # 7 只 - 头部科技股快速参考
-  default: "SP500"                 # Web 首页默认展示的池
+# 正式研究池角色注册表，也是预设股票池的唯一事实源。
+# Watchlist 不在这里；它属于用户目标投资池。
+research_universes:
+  registry_path: "configs/research_universes.yaml"
 
 # 回测时间范围
 # 支持的写法：
@@ -108,7 +112,9 @@ market_regime_research:
     - {symbol: "LQD",   start: "2002-07-30", kind: "etf"}
 
   point_in_time:
-    universe: "SP500"
+    universe: "SP500"                  # 研究语义；来源仍是 S&P 500
+    data_universe: "SP500_MARKET_REGIME" # 专属 DuckDB/Curated 长历史版本
+    publication_id: "SP500_MARKET_REGIME" # 专属 PIT 文件，禁止覆盖主因子 SP500
     start: "1990-01-01"
     strict: true
     min_snapshot_members: 450      # 含多股类和临时过渡，不能机械要求正好 500
@@ -201,7 +207,7 @@ momentum_alerts:
 
 # 独立盘中动量监控。当前只允许 shadow；不会从这里开启 Discord 或自动下单。
 intraday_momentum_monitor:
-  enabled: false
+  enabled: true                         # 进程仍由 systemd timer 控制；初始只运行 shadow
   asset_types:
     include_etfs: false
 
@@ -241,9 +247,18 @@ intraday_momentum_monitor:
 
   notifications:
     cooldown_minutes: 20
+    delivery_enabled: false             # 生产由独立 env 覆盖，且仍需通过五日晋级闸门
+    max_delivery_attempts: 3
+    max_messages_per_cycle: 5
     send_empty: false
 
-# 美股开盘前双频道日报。Webhook 密钥只允许来自环境变量或 .env.local。
+  observation:
+    required_sessions: 5
+    min_cycle_coverage: 0.85
+    max_error_cycle_ratio: 0.05
+    max_cycle_p95_seconds: 30.0
+
+# 美股盘前独立频道日报。生产当前只启用 momentum；Webhook 只来自环境变量或 .env.local。
 # 这是单向编排层；因子、回测、模拟盘、alerts 和 group_analytics 均不依赖它。
 premarket_digest:
   enabled: false
@@ -261,7 +276,7 @@ premarket_digest:
     min_evaluable_coverage: 0.80
 
   sector_rotation:
-    enabled: true
+    enabled: false                      # 当前盘前 timer 只向 momentum 频道发送
     universe: SP500
     taxonomy: FMP
     # 正式推送门槛高于单次 group writer 的最低发布门槛。
@@ -351,6 +366,9 @@ backtest:
   # 成交模型（v3 新增）：让回测尽量接近实盘可达上限
   execution:
     timing: "next_open"            # 强制 T+1 开盘成交；同日 close 成交已禁用
+    # PIT 成分在两次调仓间退出时立即卖出；若已停牌/退市而无下一开盘，
+    # 使用最后可交易收盘价结算，扣完整卖出成本，原权重留作现金到下次调仓。
+    membership_exit_policy: "next_open_or_last_close_to_cash"
     portfolio_value: 100000        # 回测用来把权重交易换算成估算股数/订单金额；模拟盘用账户现金
     fee_model: "ibkr_us_pro_fixed" # simple_bps / ibkr_us_pro_fixed / ibkr_us_pro_tiered / ibkr_us_lite
     slippage_model: "volume_share" # constant_bps / volume_share / none

@@ -10,10 +10,37 @@ import pandas as pd
 
 from src.alerts.config import AlertSettings, load_local_env
 from src.alerts.discord import DiscordNotifier, build_discord_payload
-from src.alerts.engine import _broad_pool, _completed_avg_dollar_volume, _provisional_daily_frame
+from src.alerts.engine import (
+    _broad_pool,
+    _completed_avg_dollar_volume,
+    _provisional_daily_frame,
+    run_live_alert_scan,
+)
 from src.alerts.state import AlertStateStore
 from src.data.fmp import get_batch_quotes, get_exchange_market_hours
 from scripts.configure_momentum_discord import _update_env_file
+
+
+class _FakeDailyDataset:
+    data_universe = "US_LIQUID_5M"
+    dataset_version_id = "version-test"
+
+    def __init__(
+        self,
+        universe: pd.DataFrame,
+        frames: dict[str, pd.DataFrame] | None = None,
+    ):
+        self.universe = universe
+        self.frames = frames or {}
+        self.contract = Mock()
+        self.contract.to_dict.return_value = {
+            "schema_version": 1,
+            "data_universe": self.data_universe,
+            "dataset_version_id": self.dataset_version_id,
+        }
+
+    def frame(self, ticker: str) -> pd.DataFrame:
+        return self.frames.get(ticker, pd.DataFrame())
 
 
 class FmpLiveQuoteTests(unittest.TestCase):
@@ -84,25 +111,79 @@ class AlertConfigTests(unittest.TestCase):
 
 
 class LiveFrameTests(unittest.TestCase):
+    @patch("src.alerts.engine.load_market_regime", return_value={"asof": "2026-07-28"})
+    @patch("src.alerts.engine.evaluate_daily_setup", return_value=None)
+    @patch("src.alerts.engine.get_batch_quotes")
     @patch("src.alerts.engine.scan_breakouts")
-    @patch("src.alerts.engine.get_universe")
+    @patch("src.alerts.engine._forced_tickers", return_value=set())
+    def test_live_scan_uses_one_version_bound_dataset(
+        self,
+        _forced_mock,
+        scan_mock,
+        quotes_mock,
+        _evaluate_mock,
+        _regime_mock,
+    ):
+        universe = pd.DataFrame({
+            "ticker": ["AEVA", "QQQ"],
+            "name": ["Aeva", "Nasdaq 100"],
+            "sector": ["Technology", ""],
+            "asset_type": ["STOCK", "ETF"],
+            "current_dollar_volume": [20_000_000.0, 5_000_000_000.0],
+        })
+        frame = pd.DataFrame({
+            "open": [10.0],
+            "high": [11.0],
+            "low": [9.0],
+            "close": [10.0],
+            "volume": [1_000_000.0],
+        }, index=[pd.Timestamp("2026-07-27")])
+        daily = _FakeDailyDataset(universe, {"AEVA": frame, "QQQ": frame})
+        selected: list[str] = []
+
+        def dataset_loader(**kwargs):
+            selected.extend(kwargs["ticker_selector"](universe))
+            return daily
+
+        scan_mock.return_value = {
+            "rows": [{"ticker": "AEVA"}],
+            "asof": "2026-07-27",
+        }
+        quotes_mock.return_value = pd.DataFrame({
+            "ticker": ["AEVA"],
+            "price": [10.0],
+            "timestamp": [pd.Timestamp("2026-07-28 14:30", tz="UTC").timestamp()],
+        }).set_index("ticker")
+
+        result = run_live_alert_scan(
+            AlertSettings(),
+            market_hours={"isMarketOpen": True},
+            include_intraday=False,
+            dataset_loader=dataset_loader,
+        )
+
+        self.assertEqual(selected, ["AEVA", "QQQ"])
+        self.assertEqual(result["dataset_version_id"], "version-test")
+        self.assertEqual(result["data_contract"]["data_universe"], "US_LIQUID_5M")
+
+    @patch("src.alerts.engine.scan_breakouts")
     def test_broad_pool_excludes_etfs_including_forced_tickers(
         self,
-        universe_mock,
         scan_mock,
     ):
-        universe_mock.return_value = pd.DataFrame({
+        daily = _FakeDailyDataset(pd.DataFrame({
             "ticker": ["AEVA", "SOXL"],
             "name": ["Aeva Technologies", "Direxion Semiconductor Bull 3X"],
             "sector": ["Technology", ""],
             "asset_type": ["STOCK", "ETF"],
             "current_dollar_volume": [20_000_000.0, 2_000_000_000.0],
-        })
+        }))
         scan_mock.return_value = {"rows": [{"ticker": "AEVA"}], "asof": "2026-07-10"}
 
         tickers, universe, _, forced, excluded, source_count = _broad_pool(
             AlertSettings(include_etfs=False),
             {"AEVA", "SOXL"},
+            daily,
         )
 
         self.assertEqual(tickers, ["AEVA"])
@@ -114,15 +195,14 @@ class LiveFrameTests(unittest.TestCase):
         self.assertEqual(scan_tickers, ["AEVA"])
 
     @patch("src.alerts.engine.scan_breakouts")
-    @patch("src.alerts.engine.get_universe")
-    def test_broad_pool_can_include_etfs(self, universe_mock, scan_mock):
-        universe_mock.return_value = pd.DataFrame({
+    def test_broad_pool_can_include_etfs(self, scan_mock):
+        daily = _FakeDailyDataset(pd.DataFrame({
             "ticker": ["AEVA", "SOXL"],
             "name": ["Aeva Technologies", "Direxion Semiconductor Bull 3X"],
             "sector": ["Technology", ""],
             "asset_type": ["STOCK", "ETF"],
             "current_dollar_volume": [20_000_000.0, 2_000_000_000.0],
-        })
+        }))
         scan_mock.return_value = {
             "rows": [{"ticker": "AEVA"}, {"ticker": "SOXL"}],
             "asof": "2026-07-10",
@@ -131,6 +211,7 @@ class LiveFrameTests(unittest.TestCase):
         tickers, universe, _, forced, excluded, _ = _broad_pool(
             AlertSettings(include_etfs=True),
             {"SOXL"},
+            daily,
         )
 
         self.assertEqual(tickers, ["AEVA", "SOXL"])
@@ -139,41 +220,29 @@ class LiveFrameTests(unittest.TestCase):
         self.assertEqual(excluded, set())
 
     @patch("src.alerts.engine.scan_breakouts")
-    @patch("src.alerts.engine.get_security_profile")
-    @patch("src.alerts.engine.get_universe")
-    def test_broad_pool_profiles_foreign_domiciled_us_listings(
+    def test_broad_pool_excludes_forced_ticker_missing_from_published_version(
         self,
-        universe_mock,
-        profile_mock,
         scan_mock,
     ):
-        universe_mock.return_value = pd.DataFrame({
+        daily = _FakeDailyDataset(pd.DataFrame({
             "ticker": ["AEVA"],
             "name": ["Aeva Technologies"],
             "sector": ["Technology"],
             "asset_type": ["STOCK"],
             "current_dollar_volume": [20_000_000.0],
-        })
-        profile_mock.return_value = {
-            "ticker": "TSM",
-            "name": "Taiwan Semiconductor Manufacturing Company Limited",
-            "sector": "Technology",
-            "sub_industry": "Semiconductors",
-            "asset_type": "STOCK",
-            "exchange": "NYSE",
-            "is_actively_trading": True,
-        }
+        }))
         scan_mock.return_value = {"rows": [{"ticker": "AEVA"}], "asof": "2026-07-10"}
 
         tickers, universe, _, forced, excluded, _ = _broad_pool(
             AlertSettings(include_etfs=False),
             {"TSM"},
+            daily,
         )
 
-        self.assertEqual(tickers, ["AEVA", "TSM"])
-        self.assertIn("TSM", universe["ticker"].tolist())
-        self.assertEqual(forced, {"TSM"})
-        self.assertEqual(excluded, set())
+        self.assertEqual(tickers, ["AEVA"])
+        self.assertNotIn("TSM", universe["ticker"].tolist())
+        self.assertEqual(forced, set())
+        self.assertEqual(excluded, {"TSM"})
 
     def test_provisional_bar_replaces_same_session_without_mutating_cache(self):
         index = pd.bdate_range("2026-01-02", periods=70)
