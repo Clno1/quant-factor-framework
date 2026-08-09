@@ -1,7 +1,7 @@
 # 研究股票池分层与 NASDAQ100 改造实施记录
 
 更新日期：2026-08-09  
-状态：代码实现与本地 379 项回归完成，正式数据重发和 SG 部署验收待执行
+状态：代码、本地正式 SP500/MAG7 重发与 409 项回归完成；NASDAQ100 数据门禁和 SG 部署待完成
 
 本文件记录
 [`research_universe_redesign_requirements.md`](research_universe_redesign_requirements.md)
@@ -22,26 +22,28 @@ Research Universe registry
   -> 回测 / 模拟盘冻结快照与逐票成本账本
 ```
 
-但截至 2026-08-09，不能把本机或 SG 宣称为新版正式发布完成：
+截至 2026-08-09，本机主池和参考池已经按新合同重发，但仍不能把完整双池改造或 SG 宣称为完成：
 
-- 本机 SP500 和 MAG7 最新版本仍是 2026-07-31 的旧 catalog schema，缺
-  `universe_sha256` 和 `manifest_sha256`，新版 Reader 将其标为 `INVALID`；
+- 本机 SP500 正式版本 `6d080d2a1822440f8b64ea536a246d50` 与研究 publication
+  `7f0472d3-8c8e-447c-af98-70d91a469218` 已通过四哈希和因子 generation 校验；
+- 本机 MAG7 正式版本 `4da3efdf67624a1db7c559d764917387` 与研究 publication
+  `0522bac7-5b94-4e64-b0db-c214f5306b74` 已发布；
 - NASDAQ100 当前成分严格比对发现 FMP 独有 `EA`、Nasdaq 官方独有 `HONA`，候选发布按设计
   fail closed；
 - NASDAQ100 尚无正式行情和 8 因子研究发布；
-- 当前跨池 generation `20260809T103820_bccb53fc05` 的 8 个因子均为
+- 当前跨池 generation `20260809T153058_3626ef6a39` 的 8 个因子均为
   `INSUFFICIENT`；
-- 本轮改造尚未部署到 `/home/projects/quant`，SG 仍以服务器实机版本为准。
+- 可部署代码基线为提交 `3a52611`；本轮尚未连接 SG，服务器仍以实机版本为准。
 
 ## 2. 分阶段状态
 
 | 阶段 | 代码状态 | 正式数据/生产状态 |
 |---|---|---|
-| Phase 0 正确性 | 完成 | 必须重发 SP500/MAG7 v2 版本并重跑研究 |
+| Phase 0 正确性 | 完成 | 本机 SP500/MAG7 已重发；SG 待重发 |
 | Phase 1 领域模型 | 完成 | 待随代码部署 SG |
 | Phase 2 NASDAQ100 数据 | 构建器、10 组官方事件门禁、调度完成 | 当前成分不一致，禁止发布 |
 | Phase 3 跨池研究 | 评估、不可变 generation、原子 pointer 完成 | NASDAQ100 缺失，结论为 `INSUFFICIENT` |
-| Phase 4 网页 | 页面、API、导航、冻结证据和成本账本完成 | 本地验收后再部署 SG |
+| Phase 4 网页 | 页面、API、导航、冻结证据和成本账本完成 | 本地验收通过，待部署 SG |
 | Phase 5 用户池晋升 | 不在本期范围 | 未实施 |
 
 ## 3. 数据正确性改造

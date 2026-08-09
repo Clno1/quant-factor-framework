@@ -33,6 +33,7 @@
 ## 运维
 
 - [`sg_operations_overview.md`](sg_operations_overview.md)：当前 SG 目标拓扑和已知差异。
+- [`sg_manual_deploy_3a52611.md`](sg_manual_deploy_3a52611.md)：提交 `3a52611` 的 SG 手工备份、部署、数据重发与验收命令。
 - [`server_daily_runbook.md`](server_daily_runbook.md)：日常检查、日志和发布命令。
 - [`singapore_server_deployment.md`](singapore_server_deployment.md)：通用首次安装模板。
 

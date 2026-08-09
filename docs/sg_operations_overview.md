@@ -6,11 +6,12 @@
 
 | 范围 | 状态 |
 |---|---|
-| 本地 `/Users/huozhihong/Documents/Quant` | 研究池分层、NASDAQ100 和因子数据浏览器代码已实现；399 项测试通过，正式数据重发待完成 |
-| SG `/home/projects/quant` | 仍是基线 `bd8fdd6` 加动量白名单；本轮研究池改造尚未部署 |
+| 本地 `/Users/huozhihong/Documents/Quant` | 提交 `3a52611`；409 项测试通过；SP500/MAG7 正式数据和研究已重发 |
+| SG `/home/projects/quant` | 本轮尚未建立 SSH 连接；不得用本地结果推断服务器已经部署 |
 
 SG 发布使用精确白名单 rsync，不从未推送的本地 `main` 做远端 `git pull`。部署标记保存在
-`/home/projects/quant/.deploy-commit`；后缀表示它包含尚未提交的本次白名单改动。
+`/home/projects/quant/.deploy-commit`。本次候选提交为 `3a52611`，部署时仍须排除 `.git`、`data`、
+`outputs`、`logs`、虚拟环境和密钥文件。
 
 ## 2. 目标生产拓扑
 

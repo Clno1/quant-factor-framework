@@ -1,6 +1,6 @@
 # 回测与模拟盘交易费用说明
 
-更新日期：2026-07-30
+更新日期：2026-08-09
 
 本文记录系统内回测和模拟盘使用的成交、滑点、手续费模型。相关代码集中在
 `src/execution/models.py`，默认参数在 `configs/default.yaml` 的
@@ -100,6 +100,23 @@ slippage_cost = abs(quantity) * raw_price * slippage_bps / 10000
 `T+1 open`、没有 `T+2 open`，页面仍可显示 T 日信号，但不会生成一笔成本与收益期限不一致的
 截断交易。
 
+### PIT 成分退出与停牌
+
+动态股票池内持仓在两次正常调仓之间退出时，默认执行策略是
+`next_open_or_last_close_to_cash`：
+
+1. 正常退出按下一正式交易日开盘卖出，完整计算滑点、券商佣金和监管费用；
+2. 若下一日停牌但后来恢复报价，沿用最后一次真实可成交时的组合归属，在首个恢复开盘卖出；
+3. 若并购后不再恢复交易，只有版本绑定事件账本明确为收购/合并时才允许用最后可交易收盘近似；
+4. 若事件账本明确为 FDIC 接管、破产或 receivership，按 100% 损失 write-off，不虚构券商成交；
+5. 未审阅的事件理由、缺事件账本或没有可验证价格时 fail closed；
+6. 退出后的权重保持现金直到下一次正常调仓，不对剩余股票事后放大权重。
+
+本地真实 SP500 验收中，`FRC` 在 2023-04-28 仍由 Q3 持有，2023-05-01/02 无开盘而未发生
+理论换组，最终于 2023-05-03 首个恢复开盘 `0.396` 卖出。逐票账本记录
+`event_type=MEMBERSHIP_EXIT`、`pricing_method=NEXT_OPEN`、`old_weight=0.01`，并计入动态滑点和
+IBKR 风格费用。
+
 回测产物中会保存：
 
 - `holdings.parquet`：逐票目标持仓权重。
@@ -141,6 +158,9 @@ slippage_cost = abs(quantity) * raw_price * slippage_bps / 10000
 - QuantConnect Fee/Slippage 模型设计：
   https://www.quantconnect.com/docs/v2/writing-algorithms/reality-modeling/transaction-fees/supported-models
   https://www.quantconnect.com/docs/v2/writing-algorithms/reality-modeling/slippage/supported-models
+- QuantConnect 退市和证券移除处理：
+  https://www.quantconnect.com/docs/v2/writing-algorithms/securities/asset-classes/us-equity/corporate-actions
+  https://www.quantconnect.com/docs/v2/writing-algorithms/securities/requesting-data
 - Zipline `VolumeShareSlippage`：
   https://zipline.ml4trading.io/api-reference.html#zipline.finance.slippage.VolumeShareSlippage
 - Backtrader 佣金与滑点机制：

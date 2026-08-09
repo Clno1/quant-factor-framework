@@ -42,6 +42,7 @@ data/lake/curated/equity_daily/universe=<UNIVERSE>/version=<version_id>/
   bars.parquet
   universe.parquet
   membership.parquet       # 动态 PIT 池才有
+  membership_events.parquet # 动态 PIT 池的成分变更事件账本
   manifest.json
 ```
 
@@ -71,7 +72,8 @@ Reader 可把长表 pivot 为 `date × ticker` 宽表，供既有因子接口使
 
 ## 4. 增量摄取
 
-首次发布读取配置研究起点。后续发布执行：
+正式研究池首次发布固定从 `universe.point_in_time.main_factor_start` 读取历史；当前值为
+`2020-01-01`。这段历史包含因子 warm-up，正式五年研究窗口从 `2021-08-09` 开始。后续发布执行：
 
 ```text
 上一正式版本
@@ -109,8 +111,8 @@ version ID 复现。相对起点 `5Y` 不会让系统每天自动删掉最早一
 ## 6. PIT 冻结
 
 SP500 发布前必须先有有效的 `data/pit_universes/SP500.parquet`。Writer 会把本次使用的 PIT
-快照复制进版本目录，并记录 `membership_sha256`。因此后来修订 PIT 文件不会偷偷改变已经完成
-的历史回测。
+快照和规范化成分事件账本都复制进版本目录，并分别记录 SHA-256。因此后来修订 PIT 文件或原始
+事件理由不会偷偷改变已经完成的历史回测。Reader 会同时验证路径不能越出版本目录和文件哈希。
 
 发布条件包括：最后快照等于目标 session、最后快照与当前 constituents 一致、历史事件通过
 校验、历史成员行情满足覆盖门槛。详细格式见
