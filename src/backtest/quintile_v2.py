@@ -1,8 +1,8 @@
 """Price-semantics-safe quantile backtest.
 
-This is the formal backtest entry point for next-open research.  Unlike the
+This is the formal backtest entry point for next-open research. Unlike the
 legacy function, execution prices, total-return attribution prices and benchmark
-returns are separate required inputs.  This prevents dividend-adjusted prices
+returns are separate required inputs. This prevents dividend-adjusted prices
 from leaking into fills/tradability/forced exits and prevents executable opens
 from silently dropping dividends from holding PnL.
 """
@@ -13,10 +13,10 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+from src.backtest.membership_exit_v2 import apply_membership_exit_policy_v2
 from src.backtest.metrics import performance_summary, relative_performance_summary
 from src.backtest.quintile import (
     QuintileResult,
-    _apply_membership_exit_policy,
     _assign_groups_on_rebalance,
     _build_execution_details,
     _compute_turnover,
@@ -42,6 +42,7 @@ def quintile_backtest_v2(
     execution_open_df: pd.DataFrame,
     execution_close_df: pd.DataFrame,
     total_return_open_df: pd.DataFrame,
+    total_return_close_df: pd.DataFrame,
     volume_df: pd.DataFrame | None = None,
     tradable_mask: pd.DataFrame | None = None,
     membership_mask: pd.DataFrame | None = None,
@@ -59,9 +60,11 @@ def quintile_backtest_v2(
         tradability lookback checks.
     execution_open_df / execution_close_df
         Split-adjusted executable market prices. These are the only matrices
-        allowed for fills, price floors, dollar volume and forced exits.
-    total_return_open_df
-        Synthetic dividend-adjusted open used only for holding-period PnL.
+        allowed for fills, price floors, dollar volume, ADV and execution-side
+        forced-exit accounting.
+    total_return_open_df / total_return_close_df
+        Dividend-adjusted attribution prices. They are never fill prices; they
+        are used only to measure economic PnL, including forced-exit intervals.
     benchmark_returns
         Required benchmark total return for the same [t open, t+1 open)
         interval, labelled on t. Formal runs never silently fall back to an
@@ -82,12 +85,14 @@ def quintile_backtest_v2(
         raise ValueError("Formal backtest requires execution_close_df")
     if total_return_open_df is None or total_return_open_df.empty:
         raise ValueError("Formal backtest requires total_return_open_df")
+    if total_return_close_df is None or total_return_close_df.empty:
+        raise ValueError("Formal backtest requires total_return_close_df")
     if benchmark_returns is None or benchmark_returns.empty:
         raise ValueError(
             "Formal backtest requires an explicit immutable benchmark return series"
         )
 
-    # total_return_open is an attribution series, never an execution price.
+    # Total-return open is an attribution series, never an execution price.
     held_returns = total_return_open_df.pct_change(fill_method=None).shift(-1)
     common_dates = factor_df.index.intersection(held_returns.index)
     common_cols = factor_df.columns.intersection(held_returns.columns)
@@ -100,6 +105,12 @@ def quintile_backtest_v2(
         index=common_dates, columns=common_cols
     )
     execution_close = execution_close_df.reindex(
+        index=common_dates, columns=common_cols
+    )
+    total_return_open = total_return_open_df.reindex(
+        index=common_dates, columns=common_cols
+    )
+    total_return_close = total_return_close_df.reindex(
         index=common_dates, columns=common_cols
     )
     volume = (
@@ -139,15 +150,17 @@ def quintile_backtest_v2(
         step_days=rebalance_days,
     )
 
-    # Membership settlement is explicitly in executable-price units.
-    r, forced_exit_events = _apply_membership_exit_policy(
+    # Fill prices remain executable; return attribution remains total-return.
+    r, forced_exit_events = apply_membership_exit_policy_v2(
         r,
         assign_held,
         membership_mask=membership_mask,
         membership_events=membership_events,
         rebalance_dates=rebal_dates,
-        open_df=execution_open,
-        close_df=execution_close,
+        execution_open_df=execution_open,
+        execution_close_df=execution_close,
+        total_return_open_df=total_return_open,
+        total_return_close_df=total_return_close,
         policy=exec_cfg["membership_exit_policy"],
     )
 
