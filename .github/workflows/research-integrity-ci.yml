@@ -32,7 +32,7 @@ jobs:
           python -m pytest -q
           tests/test_preprocessing_audit.py
           tests/test_data_foundation.py
-          tests/test_strategy_composition.py
-          tests/test_run_mvp.py
-          tests/test_web_backtest.py
+          tests/test_strategy_composition_integrity.py
+          tests/test_run_mvp_cli.py
+          tests/test_web_backtest_detail.py
           tests/test_decision_replay.py
