@@ -20,6 +20,7 @@ from src.data.benchmark import (
 )
 from src.data.foundation import MarketDataReader
 from src.data.price_semantics import PriceSemantics
+from src.research_universes import research_universe_registry
 from src.research_universes.registry import ResearchUniverseRegistryError
 
 
@@ -206,28 +207,29 @@ def install_data_contract_benchmark_adapter() -> None:
                 benchmark = _BENCHMARK_CONTRACTS.get(key)
 
             if benchmark is None:
-                # Task creation can serialize a contract before wide tables are
-                # loaded. Resolve only immutable metadata here so SPY/QQQ is
-                # frozen from the beginning, not appended merely at task end.
-                reader = MarketDataReader()
+                # Only registered research universes have a formal ETF benchmark.
+                # Check the registry before touching a reader: ad-hoc/test/watchlist
+                # DataContracts may be backed by an injected reader/catalog and
+                # must not be re-resolved against the process-global data root.
                 try:
-                    primary = reader.require_version(
-                        str(self.data_universe).upper(),
-                        self.dataset_version_id,
-                    )
-                    resolved = resolve_registered_benchmark_contract(
-                        self.requested_universe,
-                        primary_version=primary,
-                        reader=reader,
-                    ).to_dict()
+                    research_universe_registry().get(self.requested_universe)
                 except ResearchUniverseRegistryError:
-                    # Ad-hoc/watchlist contracts intentionally have no registered
-                    # benchmark identity. Their explicit basket benchmark is
-                    # attached to the in-memory backtest result instead.
                     resolved = None
-                except BenchmarkDataError as exc:
-                    payload["benchmark_error"] = str(exc)
-                    resolved = None
+                else:
+                    reader = MarketDataReader()
+                    try:
+                        primary = reader.require_version(
+                            str(self.data_universe).upper(),
+                            self.dataset_version_id,
+                        )
+                        resolved = resolve_registered_benchmark_contract(
+                            self.requested_universe,
+                            primary_version=primary,
+                            reader=reader,
+                        ).to_dict()
+                    except BenchmarkDataError as exc:
+                        payload["benchmark_error"] = str(exc)
+                        resolved = None
                 if resolved is not None:
                     _cache_benchmark_contract(
                         self.requested_universe,
