@@ -1,8 +1,10 @@
 """Cross-sectional factor neutralization with temporal-integrity gates.
 
-Formal historical neutralization is allowed only when the exposure itself is
-point-in-time.  A latest-known sector snapshot or market-cap snapshot is a
-future-contaminated historical regressor and must never be silently applied.
+Formal historical industry neutralization is applied only when the classification
+itself is point-in-time.  A latest-known industry snapshot is explicitly skipped
+(and audited) so research can continue without contaminated residuals.  Market-
+cap neutralization is stricter: if it is requested, a valid PIT date x ticker
+matrix is mandatory and the pipeline fails closed otherwise.
 """
 from __future__ import annotations
 
@@ -23,7 +25,7 @@ PIT_MARKET_CAP_POLICIES = {"PIT_EFFECTIVE_DATED", "PIT_DAILY"}
 
 
 class NeutralizationDataError(ValueError):
-    """Requested neutralization exposure is missing or not point-in-time."""
+    """Requested neutralization exposure is missing or violates PIT semantics."""
 
 
 @dataclass(frozen=True)
@@ -40,8 +42,11 @@ class NeutralizationAudit:
     missing_mcap_observations: int
     industry_coverage: float
     daily: tuple[dict, ...]
+    requested_industry: bool = False
+    requested_mcap: bool = False
     industry_temporal_policy: str | None = None
     mcap_temporal_policy: str | None = None
+    industry_skip_reason: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -56,35 +61,31 @@ def _temporal_policy(value: Any, key: str) -> str | None:
     return normalized or None
 
 
-def _validate_industry_contract(
+def _industry_contract(
     sector_map: pd.Series | pd.DataFrame | None,
-) -> str:
+) -> tuple[str | None, pd.DataFrame | None, str | None]:
+    """Return (policy, usable PIT matrix, skip reason)."""
     if sector_map is None or getattr(sector_map, "empty", True):
-        raise NeutralizationDataError(
-            "Industry neutralization is enabled but no PIT sector exposure was supplied"
-        )
+        return None, None, "missing_industry_exposure"
     policy = _temporal_policy(sector_map, "classification_policy")
     if policy != PIT_CLASSIFICATION_POLICY:
-        raise NeutralizationDataError(
-            "Formal historical industry neutralization requires "
-            f"classification_policy={PIT_CLASSIFICATION_POLICY}; observed={policy or 'MISSING'}. "
-            "Latest-known sector snapshots are intentionally rejected until a PIT "
-            "classification source is published."
+        return policy, None, (
+            "non_pit_industry_exposure_rejected: expected="
+            f"{PIT_CLASSIFICATION_POLICY} observed={policy or 'MISSING'}"
         )
     if isinstance(sector_map, pd.Series):
         raise NeutralizationDataError(
-            "A static ticker->sector Series cannot represent PIT historical classification"
+            "classification_policy claims PIT but a static ticker->sector Series "
+            "cannot represent historical classification"
         )
-    if "sector" in sector_map.columns:
+    if "sector" in sector_map.columns or not isinstance(
+        sector_map.index, pd.DatetimeIndex
+    ):
         raise NeutralizationDataError(
-            "A one-row-per-security sector table is static metadata, not a date x ticker "
-            "PIT classification matrix"
+            "classification_policy claims PIT but sector exposure is not a "
+            "date x ticker matrix"
         )
-    if not isinstance(sector_map.index, pd.DatetimeIndex):
-        raise NeutralizationDataError(
-            "PIT sector exposure must be a date x ticker DataFrame"
-        )
-    return policy
+    return policy, sector_map, None
 
 
 def _validate_mcap_contract(mcap_df: pd.DataFrame | None) -> str:
@@ -231,65 +232,121 @@ def neutralize_industry(
     *,
     return_audit: bool = False,
 ) -> pd.DataFrame | tuple[pd.DataFrame, NeutralizationAudit]:
-    """Neutralize industry / market cap using only PIT exposure matrices."""
+    """Neutralize only with temporally valid exposures."""
     if factor_df.empty:
         empty = factor_df.copy()
         audit = NeutralizationAudit(False, False, 0, 0, 0, 0, 0, 0, 0.0, ())
         return (empty, audit) if return_audit else empty
 
-    use_industry = bool(getattr(CONFIG.preprocessing, "neutralize_industry", False))
-    use_mcap = bool(getattr(CONFIG.preprocessing, "neutralize_mcap", False))
-    if not use_industry and not use_mcap:
+    requested_industry = bool(
+        getattr(CONFIG.preprocessing, "neutralize_industry", False)
+    )
+    requested_mcap = bool(getattr(CONFIG.preprocessing, "neutralize_mcap", False))
+    if not requested_industry and not requested_mcap:
         result = factor_df.copy()
         observations = int(result.notna().sum().sum())
         audit = NeutralizationAudit(
-            False, False, 0, len(result), observations, observations, 0, 0, 1.0, ()
+            False,
+            False,
+            0,
+            len(result),
+            observations,
+            observations,
+            0,
+            0,
+            1.0,
+            (),
+            requested_industry=False,
+            requested_mcap=False,
         )
         return (result, audit) if return_audit else result
 
-    industry_policy = (
-        _validate_industry_contract(sector_map) if use_industry else None
-    )
-    mcap_policy = _validate_mcap_contract(mcap_df) if use_mcap else None
-    sector_frame = sector_map if isinstance(sector_map, pd.DataFrame) else None
+    industry_policy, sector_frame, industry_skip_reason = _industry_contract(
+        sector_map
+    ) if requested_industry else (None, None, None)
+    active_industry = requested_industry and sector_frame is not None
+    if requested_industry and not active_industry:
+        log.warning(
+            "Industry neutralization requested but skipped to preserve PIT integrity: %s",
+            industry_skip_reason,
+        )
+
+    mcap_policy = _validate_mcap_contract(mcap_df) if requested_mcap else None
+    active_mcap = requested_mcap
+
+    if not active_industry and not active_mcap:
+        result = factor_df.copy()
+        observations = int(result.notna().sum().sum())
+        daily = tuple(
+            {
+                "date": pd.Timestamp(dt).date().isoformat(),
+                "input_non_null": int(row.notna().sum()),
+                "regression_observations": 0,
+                "known_industry": 0,
+                "missing_industry": int(row.notna().sum()),
+                "missing_mcap": 0,
+                "output_non_null": int(row.notna().sum()),
+                "applied": False,
+                "reason": industry_skip_reason or "neutralization_not_requested",
+            }
+            for dt, row in factor_df.iterrows()
+        )
+        audit = NeutralizationAudit(
+            enabled_industry=False,
+            enabled_mcap=False,
+            applied_days=0,
+            skipped_days=len(result),
+            observations=observations,
+            known_industry_observations=0,
+            missing_industry_observations=observations if requested_industry else 0,
+            missing_mcap_observations=0,
+            industry_coverage=0.0 if requested_industry else 1.0,
+            daily=daily,
+            requested_industry=requested_industry,
+            requested_mcap=requested_mcap,
+            industry_temporal_policy=industry_policy,
+            mcap_temporal_policy=mcap_policy,
+            industry_skip_reason=industry_skip_reason,
+        )
+        return (result, audit) if return_audit else result
 
     min_obs = int(getattr(CONFIG.preprocessing, "neutralize_min_obs", 30))
     rows: list[pd.Series] = []
-    daily: list[dict] = []
+    daily_rows: list[dict] = []
     applied_count = 0
     for dt, row in factor_df.iterrows():
         dt = pd.Timestamp(dt)
         sector = (
             _sector_row(sector_frame, dt, factor_df.columns)
-            if use_industry and sector_frame is not None
+            if active_industry and sector_frame is not None
             else None
         )
         mcap_row = (
             mcap_df.loc[dt].reindex(factor_df.columns)
-            if use_mcap and mcap_df is not None and dt in mcap_df.index
+            if active_mcap and mcap_df is not None and dt in mcap_df.index
             else None
         )
         neutralized, applied, diagnostics = _neutralize_row(
             row,
             sector,
             mcap_row,
-            use_industry=use_industry,
-            use_mcap=use_mcap,
+            use_industry=active_industry,
+            use_mcap=active_mcap,
             min_obs=min_obs,
         )
         rows.append(neutralized)
-        daily.append({"date": dt.date().isoformat(), **diagnostics})
+        daily_rows.append({"date": dt.date().isoformat(), **diagnostics})
         applied_count += int(applied)
 
     skipped = len(rows) - applied_count
     result = pd.DataFrame(rows, index=factor_df.index, columns=factor_df.columns)
-    observations = sum(int(item["input_non_null"]) for item in daily)
-    known = sum(int(item["known_industry"]) for item in daily)
-    missing_industry = sum(int(item["missing_industry"]) for item in daily)
-    missing_mcap = sum(int(item["missing_mcap"]) for item in daily)
+    observations = sum(int(item["input_non_null"]) for item in daily_rows)
+    known = sum(int(item["known_industry"]) for item in daily_rows)
+    missing_industry = sum(int(item["missing_industry"]) for item in daily_rows)
+    missing_mcap = sum(int(item["missing_mcap"]) for item in daily_rows)
     audit = NeutralizationAudit(
-        enabled_industry=use_industry,
-        enabled_mcap=use_mcap,
+        enabled_industry=active_industry,
+        enabled_mcap=active_mcap,
         applied_days=applied_count,
         skipped_days=skipped,
         observations=observations,
@@ -297,9 +354,12 @@ def neutralize_industry(
         missing_industry_observations=missing_industry,
         missing_mcap_observations=missing_mcap,
         industry_coverage=(known / observations if observations else 0.0),
-        daily=tuple(daily),
+        daily=tuple(daily_rows),
+        requested_industry=requested_industry,
+        requested_mcap=requested_mcap,
         industry_temporal_policy=industry_policy,
         mcap_temporal_policy=mcap_policy,
+        industry_skip_reason=industry_skip_reason,
     )
     if skipped:
         raise NeutralizationDataError(
@@ -309,8 +369,8 @@ def neutralize_industry(
     log.info(
         "PIT neutralization finished: applied=%d industry=%s mcap=%s",
         applied_count,
-        use_industry,
-        use_mcap,
+        active_industry,
+        active_mcap,
     )
     return (result, audit) if return_audit else result
 
