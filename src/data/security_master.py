@@ -16,6 +16,8 @@ import pandas as pd
 
 UNKNOWN_CLASSIFICATION = "UNKNOWN"
 CLASSIFICATION_POLICY = "LATEST_KNOWN_BACKFILL_NOT_PIT"
+PIT_CLASSIFICATION_POLICY = "PIT_EFFECTIVE_DATED"
+MARKET_CAP_POLICY = "LATEST_KNOWN_NOT_PIT"
 
 SecurityProfileFetcher = Callable[[str], Mapping[str, Any] | None]
 
@@ -139,6 +141,7 @@ def build_version_security_master(
                 "source_asof": pd.Timestamp(target_session),
                 "classification_policy": CLASSIFICATION_POLICY,
                 "classification_known": bool(known),
+                "market_cap_policy": MARKET_CAP_POLICY,
                 "is_current_member": ticker in current_lookup,
                 "snapshot_date": pd.Timestamp(target_session),
             }
@@ -149,22 +152,59 @@ def build_version_security_master(
 def classification_coverage(frame: pd.DataFrame) -> dict[str, Any]:
     """Summarize known industry metadata without treating UNKNOWN as coverage."""
     if frame.empty:
-        return {"total": 0, "known": 0, "coverage": 0.0, "unknown_tickers": []}
+        return {
+            "total": 0,
+            "known": 0,
+            "coverage": 0.0,
+            "unknown_tickers": [],
+            "temporal_policy": None,
+            "market_cap_temporal_policy": None,
+        }
     known = frame.get(
         "classification_known",
         frame["sector"].fillna("").ne(UNKNOWN_CLASSIFICATION),
     ).fillna(False).astype(bool)
     unknown = sorted(frame.loc[~known, "ticker"].astype(str).tolist())
+    classification_policies = sorted(
+        set(
+            frame.get("classification_policy", pd.Series(dtype="object"))
+            .dropna()
+            .astype(str)
+            .str.strip()
+        )
+        - {""}
+    )
+    market_cap_policies = sorted(
+        set(
+            frame.get("market_cap_policy", pd.Series(dtype="object"))
+            .dropna()
+            .astype(str)
+            .str.strip()
+        )
+        - {""}
+    )
     return {
         "total": int(len(frame)),
         "known": int(known.sum()),
         "coverage": float(known.mean()),
         "unknown_tickers": unknown,
+        "temporal_policy": (
+            classification_policies[0]
+            if len(classification_policies) == 1
+            else ("MIXED" if classification_policies else None)
+        ),
+        "market_cap_temporal_policy": (
+            market_cap_policies[0]
+            if len(market_cap_policies) == 1
+            else ("MIXED" if market_cap_policies else None)
+        ),
     }
 
 
 __all__ = [
     "CLASSIFICATION_POLICY",
+    "MARKET_CAP_POLICY",
+    "PIT_CLASSIFICATION_POLICY",
     "UNKNOWN_CLASSIFICATION",
     "build_version_security_master",
     "classification_coverage",
