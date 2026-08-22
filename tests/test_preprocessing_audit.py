@@ -45,4 +45,8 @@ def test_unknown_industry_is_audited_but_not_silently_removed():
     assert audit.raw_non_null_clean_all_null_tickers == ()
     assert audit.neutralization["missing_industry_observations"] == 2
     assert audit.neutralization["industry_coverage"] == 0.75
-    assert all(row["applied"] for row in audit.neutralization["daily"])
+    # Static/latest-known sector labels remain useful for coverage diagnostics,
+    # but formal historical residualization must not use them as regressors.
+    assert audit.neutralization["enabled_industry"] is False
+    assert not any(row["applied"] for row in audit.neutralization["daily"])
+    assert "non_pit" in str(audit.neutralization["industry_skip_reason"])
