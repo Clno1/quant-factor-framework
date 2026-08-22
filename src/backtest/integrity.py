@@ -1,7 +1,7 @@
 """Compatibility routing for the price-semantics-safe formal backtest.
 
 Direct imports of the legacy ``src.backtest.quintile.quintile_backtest`` remain
-available for low-level compatibility tests.  Package-level research calls and
+available for low-level compatibility tests. Package-level research calls and
 the asynchronous runner are routed here when their data came from the published
 MarketDataReader integrity boundary.
 """
@@ -28,13 +28,17 @@ def _semantic_payload(price_df: pd.DataFrame | None) -> dict[str, Any] | None:
     attrs = getattr(price_df, "attrs", {}) or {}
     execution_close = attrs.get("execution_close")
     total_return_open = attrs.get("total_return_open")
-    if not isinstance(execution_close, pd.DataFrame) or not isinstance(
-        total_return_open, pd.DataFrame
+    total_return_close = attrs.get("total_return_close")
+    if (
+        not isinstance(execution_close, pd.DataFrame)
+        or not isinstance(total_return_open, pd.DataFrame)
+        or not isinstance(total_return_close, pd.DataFrame)
     ):
         return None
     return {
         "execution_close": execution_close,
         "total_return_open": total_return_open,
+        "total_return_close": total_return_close,
         "benchmark_returns": attrs.get("benchmark_returns"),
         "benchmark_contract": attrs.get("benchmark_contract"),
         "benchmark_error": attrs.get("benchmark_error"),
@@ -112,6 +116,7 @@ def quintile_backtest_integrity(
         execution_open_df=open_df,
         execution_close_df=semantic["execution_close"],
         total_return_open_df=semantic["total_return_open"],
+        total_return_close_df=semantic["total_return_close"],
         volume_df=volume_df,
         tradable_mask=tradable_mask,
         membership_mask=membership_mask,
