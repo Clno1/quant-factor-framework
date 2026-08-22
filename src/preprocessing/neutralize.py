@@ -88,6 +88,30 @@ def _industry_contract(
     return policy, sector_map, None
 
 
+def _static_industry_known_mask(
+    sector_map: pd.Series | pd.DataFrame | None,
+    columns: pd.Index,
+) -> pd.Series | None:
+    """Use non-PIT labels for coverage diagnostics only, never as regressors."""
+    if sector_map is None or getattr(sector_map, "empty", True):
+        return None
+    labels: pd.Series | None = None
+    if isinstance(sector_map, pd.Series):
+        labels = sector_map
+    elif isinstance(sector_map, pd.DataFrame):
+        # Legacy security-master shape: index=ticker, column=sector. A true PIT
+        # matrix has a DatetimeIndex and is handled by _sector_row instead.
+        if "sector" in sector_map.columns and not isinstance(
+            sector_map.index, pd.DatetimeIndex
+        ):
+            labels = sector_map["sector"]
+    if labels is None:
+        return None
+    normalized = labels.reindex(columns).fillna(UNKNOWN_SECTOR).astype(str).str.strip()
+    normalized = normalized.mask(normalized.eq(""), UNKNOWN_SECTOR)
+    return normalized.ne(UNKNOWN_SECTOR)
+
+
 def _validate_mcap_contract(mcap_df: pd.DataFrame | None) -> str:
     if mcap_df is None or mcap_df.empty:
         raise NeutralizationDataError(
@@ -277,31 +301,49 @@ def neutralize_industry(
     if not active_industry and not active_mcap:
         result = factor_df.copy()
         observations = int(result.notna().sum().sum())
-        daily = tuple(
-            {
-                "date": pd.Timestamp(dt).date().isoformat(),
-                "input_non_null": int(row.notna().sum()),
-                "regression_observations": 0,
-                "known_industry": 0,
-                "missing_industry": int(row.notna().sum()),
-                "missing_mcap": 0,
-                "output_non_null": int(row.notna().sum()),
-                "applied": False,
-                "reason": industry_skip_reason or "neutralization_not_requested",
-            }
-            for dt, row in factor_df.iterrows()
-        )
+        static_known = _static_industry_known_mask(sector_map, factor_df.columns)
+        daily_rows: list[dict] = []
+        for dt, row in factor_df.iterrows():
+            input_valid = row.notna()
+            input_count = int(input_valid.sum())
+            if requested_industry:
+                if static_known is None:
+                    known_count = 0
+                    missing_count = input_count
+                else:
+                    known_count = int((input_valid & static_known).sum())
+                    missing_count = int((input_valid & ~static_known).sum())
+            else:
+                known_count = input_count
+                missing_count = 0
+            daily_rows.append(
+                {
+                    "date": pd.Timestamp(dt).date().isoformat(),
+                    "input_non_null": input_count,
+                    "regression_observations": 0,
+                    "known_industry": known_count,
+                    "missing_industry": missing_count,
+                    "missing_mcap": 0,
+                    "output_non_null": input_count,
+                    "applied": False,
+                    "reason": industry_skip_reason or "neutralization_not_requested",
+                }
+            )
+        known = sum(int(item["known_industry"]) for item in daily_rows)
+        missing_industry = sum(int(item["missing_industry"]) for item in daily_rows)
         audit = NeutralizationAudit(
             enabled_industry=False,
             enabled_mcap=False,
             applied_days=0,
             skipped_days=len(result),
             observations=observations,
-            known_industry_observations=0,
-            missing_industry_observations=observations if requested_industry else 0,
+            known_industry_observations=known,
+            missing_industry_observations=missing_industry,
             missing_mcap_observations=0,
-            industry_coverage=0.0 if requested_industry else 1.0,
-            daily=daily,
+            industry_coverage=(known / observations if observations else 0.0)
+            if requested_industry
+            else 1.0,
+            daily=tuple(daily_rows),
             requested_industry=requested_industry,
             requested_mcap=requested_mcap,
             industry_temporal_policy=industry_policy,
