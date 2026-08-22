@@ -3,9 +3,9 @@
 {% block content %}
 <header class="factor-research-header">
     <div>
-        <div class="factor-kicker">{{ research_label(universe.role) }} · {{ research_label(universe.membership_type) }}</div>
+        <div class="factor-kicker">{{ research_label(universe.purpose) }} · {{ research_label(universe.factor_publication_mode) }} · {{ research_label(universe.membership_type) }}</div>
         <h1 class="page-title">{{ universe_label(universe.universe_id) }}</h1>
-        <p class="page-meta">对照指数 {{ universe.benchmark }} · 每个交易日至少需要 {{ universe.minimum_cross_section }} 只有效证券</p>
+        <p class="page-meta">{% if universe.benchmark %}对照指数 {{ universe.benchmark }} · {% endif %}每个交易日至少需要 {{ universe.minimum_cross_section }} 只有效证券</p>
     </div>
     <span class="research-verdict verdict-{{ universe.data_status|lower }}" title="系统代码：{{ universe.data_status }}">{{ research_label(universe.data_status) }}</span>
 </header>
@@ -15,10 +15,15 @@
     <dl class="research-definition-grid">
         <div><dt>目标交易日</dt><dd class="mono">{{ universe.target_session or '—' }}</dd></div>
         <div><dt>数据版本</dt><dd class="mono break-value">{{ universe.data_version_id or '—' }}</dd></div>
+        <div><dt>PIT 股票池版本</dt><dd class="mono break-value">{{ universe.universe_version_id or '不适用' }}</dd></div>
         <div><dt>当前成分证券数</dt><dd>{{ universe.current_members if universe.current_members is not none else '—' }}</dd></div>
         <div><dt>历史出现证券总数</dt><dd>{{ universe.historical_union if universe.historical_union is not none else '—' }}</dd></div>
         <div><dt>行业分类覆盖</dt><dd>{% if universe.industry_coverage is not none %}{{ '%.2f%%'|format(universe.industry_coverage * 100) }}{% else %}—{% endif %}</dd></div>
-        <div><dt>研究发布</dt><dd>{{ research_label(universe.research.status) }} · {{ universe.research.target_session or '—' }}</dd></div>
+        <div><dt>因子或研究发布</dt><dd>{{ research_label(universe.research.status) }} · {{ research_label(universe.research.publication_mode) }} · {{ universe.research.target_session or '—' }}</dd></div>
+        {% if universe.factor_publication_mode == 'FACTOR_DATA' %}
+        <div><dt>正式宽基研究</dt><dd>{{ research_label(universe.formal_research.status) }}</dd></div>
+        <div><dt>行业时间口径</dt><dd class="mono break-value">{{ universe.classification_policy or '—' }}</dd></div>
+        {% endif %}
     </dl>
     {% if universe.integrity_error %}
     <p class="status-fail mono">完整性校验失败：{{ universe.integrity_error }}</p>
@@ -54,6 +59,7 @@
     </div>
 </section>
 
+{% if universe.factor_publication_mode != 'RAW_ONLY' %}
 <section class="research-section">
     <h2>历史时点成分（PIT）发布</h2>
     {% if universe.pit_metadata %}
@@ -97,9 +103,17 @@
         </table>
     </div>
 </section>
+{% endif %}
 
 <section class="research-section">
-    <h2>因子结论</h2>
+    <h2>{% if universe.factor_publication_mode == 'FULL_RESEARCH' %}因子结论{% else %}因子数据能力{% endif %}</h2>
+    {% if universe.factor_publication_mode == 'RAW_ONLY' %}
+    <p class="page-meta">该层只发布全美证券行情覆盖，不生成 clean、排名、IC 或置信评估。进入全美流动股票池后才参与横截面比较。</p>
+    {% elif universe.factor_publication_mode == 'FACTOR_DATA' %}
+    <p class="page-meta">该池发布 raw、clean、单因子排名和百分位，但尚不发布 IC、ICIR 或置信评估结论。</p>
+    {% if universe.formal_research.reason %}<p class="status-warn">{{ universe.formal_research.reason }}</p>{% endif %}
+    <a class="btn primary" href="/research/factor-data?universe={{ universe.universe_id }}">查看宽基因子数据</a>
+    {% else %}
     <div class="research-table-wrap">
         <table class="data research-table">
             <thead><tr><th>因子（选股规则）</th><th>单池结论</th><th>平均 IC</th><th>ICIR</th><th>q 值</th><th>研究发布版本</th></tr></thead>
@@ -117,6 +131,7 @@
             </tbody>
         </table>
     </div>
+    {% endif %}
 </section>
 
 <section class="research-section">
@@ -141,6 +156,7 @@
     </div>
 </section>
 
+{% if universe.factor_publication_mode != 'RAW_ONLY' %}
 <section class="research-section">
     <details class="member-disclosure">
         <summary>当前成分证券（{{ membership.current_members|length }}）</summary>
@@ -156,4 +172,5 @@
         </div>
     </details>
 </section>
+{% endif %}
 {% endblock %}

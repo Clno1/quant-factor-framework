@@ -7,6 +7,7 @@ from src.utils.identifiers import canonical_uuid, safe_path_component
 
 
 US_LIQUID_5M = "US_LIQUID_5M"
+US_EQUITY_COVERAGE = "US_EQUITY_COVERAGE"
 LEGACY_US_ACTIVE = "US_ACTIVE"
 WATCHLIST_PREFIX = "WATCHLIST_"
 
@@ -57,6 +58,7 @@ def resolve_market_data_universe(
 
 __all__ = [
     "LEGACY_US_ACTIVE",
+    "US_EQUITY_COVERAGE",
     "US_LIQUID_5M",
     "WATCHLIST_PREFIX",
     "resolve_market_data_universe",

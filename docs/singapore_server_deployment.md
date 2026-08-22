@@ -111,6 +111,12 @@ sudo -u quant /opt/quant/.venv/bin/python /opt/quant/scripts/run_momentum_alerts
 
 ## 4. 启用定时器
 
+主业务 Web 与运维 Web 分开部署。运维站在 SG 监听 `0.0.0.0:18825`，使用独立
+`QUANT_OPS_AUTH_*`，并由每分钟 watchdog 写入原子只读快照。腾讯云安全组需单独允许 TCP
+`18825`，优先限制来源 IP；不要在运维环境文件中放 Discord webhook。直接 IP HTTP 不提供
+传输加密，长期应在前面增加 HTTPS 反向代理。当前 `/home/projects/quant + root` 的精确安装命令见
+[`operations_observability.md`](operations_observability.md)。
+
 ```bash
 sudo install -m 0644 /opt/quant/deploy/systemd/*.service /etc/systemd/system/
 sudo install -m 0644 /opt/quant/deploy/systemd/*.timer /etc/systemd/system/
@@ -140,6 +146,13 @@ sudo journalctl -u quant-momentum-alerts.service -n 100 --no-pager
 - `quant-us-daily-refresh.timer`：新加坡时间周二至周六 07:15，更新刚结束的美股交易日。
 - `quant-momentum-alerts.timer`：每小时 35 分唤醒；worker 再按 NASDAQ 实际开市状态和
   美东 10:00-15:59 判断是否扫描，因此自动适配夏令时、节假日和提前收盘。
+
+全美宽基 v1 不加入上述通用首次安装的自动启用列表。它需要先完成 2019 起 Security Master、
+`US_EQUITY_COVERAGE`、PIT `US_LIQUID_5M` 和八因子正式回填，再安装 11:30 SGT 的
+`quant-us-equity-coverage.timer`。当前 SG 是 root + `/home/projects/quant` 布局，必须把仓库中的
+`*-root.service` 模板重命名为不带 `-root` 的正式 unit 名；精确命令、资源上限和五日影子门槛见
+[`us_broad_factor_research_implementation.md`](us_broad_factor_research_implementation.md)。未完成首次
+回填时不要启用该 timer。
 
 ### 4.1 内部模拟盘每日运行
 
@@ -175,11 +188,13 @@ version 一致，并只刷新自定义 Watchlist，成功后再执行 `run_paper
 `data/pit_universes/<UNIVERSE>.parquet`；缺文件时账户会 fail closed。完整说明见
 [`paper_trading_operations.md`](paper_trading_operations.md)。
 
-## 5. 分钟级突破监控与自动晋级
+## 5. 分钟级突破监控与五日晋级闸门
 
 该服务与旧的 `quant-momentum-alerts.timer` 不同：它在 09:20 ET 启动一个常驻进程，默认
-600 只每 5 分钟宽筛、40 只每分钟观察，并在交易所实际收盘五分钟后退出。unit 使用 `--auto`：
-前五个合格 session 只写 shadow outbox；最近五个预期 session 全部 `PASS` 后才进入 Discord live。
+600 只每 5 分钟宽筛、40 只每分钟观察，并在交易所实际收盘五分钟后退出。unit 使用 `--auto`，
+但 `INTRADAY_MOMENTUM_DISCORD_ENABLED=false` 是独立的人工总开关：前五个合格 session 只写
+shadow outbox；最近五个预期 session 全部 `PASS` 后，人工复核并打开该开关，下一次启动才会
+进入 Discord live。worker 不会自行修改环境文件。
 
 先安装独立环境文件并确认依赖：
 
@@ -290,15 +305,15 @@ sudo journalctl -u quant-group-analytics-eod.service -n 200 --no-pager
 `GROUP_ANALYTICS_WEB_ENABLED=true` 后重启 Web；完成连续 10 个实际交易日的影子
 观察与生产机性能复测前，不要开启页面。
 
-## 7. 美股开盘前 Discord 动量日报
+## 7. 美股开盘前 Discord 双频道日报
 
 独立盘前 worker 在每个 XNYS session 的 09:20 America/New_York 读取上一完整交易日的
-动量日线并投递到 `#momentum-alerts`。当前生产 unit 显式传入 `--channel momentum`；
-sector rotation 的代码和独立 Webhook 可以保留，但配置默认关闭，且不由该 timer 发送。
+动量日线和正式板块产物，分别投递到 `#momentum-alerts` 与 `#sector-rotation`。当前生产 unit
+显式传入 `--channel all`，两个频道使用独立 Webhook 和幂等状态。
 盘前 worker 不修改盘中小时告警状态，也不让主框架反向依赖通知层。
 
-先配置并测试动量 Webhook。现有配置向导同时支持 sector Webhook；若 sector 尚未发布，保留其
-已有值但不要启用 sector channel：
+分别配置并测试 momentum 与 sector Webhook。两个 URL 必须指向不同频道；路由预检会在 URL
+缺失、两者相同或动量任务误用 sector URL 时拒绝启动：
 
 ```bash
 sudo install -m 0640 -o root -g quant \
@@ -310,7 +325,7 @@ sudo chown root:quant /etc/quant/premarket-digest.env
 sudo chmod 0640 /etc/quant/premarket-digest.env
 ```
 
-必须人工确认动量频道恰好收到一条无 mention 测试消息，且没有投错频道；未确认前不要启用
+必须人工确认两个频道各自恰好收到一条无 mention 测试消息，且没有交叉投递；未确认前不要启用
 `quant-premarket-digest.timer`。
 
 先按一个已完成 session 运行不发送的 preview；`--session` 参数表示即将开盘的交易日，
@@ -321,9 +336,9 @@ sudo -u quant /opt/quant/.venv/bin/python /opt/quant/scripts/run_premarket_diges
   --env-file /etc/quant/premarket-digest.env --session 2026-07-16
 ```
 
-确认 universe、动量 payload、日期、精确日期覆盖和可计算历史覆盖后即可安装动量调度。
-sector Discord 若以后启用，仍需单独完成 group analytics 的观察和发布门槛，不能借用动量
-频道的验收结果。当前安装命令如下：
+确认 universe、两个 payload、日期、精确日期覆盖和可计算历史覆盖后即可安装双频道调度。
+sector Discord 仍须独立满足 group analytics 的发布门槛，不能借用动量频道的验收结果。当前
+安装命令如下：
 
 ```bash
 sudo install -m 0644 /opt/quant/deploy/systemd/quant-premarket-digest.service /etc/systemd/system/
@@ -336,8 +351,8 @@ sudo systemctl status quant-premarket-digest.timer
 ```
 
 `After=` 只保证同一启动事务中的排序，不证明当天上游成功。当前 unit 固定
-`--channel momentum`，启用前检查 `quant-us-daily-refresh.timer` 最近一次成功日志；数据门槛
-仍会阻止陈旧消息，sector rotation 不由该 timer 发送。
+`--channel all`，启用前检查 `quant-us-daily-refresh.timer` 和
+`quant-group-analytics-eod.timer` 最近一次成功日志；各频道的数据门槛仍会阻止陈旧消息。
 
 详细算法、消息合同、幂等状态和故障处理见 `docs/premarket_discord.md`。如果希望动量频道
 每天严格只有盘前一条，应另行停用 `quant-momentum-alerts.timer`；否则两者可并存。

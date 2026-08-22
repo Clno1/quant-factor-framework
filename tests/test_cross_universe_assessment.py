@@ -12,17 +12,22 @@ from src.research_universes.cross_universe import (
 )
 import src.research_universes.publication as publication
 from src.research_universes.models import (
+    FactorPublicationMode,
     MembershipType,
     ResearchUniverse,
     ResearchUniverseRole,
+    UniversePurpose,
 )
 
 
 def _universe(universe_id: str, role: ResearchUniverseRole) -> ResearchUniverse:
     return ResearchUniverse(
         universe_id=universe_id,
+        display_name=universe_id,
+        purpose=UniversePurpose.VALIDATION,
         role=role,
         membership_type=MembershipType.PIT,
+        factor_publication_mode=FactorPublicationMode.FULL_RESEARCH,
         benchmark="SPY" if role == ResearchUniverseRole.PRIMARY else "QQQ",
         confidence_enabled=True,
         cross_universe_enabled=True,

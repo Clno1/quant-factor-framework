@@ -8,6 +8,7 @@ from src.market_regime_research.features import (
     compute_breadth_features,
     compute_momentum_stress_features,
     compute_price_features,
+    compute_volatility_features,
 )
 from src.market_regime_research.settings import FeatureSettings
 
@@ -107,6 +108,80 @@ def test_breadth_excludes_non_members_even_when_their_return_is_extreme():
     assert latest["breadth_advance_pct"] == 0.5
     assert latest["breadth_decline_pct"] == 0.5
     assert latest["breadth_net"] == 0.0
+    assert latest["breadth_above_ma5_pct"] == 0.5
+
+
+def test_moving_average_breadth_uses_valid_pit_denominator_and_causal_changes():
+    index = pd.date_range("2026-01-02", periods=10, freq="B")
+    prices = pd.DataFrame(
+        {
+            "A": np.arange(100.0, 110.0),
+            "B": np.arange(110.0, 100.0, -1.0),
+            "OUT": np.arange(200.0, 220.0, 2.0),
+        },
+        index=index,
+    )
+    mask = pd.DataFrame(True, index=index, columns=prices.columns)
+    mask["OUT"] = False
+    settings = FeatureSettings(
+        moving_average_windows=(3,),
+        breadth_change_windows=(2,),
+        realized_volatility_windows=(3,),
+        correlation_window=3,
+        correlation_min_members=2,
+        momentum_lookback=6,
+        momentum_skip=1,
+        momentum_quantile=0.25,
+        min_cross_section_members=2,
+        min_cross_section_coverage=1.0,
+    )
+
+    result = compute_breadth_features(
+        prices,
+        mask,
+        benchmark_close=prices["A"],
+        settings=settings,
+    ).values
+
+    level = result["breadth_above_ma3_pct"]
+    assert level.iloc[-1] == 0.5
+    assert result["breadth_above_ma3_change_2d"].iloc[-1] == (
+        level.iloc[-1] - level.iloc[-3]
+    )
+
+
+def test_moving_average_breadth_fails_closed_below_member_coverage():
+    index = pd.date_range("2026-01-02", periods=8, freq="B")
+    prices = pd.DataFrame(
+        {
+            "A": np.arange(100.0, 108.0),
+            "B": np.arange(108.0, 100.0, -1.0),
+            "MISSING": np.nan,
+        },
+        index=index,
+    )
+    mask = pd.DataFrame(True, index=index, columns=prices.columns)
+    settings = FeatureSettings(
+        moving_average_windows=(3,),
+        breadth_change_windows=(2,),
+        realized_volatility_windows=(3,),
+        correlation_window=3,
+        correlation_min_members=2,
+        momentum_lookback=6,
+        momentum_skip=1,
+        momentum_quantile=0.25,
+        min_cross_section_members=2,
+        min_cross_section_coverage=0.80,
+    )
+
+    result = compute_breadth_features(
+        prices,
+        mask,
+        benchmark_close=prices["A"],
+        settings=settings,
+    ).values
+
+    assert result["breadth_above_ma3_pct"].isna().all()
 
 
 def test_momentum_uses_previous_session_ranks():
@@ -172,3 +247,34 @@ def test_rolling_percentile_counts_observations_across_source_gaps():
     result = _rolling_last_percentile(series, 5)
 
     assert result.iloc[-1] == 1.0
+
+
+def test_cor1m_features_use_only_same_day_and_prior_cboe_values():
+    index = pd.date_range("2024-01-02", periods=300, freq="B")
+    frame = pd.DataFrame(
+        {
+            "VIX": 18 + np.sin(np.arange(len(index)) / 10),
+            "VIX9D": 17 + np.sin(np.arange(len(index)) / 9),
+            "VIX3M": 19 + np.sin(np.arange(len(index)) / 12),
+            "COR1M": 25 + 4 * np.sin(np.arange(len(index)) / 15),
+        },
+        index=index,
+    )
+    changed = frame.copy()
+    cutoff = 270
+    changed.iloc[cutoff + 1 :, changed.columns.get_loc("COR1M")] += 40
+
+    baseline = compute_volatility_features(frame)
+    modified = compute_volatility_features(changed)
+
+    pd.testing.assert_frame_equal(
+        baseline.values.iloc[: cutoff + 1],
+        modified.values.iloc[: cutoff + 1],
+    )
+    definitions = {
+        item.feature_name: item for item in baseline.registry
+    }
+    assert definitions["cor1m_level"].group == "implied_correlation"
+    assert baseline.values["cor1m_change_5d"].iloc[-1] == (
+        frame["COR1M"].iloc[-1] - frame["COR1M"].iloc[-6]
+    )

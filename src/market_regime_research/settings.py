@@ -51,7 +51,8 @@ class LabelSettings:
 class FeatureSettings:
     """Lookbacks and minimum cross-sectional coverage for P0 features."""
 
-    moving_average_windows: tuple[int, ...] = (20, 50, 200)
+    moving_average_windows: tuple[int, ...] = (20, 50, 60, 120, 200)
+    breadth_change_windows: tuple[int, ...] = (5, 20)
     realized_volatility_windows: tuple[int, ...] = (20, 60)
     correlation_window: int = 60
     correlation_min_members: int = 30
@@ -59,6 +60,7 @@ class FeatureSettings:
     momentum_skip: int = 21
     momentum_quantile: float = 0.10
     min_cross_section_members: int = 30
+    min_cross_section_coverage: float = 0.95
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,7 +81,7 @@ class ScreeningSettings:
     """Leakage controls and acceptance gates for univariate screening."""
 
     candidate_registry_path: Path = Path(
-        "configs/market_regime_screening_candidates.yaml"
+        "configs/market_regime_screening_candidates_v2.yaml"
     )
     holdout_start: str = "2022-01-01"
     first_validation_start: str = "1996-01-01"
@@ -258,7 +260,10 @@ def load_market_regime_research_settings(
         ),
         features=FeatureSettings(
             moving_average_windows=_tuple_int(
-                features.get("moving_average_windows"), (20, 50, 200)
+                features.get("moving_average_windows"), (20, 50, 60, 120, 200)
+            ),
+            breadth_change_windows=_tuple_int(
+                features.get("breadth_change_windows"), (5, 20)
             ),
             realized_volatility_windows=_tuple_int(
                 features.get("realized_volatility_windows"), (20, 60)
@@ -272,6 +277,9 @@ def load_market_regime_research_settings(
             momentum_quantile=float(features.get("momentum_quantile", 0.10)),
             min_cross_section_members=int(
                 features.get("min_cross_section_members", 30)
+            ),
+            min_cross_section_coverage=float(
+                features.get("min_cross_section_coverage", 0.95)
             ),
         ),
         pit=PITSettings(
@@ -296,7 +304,7 @@ def load_market_regime_research_settings(
                 str(
                     screening.get(
                         "candidate_registry",
-                        "configs/market_regime_screening_candidates.yaml",
+                        "configs/market_regime_screening_candidates_v2.yaml",
                     )
                 )
             ),
@@ -409,6 +417,14 @@ def _validate(settings: MarketRegimeResearchSettings) -> None:
         settings.features.moving_average_windows
     ):
         raise ValueError("moving_average_windows must be unique")
+    if not settings.features.breadth_change_windows or any(
+        window < 1 for window in settings.features.breadth_change_windows
+    ):
+        raise ValueError("breadth_change_windows must be positive")
+    if len(set(settings.features.breadth_change_windows)) != len(
+        settings.features.breadth_change_windows
+    ):
+        raise ValueError("breadth_change_windows must be unique")
     if not settings.features.realized_volatility_windows or any(
         window < 2 for window in settings.features.realized_volatility_windows
     ):
@@ -423,6 +439,8 @@ def _validate(settings: MarketRegimeResearchSettings) -> None:
         raise ValueError("correlation_min_members must be at least 2")
     if settings.features.min_cross_section_members < 2:
         raise ValueError("min_cross_section_members must be at least 2")
+    if not 0 < settings.features.min_cross_section_coverage <= 1:
+        raise ValueError("min_cross_section_coverage must be in (0, 1]")
     if settings.features.momentum_skip < 1:
         raise ValueError("momentum_skip must be positive")
     if settings.features.momentum_lookback <= settings.features.momentum_skip:

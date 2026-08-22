@@ -1,0 +1,30 @@
+[Unit]
+Description=Collect unified Quant operations evidence (root deployment)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=1h
+StartLimitBurst=120
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/home/projects/quant
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONPATH=/home/projects/quant
+ExecStartPre=/home/projects/quant/.venv/bin/python -c "import duckdb, exchange_calendars, yaml, sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
+ExecStart=/home/projects/quant/.venv/bin/python /home/projects/quant/scripts/run_operations_watchdog.py
+TimeoutStartSec=55s
+MemoryHigh=180M
+MemoryMax=260M
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/projects/quant/outputs/operations
+ReadWritePaths=-/home/projects/quant/runlog
+
+[Install]
+WantedBy=multi-user.target

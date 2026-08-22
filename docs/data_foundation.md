@@ -1,6 +1,6 @@
 # DuckDB 与 Parquet 行情基础设施
 
-更新日期：2026-08-08
+更新日期：2026-08-12
 
 本文专门解释日线行情 writer、质量门禁和 reader。业务 SQLite 及完整数据流见
 [`unified_data_storage.md`](unified_data_storage.md)。
@@ -26,6 +26,8 @@ FMP
 4. 候选版本未通过质量门禁时可以留作审计，但不得推进正式指针。
 5. Reader 首次读取每个文件时核对 catalog 中的 SHA-256。
 6. 缺数据时报错或排队，不读取旧目录，也不直接向 FMP 补洞。
+7. 全美宽基使用专用单写者链，但继续复用同一个 DuckDB catalog、DatasetVersion 和 Reader 完整性
+   合同；研究和网页仍然禁止直接调用 FMP。
 
 ## 2. 文件布局
 
@@ -43,6 +45,25 @@ data/lake/curated/equity_daily/universe=<UNIVERSE>/version=<version_id>/
   universe.parquet
   membership.parquet       # 动态 PIT 池才有
   membership_events.parquet # 动态 PIT 池的成分变更事件账本
+  manifest.json
+
+data/lake/security_master/generation=<generation_id>/
+  master.parquet
+  symbols.parquet
+  classifications.parquet
+  identity_keys.parquet
+  research_history_policy.parquet # 前瞻参与/历史排除的公开审计台账
+  manifest.json
+
+data/lake/curated/US_EQUITY_COVERAGE/version=<version_id>/
+  bars_index.json
+  bars/year=<YYYY>/month=<MM>/part-*.parquet
+  security_universe.parquet
+  manifest.json
+
+data/lake/universes/US_LIQUID_5M/version=<universe_version_id>/
+  membership.parquet
+  eligibility_audit.parquet
   manifest.json
 ```
 
@@ -67,6 +88,8 @@ Reader 可把长表 pivot 为 `date × ticker` 宽表，供既有因子接口使
 | `dataset_versions` | 候选版本的路径、日期范围、行数、票数和 checksum |
 | `quality_checks` | 每个版本每项门禁的 observed、threshold、passed 和消息 |
 | `published_versions` | 每个 universe 当前唯一正式 version ID |
+| `security_master_generations` / `published_security_master` | 稳定证券身份快照及当前正式 generation |
+| `derived_universe_versions` / `published_universe_versions` | coverage parent 派生出的 PIT 比较池版本 |
 
 `REJECTED` 版本和失败 run 默认保留，便于解释“某天为什么没有发布”。它们不是消费者可读版本。
 
@@ -161,6 +184,29 @@ python scripts/run_data_pipeline.py status --json
 
 `--force` 会重发目标 session 并刷新 overlap window，不代表跳过质量门禁。
 
+全美宽基首次和每日命令：
+
+```bash
+# 首次回填，默认命令都可先不加 --publish 做候选
+python scripts/build_security_master.py --publish --json
+python scripts/backfill_us_equity_coverage.py --publish --json
+python scripts/build_us_liquid_pit.py --full-rebuild --publish --json
+python scripts/run_broad_factor_data.py --publish --json
+
+# 日常冻结一个 target session，串行刷新前三层
+python scripts/run_broad_daily_pipeline.py --json
+
+# 完整验证因子数据并记录影子日
+python scripts/check_broad_shadow_observation.py --record-current --json
+```
+
+正式 coverage 读模型按月分区。首次下载仍可按证券批次/年份 checkpoint，发布时才压实为月份；普通
+日重建 overlap 涉及月份并硬链接其余月份，避免一次修订复制或重算全部历史。
+
+`US_LIQUID_5M` 发布还会把研究区间内每个 XNYS session 映射到最近一次完整 PIT membership，使用
+DuckDB 检查当日成员是否都有 `(date, security_id)` 行情；任何一天低于 95% 都拒绝发布。网页只读
+元数据时认证 manifest 与月分片 index，实际查询分片逐文件验哈希；每日 shadow 仍完整校验所有子分片。
+
 ## 9. 当前本地状态
 
 2026-08-08 本地检查：
@@ -170,8 +216,9 @@ python scripts/run_data_pipeline.py status --json
 | SP500 | 2026-07-31 | 711,247 | 591 历史并集 | 100% 当前成分 | `511ee86d...` |
 | MAG7 | 2026-07-31 | 8,785 | 7 | 100% | `f4eeb46c...` |
 
-本机尚无 `US_LIQUID_5M` 正式版本，所以全美股动量监控必须在 refresh 成功发布后才能启动；系统
-不会回退到旧逐票文件。
+本机是否有旧动量用 `US_LIQUID_5M` DatasetVersion，不代表新的 derived PIT 宽基已经发布。新的
+全美宽基正式链必须同时存在 `US_EQUITY_COVERAGE`、Security Master、derived universe 和
+factor-data publication；截至 2026-08-12 尚未执行正式全量回填。系统不会用旧 180D 版本冒充。
 
 本地旧 `data/raw/ohlcv` 和 `data/processed` 已归档移出，代码也不再依赖它们。SG 是否处于同一
 commit 和同一清理状态，必须通过服务器部署验收单独确认。

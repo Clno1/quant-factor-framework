@@ -48,7 +48,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def _configured_universes() -> list[str]:
     from src.research_universes import research_universe_registry
 
-    return research_universe_registry().ids()
+    return [
+        entry.universe_id
+        for entry in research_universe_registry().full_research_entries()
+    ]
 
 
 def main(argv: list[str] | None = None) -> int:

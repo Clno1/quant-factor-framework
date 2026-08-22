@@ -236,6 +236,12 @@ def load_candidate_registry(
         "registry_version": str(payload.get("registry_version", "")),
         "frozen_at": str(payload.get("frozen_at", "")),
         "registration_type": str(payload.get("registration_type", "")),
+        "retrospective_holdout_start": str(
+            payload.get("retrospective_holdout_start", "")
+        ),
+        "prospective_shadow_start": str(
+            payload.get("prospective_shadow_start", "")
+        ),
         "registered_base_hypotheses": len(hypotheses),
         "confirmatory_tests": sum(item.is_confirmatory for item in candidates),
         "exploratory_tests": sum(not item.is_confirmatory for item in candidates),

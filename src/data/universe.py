@@ -134,9 +134,9 @@ def _get_nasdaq100(force_refresh: bool = False) -> pd.DataFrame:
         log.info("Loading NASDAQ-100 universe from cache: %s", cache)
         return pd.read_parquet(cache)
 
-    from src.data.fmp import get_nasdaq100_constituents
+    from src.data.nasdaq100_pit import get_verified_nasdaq100_current_constituents
 
-    frame = get_nasdaq100_constituents()
+    frame = get_verified_nasdaq100_current_constituents()
     frame.to_parquet(cache)
     log.info("Saved %d NASDAQ-100 securities to %s", len(frame), cache)
     return frame

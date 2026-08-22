@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
+import yaml
 
 from src.market_regime_research.artifacts import (
     file_sha256,
@@ -69,6 +71,7 @@ def _inputs():
             "VIX": 18 + np.sin(np.arange(len(index)) / 10),
             "VIX9D": 17 + np.sin(np.arange(len(index)) / 9),
             "VIX3M": 19 + np.sin(np.arange(len(index)) / 12),
+            "COR1M": 25 + 4 * np.sin(np.arange(len(index)) / 15),
         },
         index=index,
     )
@@ -123,6 +126,44 @@ def test_cross_section_inputs_cannot_be_partially_supplied():
             volatility=volatility,
             adj_close=adj_close,
         )
+
+
+def test_full_pit_feature_registry_satisfies_frozen_v2_hypotheses():
+    prices, volatility = _inputs()
+    index = next(iter(prices.values())).index
+    time = np.arange(len(index), dtype=float)
+    adj_close = pd.DataFrame(
+        {
+            f"S{position:02d}": (
+                100
+                * np.exp(time * (0.0001 + position * 0.000005))
+                * (1 + 0.01 * np.sin(time / (5 + position % 7)))
+            )
+            for position in range(35)
+        },
+        index=index,
+    )
+    membership = pd.DataFrame(True, index=index, columns=adj_close.columns)
+
+    features, _, diagnostics = build_research_dataset(
+        settings=MarketRegimeResearchSettings(),
+        prices=prices,
+        volatility=volatility,
+        adj_close=adj_close,
+        membership_mask=membership,
+    )
+    registry_path = (
+        Path(__file__).resolve().parents[1]
+        / "configs"
+        / "market_regime_screening_candidates_v2.yaml"
+    )
+    payload = yaml.safe_load(registry_path.read_text(encoding="utf-8"))
+    referenced = {item["feature_name"] for item in payload["hypotheses"]}
+
+    assert referenced.issubset(features.values.columns)
+    assert diagnostics["mode"] == "full_pit"
+    assert "breadth_above_ma120_pct" in features.values.columns
+    assert "cor1m_percentile_252d" in features.values.columns
 
 
 def test_version_bound_daily_bars_are_pivoted_in_memory():

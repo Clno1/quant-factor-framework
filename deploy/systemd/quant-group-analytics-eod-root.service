@@ -26,7 +26,8 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=read-only
-ReadWritePaths=/home/projects/quant/data /home/projects/quant/outputs /home/projects/quant/logs /home/projects/quant/runlog
+ReadWritePaths=/home/projects/quant/data /home/projects/quant/outputs /home/projects/quant/logs
+ReadWritePaths=-/home/projects/quant/runlog
 
 [Install]
 WantedBy=multi-user.target

@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block content %}
+{% if not payload.available %}
+<section class="empty-state">
+    <h2>等待第一份运维快照</h2>
+    <p>watchdog 尚未发布只读快照。运行 <code>python scripts/run_operations_watchdog.py</code> 后本页会自动出现数据。</p>
+</section>
+{% else %}
+<section class="summary-strip" aria-label="运行摘要">
+    <div class="summary-item">
+        <span>纳管任务</span>
+        <strong data-summary="jobs_total">{{ payload.summary.jobs_total }}</strong>
+    </div>
+    <div class="summary-item success">
+        <span>正常</span>
+        <strong data-status-count="SUCCESS">{{ payload.summary.status_counts.get('SUCCESS', 0) }}</strong>
+    </div>
+    <div class="summary-item running">
+        <span>运行中</span>
+        <strong data-status-count="RUNNING">{{ payload.summary.status_counts.get('RUNNING', 0) }}</strong>
+    </div>
+    <div class="summary-item warning">
+        <span>需关注</span>
+        <strong data-summary="attention">{{ payload.summary.status_counts.get('DEGRADED', 0) + payload.summary.status_counts.get('BLOCKED', 0) + payload.summary.status_counts.get('STALE', 0) }}</strong>
+    </div>
+    <div class="summary-item danger">
+        <span>失败或漏跑</span>
+        <strong data-summary="critical">{{ payload.summary.status_counts.get('FAILED', 0) + payload.summary.status_counts.get('MISSED', 0) }}</strong>
+    </div>
+    <div class="summary-item">
+        <span>开放异常</span>
+        <strong data-summary="open_incidents">{{ payload.summary.open_incidents }}</strong>
+    </div>
+</section>
+
+<section class="section-block">
+    <div class="section-heading">
+        <div>
+            <h2>今日运行时间线</h2>
+            <p>由结构化产物、数据库记录和 systemd 状态共同判定。</p>
+        </div>
+        <div class="snapshot-time">快照 <span data-snapshot-at>{{ format_time(payload.snapshot_at) }}</span> SGT</div>
+    </div>
+    <div class="table-wrap">
+        <table class="ops-table">
+            <thead>
+                <tr>
+                    <th>任务</th>
+                    <th>类别</th>
+                    <th>状态</th>
+                    <th>目标交易日</th>
+                    <th>当前阶段</th>
+                    <th>最近成功</th>
+                    <th>证据</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for job in payload.jobs %}
+                <tr data-job-row="{{ job.job_id }}">
+                    <td>
+                        <a class="primary-link" href="/jobs/{{ job.job_id }}">{{ job.display_name }}</a>
+                        <small class="row-note">{{ job.description }}</small>
+                    </td>
+                    <td>{{ category_label(job.category) }}</td>
+                    <td><span class="status status-{{ (job.status or 'UNKNOWN') | lower }}" data-job-status>{{ status_label(job.status) }}</span></td>
+                    <td class="mono" data-job-session>{{ job.target_session or '-' }}</td>
+                    <td data-job-stage>{{ job.stage or '-' }}</td>
+                    <td class="mono" data-job-success>{{ format_time(job.last_success_at) }}</td>
+                    <td class="reason" data-job-reason>{{ job.status_reason or '-' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<section class="split-grid">
+    <div class="section-block compact">
+        <div class="section-heading">
+            <div>
+                <h2>开放异常</h2>
+                <p>同一问题按指纹合并，不会每分钟制造一条新异常。</p>
+            </div>
+            <a class="text-link" href="/incidents">查看全部</a>
+        </div>
+        {% if payload.incidents %}
+        <div class="incident-list">
+            {% for item in payload.incidents[:6] %}
+            <a class="incident-row severity-{{ item.severity | lower }}" href="{% if item.job_id %}/jobs/{{ item.job_id }}{% else %}/incidents{% endif %}">
+                <span class="severity-label">{{ item.severity }}</span>
+                <span>
+                    <strong>{{ item.title }}</strong>
+                    <small>{{ item.detail }}</small>
+                </span>
+                <time>{{ format_time(item.last_seen_at) }}</time>
+            </a>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="inline-empty">当前没有开放异常。</div>
+        {% endif %}
+    </div>
+
+    <div class="section-block compact">
+        <div class="section-heading">
+            <div>
+                <h2>上线专项</h2>
+                <p>一次性建设、观察门槛和正式开关单独跟踪。</p>
+            </div>
+            <a class="text-link" href="/projects">查看详情</a>
+        </div>
+        {% if payload.projects %}
+            {% for project in payload.projects %}
+            <div class="project-summary">
+                <div class="project-title">
+                    <strong>{{ project.display_name }}</strong>
+                    <span class="status status-{{ project.status | lower }}">{{ status_label(project.status) }}</span>
+                </div>
+                <p>{{ project.summary }}</p>
+                <div class="progress-track" aria-label="专项进度">
+                    {% set passed = project.metrics.get('shadow_passed', 0) %}
+                    {% set required = project.metrics.get('shadow_required', 5) %}
+                    <span style="width: {{ (passed / required * 100) if required else 0 }}%"></span>
+                </div>
+                <small>影子观察 {{ passed }}/{{ required }} 个交易日</small>
+            </div>
+            {% endfor %}
+        {% else %}
+        <div class="inline-empty">当前没有上线专项。</div>
+        {% endif %}
+    </div>
+</section>
+{% endif %}
+{% endblock %}

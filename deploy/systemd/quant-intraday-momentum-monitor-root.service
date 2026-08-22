@@ -15,6 +15,7 @@ Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONPATH=/home/projects/quant
 EnvironmentFile=/etc/quant/intraday-momentum-monitor.env
 ExecStartPre=/home/projects/quant/.venv/bin/python -c "import exchange_calendars, sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
+ExecStartPre=/home/projects/quant/.venv/bin/python /home/projects/quant/scripts/verify_momentum_discord_routing.py --component intraday
 ExecStart=/home/projects/quant/.venv/bin/python /home/projects/quant/scripts/run_intraday_momentum_monitor.py --env-file /etc/quant/intraday-momentum-monitor.env --auto
 Restart=on-failure
 RestartSec=2min
@@ -27,7 +28,8 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=read-only
-ReadWritePaths=/home/projects/quant/data /home/projects/quant/outputs /home/projects/quant/logs /home/projects/quant/runlog
+ReadWritePaths=/home/projects/quant/data /home/projects/quant/outputs /home/projects/quant/logs
+ReadWritePaths=-/home/projects/quant/runlog
 
 [Install]
 WantedBy=multi-user.target

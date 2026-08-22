@@ -90,6 +90,21 @@ def test_research_information_architecture_and_target_pages(
                 status_code=409,
             )
 
+        def search_securities(self, **_kwargs):
+            return {
+                "security_master_generation_id": "security-test",
+                "security_master_target_session": "2026-08-07",
+                "asof": "2026-08-07",
+                "query": "MDB",
+                "rows": [{
+                    "security_id": "sec_mdb",
+                    "ticker": "MDB",
+                    "name": "MongoDB, Inc.",
+                    "coverage_status": "PUBLISHED",
+                    "available_comparison_universes": ["US_LIQUID_5M"],
+                }],
+            }
+
     monkeypatch.setattr(
         research_routes,
         "factor_observation_reader",
@@ -108,7 +123,7 @@ def test_research_information_architecture_and_target_pages(
         ) as client:
             paths = [
                 "/research",
-                "/research/universes",
+                "/research?view=universes",
                 "/research/universes/SP500",
                 "/research/factors/MOM_12M",
                 "/research/factor-data",
@@ -124,6 +139,7 @@ def test_research_information_architecture_and_target_pages(
                 "/api/research/factors",
                 "/api/research/factors/MOM_12M",
                 "/api/research/factor-data/meta",
+                "/api/securities/search?q=MDB&asof=2026-08-07",
                 f"/api/strategies/{strategy.id}",
                 f"/api/strategies/{strategy.id}/ranking?universe=watchlist:{target.id}",
                 "/api/watchlists",
@@ -133,6 +149,8 @@ def test_research_information_architecture_and_target_pages(
 
             retired_paths = {
                 "/research/cross-universe": "/research",
+                "/research/universes": "/research?view=universes",
+                "/factors": "/research",
                 "/rankings": "/strategies",
                 f"/strategies/{strategy.id}/ranking?universe=watchlist:{target.id}": (
                     f"/strategies/{strategy.id}"
@@ -145,6 +163,9 @@ def test_research_information_architecture_and_target_pages(
 
             overview = responses["/research"].text
             assert overview.count('<details class="side-group" open>') == 4
+            assert overview.count('href="/research"') >= 2
+            assert 'href="/research/universes"' not in overview
+            assert 'href="/factors"' not in overview
             assert "研究股票池" in overview
             assert "因子数据" in overview
             assert "目标股票池" in overview
@@ -158,6 +179,8 @@ def test_research_information_architecture_and_target_pages(
             assert "纳斯达克 100（NASDAQ100）</option>" in overview
             assert "继续观察</option>" in overview
             assert "这是数据或研究发布状态，不是因子结论" in overview
+            assert "股票池与数据" in overview
+            assert "查看定义" in overview
             assert ">INSUFFICIENT</span>" not in overview
             assert ">INVALID</span>" not in overview
             assert ">MISSING</span>" not in overview
@@ -176,6 +199,13 @@ def test_research_information_architecture_and_target_pages(
             }
             assert factor_pool_status["SP500"] == "INVALID"
             assert factor_pool_status["NASDAQ100"] == "MISSING"
+            security_search = responses[
+                "/api/securities/search?q=MDB&asof=2026-08-07"
+            ].json()
+            assert security_search["rows"][0]["security_id"] == "sec_mdb"
+            assert security_search["rows"][0][
+                "available_comparison_universes"
+            ] == ["US_LIQUID_5M"]
 
             invalid_sp500 = await client.get(
                 "/api/research/factor-data/snapshot?universe=SP500&"
@@ -194,10 +224,14 @@ def test_research_information_architecture_and_target_pages(
                 == "RESEARCH_NOT_PUBLISHED"
             )
 
-            universe_page = responses["/research/universes"].text
-            assert "股票池是一份用于计算和比较的证券名单" in universe_page
+            universe_page = responses["/research?view=universes"].text
+            assert "全美行情覆盖回答“有没有数据”" in universe_page
+            assert "全美证券行情覆盖" in universe_page
+            assert "全美流动股票" in universe_page
+            assert "行情覆盖层" in universe_page
+            assert "宽基比较池" in universe_page
+            assert "正式验证池" in universe_page
             assert "主研究池" in universe_page
-            assert "次级验证池" in universe_page
             assert "按历史时点变化" in universe_page
 
             backtest = responses[

@@ -536,12 +536,15 @@ intraday_momentum_monitor:
 python scripts/run_intraday_momentum_monitor.py --status
 ```
 
-systemd 使用自动晋级模式；也可以显式强制 shadow：
+systemd 使用 `--auto` 检查五日晋级资格；也可以显式强制 shadow：
 
 ```bash
 python scripts/run_intraday_momentum_monitor.py --auto
 python scripts/run_intraday_momentum_monitor.py --shadow
 ```
+
+`--auto` 不会修改生产环境。`INTRADAY_MOMENTUM_DISCORD_ENABLED=false` 时它始终保持 shadow；
+连续五日 PASS 后仍须人工复核并将该开关设为 `true`，后续启动才允许 live 投递。
 
 ## 13. 测试策略
 
@@ -623,7 +626,7 @@ python scripts/run_intraday_momentum_monitor.py --shadow
 
 ### 阶段 3：服务器影子运行
 
-状态：**代码完成，待新加坡服务器累计真实会话**。仓库已提供 service/timer 与自动晋级闸门。
+状态：**代码完成，待新加坡服务器累计真实会话**。仓库已提供 service/timer 与五日晋级闸门。
 
 - 部署独立 systemd service/timer；
 - Discord outbox 只写 `SHADOW`；

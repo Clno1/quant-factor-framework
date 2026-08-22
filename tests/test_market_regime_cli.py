@@ -27,3 +27,15 @@ def test_market_regime_pit_uses_a_dedicated_publication_path():
 
     assert target.name == "SP500_MARKET_REGIME.parquet"
     assert target.name != "SP500.parquet"
+
+
+def test_screen_cli_accepts_an_explicit_frozen_candidate_registry():
+    args = cli._parser().parse_args(
+        [
+            "screen",
+            "--candidate-registry",
+            "configs/market_regime_screening_candidates.yaml",
+        ]
+    )
+
+    assert args.candidate_registry.name == "market_regime_screening_candidates.yaml"

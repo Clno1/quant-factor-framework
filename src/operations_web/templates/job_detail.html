@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block content %}
+{% set job = payload.definition %}
+{% set snapshot = payload.snapshot or {} %}
+<section class="detail-header">
+    <div>
+        <a class="back-link" href="/jobs">返回任务中心</a>
+        <div class="title-line">
+            <h2>{{ job.display_name }}</h2>
+            <span class="status status-{{ (snapshot.status or 'UNKNOWN') | lower }}">{{ status_label(snapshot.status) }}</span>
+        </div>
+        <p>{{ job.description }}</p>
+    </div>
+    <dl class="key-facts">
+        <div><dt>任务 ID</dt><dd class="mono">{{ job.job_id }}</dd></div>
+        <div><dt>目标交易日</dt><dd class="mono">{{ snapshot.target_session or '-' }}</dd></div>
+        <div><dt>计划时间</dt><dd class="mono">{{ format_time(snapshot.scheduled_for) }}</dd></div>
+        <div><dt>截止时间</dt><dd class="mono">{{ format_time(snapshot.deadline_at) }}</dd></div>
+    </dl>
+</section>
+
+<section class="detail-grid">
+    <div class="detail-cell"><span>当前阶段</span><strong>{{ snapshot.stage or '-' }}</strong></div>
+    <div class="detail-cell"><span>状态解释</span><strong>{{ snapshot.status_reason or '-' }}</strong></div>
+    <div class="detail-cell"><span>最近成功</span><strong class="mono">{{ format_time(snapshot.last_success_at) }}</strong></div>
+    <div class="detail-cell"><span>心跳</span><strong class="mono">{{ format_time(snapshot.heartbeat_at) }}</strong></div>
+    <div class="detail-cell"><span>输出版本</span><strong class="mono">{{ snapshot.output_version or '-' }}</strong></div>
+    <div class="detail-cell"><span>进度</span><strong>{% if snapshot.progress_total %}{{ snapshot.progress_current or 0 }} / {{ snapshot.progress_total }}{% else %}-{% endif %}</strong></div>
+</section>
+
+<section class="section-block">
+    <div class="section-heading"><div><h2>近期运行</h2><p>耗时来自持久化的开始和结束时间，不随页面刷新重新计时。</p></div></div>
+    <div class="table-wrap">
+        <table class="ops-table">
+            <thead><tr><th>运行</th><th>目标日</th><th>状态</th><th>阶段</th><th>开始</th><th>结束</th><th>真实耗时</th><th>处理量</th></tr></thead>
+            <tbody>
+            {% for run in payload.runs %}
+                <tr>
+                    <td><a class="primary-link mono" href="/runs/{{ run.run_id }}">{{ run.source_run_id[:18] }}</a><small class="row-note">{{ run.source }}</small></td>
+                    <td class="mono">{{ run.target_session or '-' }}</td>
+                    <td><span class="status status-{{ run.status | lower }}">{{ status_label(run.status) }}</span></td>
+                    <td>{{ run.stage or '-' }}</td>
+                    <td class="mono">{{ format_time(run.started_at) }}</td>
+                    <td class="mono">{{ format_time(run.completed_at) }}</td>
+                    <td class="mono">{% if run.duration_seconds is not none %}{{ '%.2f' | format(run.duration_seconds) }} 秒{% else %}-{% endif %}</td>
+                    <td class="mono">{{ run.rows_processed if run.rows_processed is not none else '-' }}</td>
+                </tr>
+            {% else %}
+                <tr><td colspan="8" class="table-empty">尚无可识别的结构化运行记录。</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<section class="split-grid">
+    <div class="section-block compact">
+        <div class="section-heading"><div><h2>运行指标</h2></div></div>
+        <dl class="data-list">
+        {% for key, value in snapshot.metrics.items() %}
+            <div><dt class="mono">{{ key }}</dt><dd>{{ value }}</dd></div>
+        {% else %}<div><dt>指标</dt><dd>暂无</dd></div>{% endfor %}
+        </dl>
+    </div>
+    <div class="section-block compact">
+        <div class="section-heading"><div><h2>systemd 证据</h2></div></div>
+        <dl class="data-list">
+            <div><dt>服务状态</dt><dd>{{ snapshot.systemd.get('service_active') or '本地不可用' }} / {{ snapshot.systemd.get('service_substate') or '-' }}</dd></div>
+            <div><dt>退出结果</dt><dd>{{ snapshot.systemd.get('service_result') or '-' }} ({{ snapshot.systemd.get('service_exit_status') or '-' }})</dd></div>
+            <div><dt>定时器</dt><dd>{{ snapshot.systemd.get('timer_active') or '-' }} / {{ snapshot.systemd.get('timer_enabled') or '-' }}</dd></div>
+            <div><dt>下次触发</dt><dd class="mono">{{ format_time(snapshot.systemd.get('next_trigger')) }}</dd></div>
+        </dl>
+    </div>
+</section>
+{% endblock %}

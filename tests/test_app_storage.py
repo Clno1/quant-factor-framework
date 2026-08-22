@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pandas as pd
@@ -127,6 +128,7 @@ def test_pending_request_worker_publishes_and_finishes_transaction(tmp_path):
     result.to_dict.return_value = {"version_id": "version-one"}
     result.version.version_id = "version-one"
     writer = Mock()
+    writer.catalog.latest_version.return_value = None
     writer.update_universe.return_value = result
 
     processed = process_pending_data_requests(
@@ -144,3 +146,35 @@ def test_pending_request_worker_publishes_and_finishes_transaction(tmp_path):
     assert writer.update_universe.call_args.kwargs[
         "derive_membership_from_bars"
     ] is True
+
+
+def test_request_worker_extends_membership_to_existing_history_start(tmp_path):
+    database = AppDatabase(tmp_path / "app.sqlite3")
+    request = database.enqueue_data_request(
+        data_universe="WATCHLIST_TEST",
+        payload={
+            "universe_records": [{"ticker": "AAA"}],
+            "tickers": ["AAA"],
+            "initial_start": "2020-07-07",
+        },
+        consumer_kind="backtest",
+        consumer_id="task-one",
+    )
+    result = Mock()
+    result.to_dict.return_value = {"version_id": "version-two"}
+    result.version.version_id = "version-two"
+    writer = Mock()
+    writer.catalog.latest_version.return_value = SimpleNamespace(
+        min_date="2020-07-06"
+    )
+    writer.update_universe.return_value = result
+
+    processed = process_pending_data_requests(
+        limit=1,
+        database=database,
+        writer=writer,
+    )
+
+    assert processed[0].status == DATA_REQUEST_SUCCESS
+    membership = writer.update_universe.call_args.kwargs["membership_frame"]
+    assert membership["date"].min() == pd.Timestamp("2020-07-06")

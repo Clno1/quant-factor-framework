@@ -33,6 +33,11 @@ import numpy as np
 import pandas as pd
 
 from src.config import CONFIG, PROJECT_ROOT
+from src.data.membership_state import (
+    MembershipContractError,
+    complete_snapshot_dates,
+    replay_membership_states,
+)
 from src.data.pit import (
     load_point_in_time_membership,
     point_in_time_required,
@@ -680,21 +685,21 @@ def _historical_tickers(
     membership, path = load_point_in_time_membership(universe)
     if membership is None or path is None:
         return set(), None, None
-    snapshots = pd.DatetimeIndex(sorted(membership["date"].unique()))
+    try:
+        snapshots = complete_snapshot_dates(membership)
+    except MembershipContractError as exc:
+        raise DataFoundationError(
+            f"invalid PIT membership contract for {universe}: {exc}"
+        ) from exc
     baseline = snapshots.searchsorted(start, side="right") - 1
     if baseline < 0:
         raise DataFoundationError(
             f"PIT membership for {universe} begins after ingestion start "
             f"{start.date()}"
         )
-    relevant = set(
-        snapshots[
-            (snapshots >= snapshots[baseline])
-            & (snapshots <= target)
-        ]
-    )
+    baseline_date = pd.Timestamp(snapshots[baseline]).normalize()
     version_membership = membership.loc[
-        membership["date"].isin(relevant)
+        membership["date"].between(baseline_date, target)
     ].copy()
     active = version_membership.loc[
         version_membership["active"], "ticker"
@@ -1131,13 +1136,6 @@ def validate_pit_bar_coverage(
             ) from exc
         calendar = xcals.get_calendar("XNYS")
 
-    snapshots = pd.DatetimeIndex(
-        sorted(
-            pd.to_datetime(membership["date"])
-            .dt.normalize()
-            .unique()
-        )
-    )
     sessions = pd.DatetimeIndex(
         calendar.sessions_in_range(
             start.date().isoformat(),
@@ -1147,32 +1145,30 @@ def validate_pit_bar_coverage(
     if sessions.tz is not None:
         sessions = sessions.tz_localize(None)
     sessions = sessions.normalize()
-    active_by_snapshot = {
-        pd.Timestamp(snapshot): set(
-            group.loc[group["active"], "ticker"].astype(str)
-        )
-        for snapshot, group in membership.groupby("date")
-    }
     observed_by_date = {
         pd.Timestamp(session): set(group["ticker"].astype(str))
         for session, group in bars.groupby("date")
     }
-
     daily: list[tuple[pd.Timestamp, float, int, int]] = []
     relevant_active: set[str] = set()
-    for session in sessions:
-        position = snapshots.searchsorted(session, side="right") - 1
-        if position < 0:
-            daily.append((session, 0.0, 0, 0))
-            continue
-        active = active_by_snapshot.get(
-            pd.Timestamp(snapshots[position]), set()
-        )
-        relevant_active.update(active)
-        observed = observed_by_date.get(pd.Timestamp(session), set())
-        covered = len(active & observed)
-        coverage = covered / len(active) if active else 1.0
-        daily.append((session, coverage, covered, len(active)))
+    try:
+        for state in replay_membership_states(
+            membership,
+            sessions,
+            key_column="ticker",
+            require_baseline=False,
+        ):
+            session = state.date
+            active = set(state.active_keys)
+            relevant_active.update(active)
+            observed = observed_by_date.get(pd.Timestamp(session), set())
+            covered = len(active & observed)
+            coverage = covered / len(active) if active else 1.0
+            daily.append((session, coverage, covered, len(active)))
+    except MembershipContractError as exc:
+        raise DataFoundationError(
+            f"invalid PIT membership contract: {exc}"
+        ) from exc
 
     worst = min(daily, key=lambda item: item[1]) if daily else None
     worst_coverage = float(worst[1]) if worst is not None else 0.0
@@ -1358,9 +1354,9 @@ class MarketDataWriter:
     def _fetcher(self) -> Fetcher:
         if self.fetcher is not None:
             return self.fetcher
-        from src.data.fmp import get_historical_ohlcv
+        from src.data.fmp import get_canonical_historical_ohlcv
 
-        return get_historical_ohlcv
+        return get_canonical_historical_ohlcv
 
     def update_universe(
         self,
@@ -1476,22 +1472,54 @@ class MarketDataWriter:
                             "Run `python scripts/run_data_pipeline.py pit` "
                             "before daily market-data ingestion."
                         )
-                    latest_snapshot = pd.Timestamp(
-                        pit_membership["date"].max()
-                    ).normalize()
-                    if latest_snapshot != target:
+                    try:
+                        complete_dates = complete_snapshot_dates(pit_membership)
+                        latest_membership = next(
+                            replay_membership_states(
+                                pit_membership,
+                                [target],
+                                key_column="ticker",
+                            )
+                        )
+                    except (MembershipContractError, StopIteration) as exc:
+                        raise DataFoundationError(
+                            f"[{universe}] invalid PIT membership contract: {exc}"
+                        ) from exc
+                    if complete_dates.empty:
+                        raise DataFoundationError(
+                            f"[{universe}] PIT membership has no complete snapshot"
+                        )
+                    latest_snapshot = pd.Timestamp(complete_dates.max()).normalize()
+                    snapshot_types = (
+                        set(
+                            pit_membership["snapshot_type"]
+                            .fillna("")
+                            .astype(str)
+                            .str.upper()
+                        )
+                        - {""}
+                        if "snapshot_type" in pit_membership.columns
+                        else set()
+                    )
+                    has_compact_contract = bool(
+                        "MONTH_END" in snapshot_types
+                        and snapshot_types.issubset(
+                            {
+                                "MONTH_END",
+                                "FORCED_EXIT",
+                                "FORCED_EXIT_CARRY_FORWARD",
+                            }
+                        )
+                    )
+                    if latest_snapshot > target or (
+                        not has_compact_contract and latest_snapshot != target
+                    ):
                         raise DataFoundationError(
                             f"[{universe}] PIT membership ends at "
                             f"{latest_snapshot.date()}, but the target session "
                             f"is {target_date}. Refresh PIT before ingestion."
                         )
-                    latest_members = set(
-                        pit_membership.loc[
-                            pit_membership["date"].eq(latest_snapshot)
-                            & pit_membership["active"],
-                            "ticker",
-                        ].astype(str)
-                    )
+                    latest_members = set(latest_membership.active_keys)
                     if latest_members != current_tickers:
                         missing = sorted(current_tickers - latest_members)[:20]
                         extra = sorted(latest_members - current_tickers)[:20]
@@ -1837,7 +1865,12 @@ class MarketDataReader:
     def __init__(self, *, catalog: MarketDataCatalog | None = None):
         self.catalog = catalog or MarketDataCatalog()
 
-    def require_latest(self, universe: str) -> DatasetVersion:
+    def require_latest(
+        self,
+        universe: str,
+        *,
+        verify_partition_children: bool = True,
+    ) -> DatasetVersion:
         universe = safe_path_component(universe.upper(), label="universe")
         version = self.catalog.latest_version(universe)
         if version is None:
@@ -1846,21 +1879,43 @@ class MarketDataReader:
                 f"`python scripts/run_data_pipeline.py update --universe "
                 f"{universe}` first. No legacy fallback is allowed."
             )
-        self.verify_version(version)
+        self.verify_version(
+            version,
+            verify_partition_children=verify_partition_children,
+        )
         return version
 
-    def require_version(self, universe: str, version_id: str) -> DatasetVersion:
+    def require_version(
+        self,
+        universe: str,
+        version_id: str,
+        *,
+        verify_partition_children: bool = True,
+    ) -> DatasetVersion:
         universe = safe_path_component(universe.upper(), label="universe")
         version = self.catalog.get_version(version_id, universe=universe)
         if version is None:
             raise DataFoundationError(
                 f"[{universe}] published data version does not exist: {version_id}"
             )
-        self.verify_version(version)
+        self.verify_version(
+            version,
+            verify_partition_children=verify_partition_children,
+        )
         return version
 
-    def verify_version(self, version: DatasetVersion) -> dict[str, Any]:
-        """Fail closed unless every immutable publication file is authenticated."""
+    def verify_version(
+        self,
+        version: DatasetVersion,
+        *,
+        verify_partition_children: bool = True,
+    ) -> dict[str, Any]:
+        """Authenticate a publication and, by default, every child partition.
+
+        Read-only metadata pages may explicitly skip re-hashing child Parquet
+        files after authenticating the immutable partition index. Production
+        publication and shadow verification keep the default full check.
+        """
         required_hashes = {
             "bars_sha256": version.checksum_sha256,
             "universe_sha256": version.universe_checksum_sha256,
@@ -1926,6 +1981,11 @@ class MarketDataReader:
                 f"[{version.universe}] manifest/catalog mismatch for "
                 f"{version.version_id}: {mismatches}"
             )
+        if manifest.get("bars_storage_type") == "PARTITIONED_PARQUET_V1":
+            self._load_partition_index(
+                version,
+                verify_children=verify_partition_children,
+            )
         events_name = manifest.get("membership_events_path")
         events_sha256 = manifest.get("membership_events_sha256")
         if bool(events_name) != bool(events_sha256):
@@ -1943,7 +2003,111 @@ class MarketDataReader:
                     f"Published membership-event file is missing: {events_path}"
                 )
             _verify_file_sha256(events_path, str(events_sha256))
+        quarantine_name = manifest.get("bar_quarantine_path")
+        quarantine_sha256 = manifest.get("bar_quarantine_sha256")
+        if bool(quarantine_name) != bool(quarantine_sha256):
+            raise DataFoundationError(
+                f"[{version.universe}] incomplete bar-quarantine contract"
+            )
+        if quarantine_name:
+            quarantine_path = (
+                manifest_path.parent / str(quarantine_name)
+            ).resolve()
+            if quarantine_path.parent != manifest_path.parent.resolve():
+                raise DataFoundationError(
+                    f"[{version.universe}] invalid bar-quarantine path"
+                )
+            if not quarantine_path.exists():
+                raise DataFoundationError(
+                    f"Published bar-quarantine file is missing: {quarantine_path}"
+                )
+            _verify_file_sha256(quarantine_path, str(quarantine_sha256))
         return manifest
+
+    def _load_partition_index(
+        self,
+        version: DatasetVersion,
+        *,
+        verify_children: bool,
+    ) -> dict[str, Any] | None:
+        """Load an authenticated broad-coverage partition index, if present."""
+        index_path = _resolve_path(version.bars_path)
+        if index_path.suffix.lower() != ".json":
+            return None
+        try:
+            payload = json.loads(index_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise DataFoundationError(
+                f"[{version.universe}] partition index is unreadable: {index_path}"
+            ) from exc
+        if payload.get("storage_type") != "PARTITIONED_PARQUET_V1":
+            return None
+        if int(payload.get("schema_version") or 0) != 1:
+            raise DataFoundationError(
+                f"[{version.universe}] unsupported partition-index schema"
+            )
+        if str(payload.get("version_id")) != version.version_id:
+            raise DataFoundationError(
+                f"[{version.universe}] partition index version mismatch"
+            )
+        entries = payload.get("partitions")
+        if not isinstance(entries, list) or not entries:
+            raise DataFoundationError(
+                f"[{version.universe}] partition index contains no files"
+            )
+        root = index_path.parent.resolve()
+        for entry in entries:
+            if not isinstance(entry, dict) or not entry.get("file") or not entry.get("sha256"):
+                raise DataFoundationError(
+                    f"[{version.universe}] malformed partition-index entry"
+                )
+            child = (root / str(entry["file"])).resolve()
+            if not child.is_relative_to(root):
+                raise DataFoundationError(
+                    f"[{version.universe}] partition path escapes publication root"
+                )
+            if not child.is_file():
+                raise DataFoundationError(
+                    f"[{version.universe}] published partition is missing: {child}"
+                )
+            if verify_children:
+                _verify_file_sha256(child, str(entry["sha256"]))
+        return payload
+
+    def partition_paths(
+        self,
+        version: DatasetVersion,
+        *,
+        start: str | date | pd.Timestamp | None = None,
+        end: str | date | pd.Timestamp | None = None,
+    ) -> list[Path]:
+        """Resolve and authenticate only partitions intersecting the query.
+
+        The signed index authenticates the complete partition inventory.  A
+        bounded reader then hashes every child it will actually consume rather
+        than rescanning unrelated years for each monthly factor block.  Full
+        publication/shadow checks continue to call ``verify_version`` with its
+        default all-child verification.
+        """
+        self.verify_version(version, verify_partition_children=False)
+        payload = self._load_partition_index(version, verify_children=False)
+        if payload is None:
+            return [_resolve_path(version.bars_path)]
+        start_ts = pd.Timestamp(start).normalize() if start is not None else None
+        end_ts = pd.Timestamp(end).normalize() if end is not None else None
+        root = _resolve_path(version.bars_path).parent.resolve()
+        paths: list[Path] = []
+        for entry in payload["partitions"]:
+            minimum = pd.Timestamp(entry.get("min_date")).normalize()
+            maximum = pd.Timestamp(entry.get("max_date")).normalize()
+            if start_ts is not None and maximum < start_ts:
+                continue
+            if end_ts is not None and minimum > end_ts:
+                continue
+            child = (root / str(entry["file"])).resolve()
+            _verify_file_sha256(child, str(entry["sha256"]))
+            paths.append(child)
+        return paths
 
     def _resolve_version(
         self,
@@ -2078,10 +2242,9 @@ class MarketDataReader:
         version: DatasetVersion | str | None = None,
     ) -> pd.DataFrame:
         selected = self._resolve_version(universe, version)
-        path = _resolve_path(selected.bars_path)
-        if not path.exists():
-            raise DataFoundationError(f"Published Parquet file is missing: {path}")
-        _verify_file_sha256(path, selected.checksum_sha256)
+        paths = self.partition_paths(selected, start=start, end=end)
+        if not paths:
+            return pd.DataFrame(columns=BAR_COLUMNS)
 
         normalized_tickers = (
             sorted({str(ticker).strip().upper() for ticker in tickers if str(ticker).strip()})
@@ -2091,7 +2254,7 @@ class MarketDataReader:
         if normalized_tickers == []:
             return pd.DataFrame(columns=BAR_COLUMNS)
         conditions: list[str] = []
-        parameters: list[Any] = [str(path)]
+        parameters: list[Any] = [[str(path) for path in paths]]
         if normalized_tickers is not None:
             placeholders = ", ".join("?" for _ in normalized_tickers)
             conditions.append(f"upper(ticker) IN ({placeholders})")
@@ -2136,6 +2299,16 @@ class MarketDataReader:
     ) -> dict[str, pd.DataFrame]:
         requested = list(tickers) if tickers is not None else None
         selected = self._resolve_version(universe, version)
+        manifest = self.verify_version(selected)
+        if (
+            manifest.get("bars_storage_type") == "PARTITIONED_PARQUET_V1"
+            and requested is None
+        ):
+            raise DataFoundationError(
+                f"[{universe}] partitioned broad coverage cannot be loaded as "
+                "an unrestricted Pandas wide table; provide an explicit ticker "
+                "subset or use BroadCoverageReader with date/column predicates"
+            )
         bars = self.load_bars(
             universe,
             tickers=requested,

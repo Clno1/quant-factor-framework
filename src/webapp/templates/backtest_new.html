@@ -112,7 +112,16 @@
                         </option>
                     </select>
                 </div>
-                <div></div>
+                <div class="form-field">
+                    <label class="form-label">名义组合资金（USD）</label>
+                    <input id="exec-portfolio-value" class="form-input mono" type="number"
+                           min="1" max="1000000000000" step="100"
+                           value="{{ '%.2f'|format(default_exec.portfolio_value) }}">
+                    <div class="form-hint">
+                        用于把目标权重换算成订单股数；单日成交仍受
+                        ADV{{ default_exec.adv_window }} × {{ '%.2f'|format(default_exec.volume_limit * 100) }}% 上限约束。
+                    </div>
+                </div>
             </div>
             <div class="form-row">
                 <div class="form-field">
@@ -159,6 +168,7 @@ async function submitBacktest() {
     const name = document.getElementById('task-name').value.trim();
 
     const timing = document.getElementById('exec-timing').value;
+    const portfolio_value = parseFloat(document.getElementById('exec-portfolio-value').value);
     const fee_model = document.getElementById('exec-fee-model').value;
     const slippage_model = document.getElementById('exec-slippage-model').value;
     const slippage_bps = parseFloat(document.getElementById('exec-slippage').value);
@@ -166,10 +176,13 @@ async function submitBacktest() {
 
     if (!strategy_id) { msg.textContent = '请选择策略'; msg.className = 'submit-msg err'; return; }
     if (!universe)    { msg.textContent = '请选择目标股票池'; msg.className = 'submit-msg err'; return; }
+    if (!Number.isFinite(portfolio_value) || portfolio_value <= 0) {
+        msg.textContent = '名义组合资金必须大于 0'; msg.className = 'submit-msg err'; return;
+    }
 
     const payload = {
         strategy_id, universe, start, end, name,
-        execution: { timing, fee_model, slippage_model, slippage_bps, commission_bps },
+        execution: { timing, portfolio_value, fee_model, slippage_model, slippage_bps, commission_bps },
     };
 
     btn.disabled = true; btn.textContent = '提交中...';

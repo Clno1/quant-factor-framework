@@ -23,7 +23,11 @@ import pandas as pd
 from src.backtest.adhoc import adhoc_compose
 from src.backtest.composer import compose_factor
 from src.backtest.metrics import performance_summary, relative_performance_summary
-from src.backtest.quintile import build_tradable_mask, quintile_backtest
+from src.backtest.quintile import (
+    BacktestCapacityError,
+    build_tradable_mask,
+    quintile_backtest,
+)
 from src.backtest import store as bt_store
 from src.config import CONFIG
 from src.data.access import (
@@ -337,13 +341,63 @@ def _run_task_safely(task_id: str) -> None:
                 },
             },
         )
+    except BacktestCapacityError as e:
+        details = e.to_dict()
+        log.warning("[task=%s] ADV capacity rejected: %s", task_id, e)
+        try:
+            current = bt_store.load_task(task_id) or {}
+            diagnostics = dict(current.get("diagnostics") or {})
+            diagnostics["capacity_error"] = details
+            started_at = current.get("started_at")
+            started = (
+                datetime.fromisoformat(str(started_at))
+                if started_at
+                else None
+            )
+            finished_at = datetime.now(tz=started.tzinfo if started else None)
+            duration_sec = None
+            if started is not None:
+                duration_sec = max(
+                    0.0,
+                    (finished_at - started).total_seconds(),
+                )
+            bt_store.update_task(task_id, {
+                "status": bt_store.STATUS_FAILED,
+                "finished_at": finished_at.isoformat(timespec="seconds"),
+                "duration_sec": (
+                    round(duration_sec, 3) if duration_sec is not None else None
+                ),
+                "error_code": e.code,
+                "error": str(e),
+                "error_details": details,
+                "diagnostics": diagnostics,
+            })
+        except Exception as e2:  # noqa: BLE001
+            log.error("[task=%s] failed to persist capacity error: %s", task_id, e2)
     except Exception as e:  # noqa: BLE001
         tb = traceback.format_exc()
         log.error("[task=%s] failed: %s\n%s", task_id, e, tb)
         try:
+            current = bt_store.load_task(task_id) or {}
+            started_at = current.get("started_at")
+            started = (
+                datetime.fromisoformat(str(started_at))
+                if started_at
+                else None
+            )
+            finished_at = datetime.now(tz=started.tzinfo if started else None)
+            duration_sec = None
+            if started is not None:
+                duration_sec = max(
+                    0.0,
+                    (finished_at - started).total_seconds(),
+                )
             bt_store.update_task(task_id, {
                 "status": bt_store.STATUS_FAILED,
-                "finished_at": datetime.now().isoformat(timespec="seconds"),
+                "finished_at": finished_at.isoformat(timespec="seconds"),
+                "duration_sec": (
+                    round(duration_sec, 3) if duration_sec is not None else None
+                ),
                 "error": f"{type(e).__name__}: {e}\n\n{tb}",
             })
         except Exception as e2:  # noqa: BLE001
@@ -632,6 +686,19 @@ def _run_task(task_id: str) -> None:
         log.info("[task=%s] reduced n_groups: %d -> %d (small universe)",
                  task_id, n_groups, effective_n_groups)
     effective_top = min(top_group, effective_n_groups)
+    execution_plan = {
+        "requested_n_groups": n_groups,
+        "effective_n_groups": effective_n_groups,
+        "requested_top_group": top_group,
+        "effective_top_group": effective_top,
+        "n_tickers": n_tickers,
+        "small_universe_adjusted": effective_n_groups != n_groups,
+    }
+    current_diagnostics = dict(
+        (bt_store.load_task(task_id) or {}).get("diagnostics") or {}
+    )
+    current_diagnostics["execution_plan"] = execution_plan
+    bt_store.update_task(task_id, {"diagnostics": current_diagnostics})
 
     log.info("[task=%s] running quintile backtest: n_groups=%d, rebalance=%dd, top=Q%d, "
              "execution=%s fee_model=%s slippage_model=%s slippage=%.1fbps commission=%.1fbps",
@@ -763,6 +830,7 @@ def _run_task(task_id: str) -> None:
         "normalized_weights": compose_normalized_weights,
         "effective_n_groups": effective_n_groups,
         "effective_top_group": effective_top,
+        "execution_plan": execution_plan,
         "rebalance_mode": rebalance_mode,
         "n_tickers": n_tickers,
         "n_trading_days": int(top_returns.shape[0]),

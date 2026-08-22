@@ -1,0 +1,38 @@
+[Unit]
+Description=Record an exact broad-data shadow observation (root deployment)
+After=quant-broad-factor-data.service
+StartLimitIntervalSec=12h
+StartLimitBurst=2
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/home/projects/quant
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONPATH=/home/projects/quant
+Environment=OMP_NUM_THREADS=1
+Environment=OPENBLAS_NUM_THREADS=1
+Environment=MKL_NUM_THREADS=1
+ExecStartPre=/home/projects/quant/.venv/bin/python -c "import duckdb, exchange_calendars, sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
+ExecStart=/home/projects/quant/.venv/bin/python /home/projects/quant/scripts/check_broad_shadow_observation.py --record-current --json
+TimeoutStartSec=2h
+Nice=10
+CPUAccounting=true
+MemoryAccounting=true
+TasksAccounting=true
+MemoryHigh=450M
+MemoryMax=600M
+TasksMax=32
+OOMPolicy=stop
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/projects/quant/data /home/projects/quant/outputs /home/projects/quant/logs
+ReadWritePaths=-/home/projects/quant/runlog
+
+[Install]
+WantedBy=multi-user.target

@@ -1,5 +1,5 @@
 [Unit]
-Description=Send isolated US premarket momentum digest
+Description=Send isolated US premarket momentum and sector digests
 Wants=network-online.target
 After=network-online.target quant-us-daily-refresh.service
 StartLimitIntervalSec=30min
@@ -14,10 +14,11 @@ Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONPATH=/home/projects/quant
 Environment=MPLCONFIGDIR=/home/projects/quant/data/cache/matplotlib
-Environment=PREMARKET_SECTOR_ROTATION_ENABLED=false
+Environment=PREMARKET_SECTOR_ROTATION_ENABLED=true
 EnvironmentFile=/etc/quant/premarket-digest.env
 ExecStartPre=/home/projects/quant/.venv/bin/python -c "import sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
-ExecStart=/home/projects/quant/.venv/bin/python /home/projects/quant/scripts/run_premarket_digest.py --env-file /etc/quant/premarket-digest.env --send --scheduled --channel momentum
+ExecStartPre=/home/projects/quant/.venv/bin/python /home/projects/quant/scripts/verify_momentum_discord_routing.py --component premarket
+ExecStart=/home/projects/quant/.venv/bin/python /home/projects/quant/scripts/run_premarket_digest.py --env-file /etc/quant/premarket-digest.env --send --scheduled --channel all
 TimeoutStartSec=10min
 Restart=on-failure
 RestartSec=3min
@@ -27,7 +28,8 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=read-only
-ReadWritePaths=/home/projects/quant/data /home/projects/quant/outputs /home/projects/quant/logs /home/projects/quant/runlog
+ReadWritePaths=/home/projects/quant/data /home/projects/quant/outputs /home/projects/quant/logs
+ReadWritePaths=-/home/projects/quant/runlog
 
 [Install]
 WantedBy=multi-user.target

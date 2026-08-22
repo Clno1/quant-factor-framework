@@ -1,0 +1,101 @@
+# Reviewed corrections for provider omissions in the NASDAQ-100 PIT event log.
+#
+# Each entry is an exact, dated index event supported by primary sources. The
+# loader rejects broad ticker aliases, duplicate events, and source-free edits.
+# Current-snapshot correction is permitted only when Nasdaq's official list
+# independently shows the exact addition or removal.
+schema_version: 1
+universe: NASDAQ100
+
+reviewed_events:
+  - id: xlnx_acquisition_reason
+    effective_date: "2022-02-22"
+    added_ticker: AZN
+    removed_ticker: XLNX
+    added_security: "AstraZeneca plc (ADR)"
+    removed_security: "Xilinx Inc"
+    corrected_reason: "Xilinx was acquired by AMD in an all-stock merger completed on 2022-02-14; AZN replaced XLNX in the Nasdaq-100 effective 2022-02-22."
+    provider_event:
+      added_ticker: AZN
+      removed_ticker: XLNX
+      reason_contains: "Annual Re-ranking"
+      removed_security_contains: "Xilinx"
+    sources:
+      - "https://ir.nasdaq.com/news-releases/news-release-details/astrazeneca-plc-adr-join-nasdaq-100-index-beginning-february-22"
+      - "https://www.sec.gov/Archives/edgar/data/2488/000000248822000031/amd-20220214.htm"
+
+  - id: ttwo_readded_in_2023_annual_reconstitution
+    effective_date: "2023-12-18"
+    added_ticker: TTWO
+    removed_ticker: SGEN
+    added_security: "Take-Two Interactive Software, Inc."
+    removed_security: "Seagen Inc."
+    reason: "Take-Two replaced Seagen in the 2023 Nasdaq-100 annual reconstitution. FMP supplied TTWO in symbol but omitted addedSecurity, so the original normalizer discarded the addition."
+    provider_event:
+      added_ticker: null
+      removed_ticker: SGEN
+      reason_contains: "Annual Re-ranking"
+      removed_security_contains: "Seagen"
+    sources:
+      - "https://www.nasdaq.com/press-release/update%3A-annual-changes-to-the-nasdaq-100r-index-2023-12-12"
+      - "https://site.financialmodelingprep.com/developer/docs/legacy-endpoints"
+
+  - id: anss_acquisition_reason
+    effective_date: "2025-07-28"
+    added_ticker: TRI
+    removed_ticker: ANSS
+    added_security: "Thomson Reuters Corporation"
+    removed_security: "ANSYS Inc"
+    corrected_reason: "ANSYS was acquired by Synopsys on 2025-07-17; TRI replaced ANSS in the Nasdaq-100 effective 2025-07-28."
+    provider_event:
+      added_ticker: TRI
+      removed_ticker: ANSS
+      reason_contains: "Annual Re-ranking"
+      removed_security_contains: "ANSYS"
+    sources:
+      - "https://www.nasdaq.com/press-release/thomson-reuters-corp-join-nasdaq-100-indexr-beginning-july-28-2025-2025-07-18"
+      - "https://www.sec.gov/Archives/edgar/data/883241/000114036125026139/ef20051970_8k.htm"
+
+  - id: sols_spin_off_removed_after_weight_test
+    effective_date: "2025-11-06"
+    added_ticker: null
+    removed_ticker: SOLS
+    added_security: null
+    removed_security: "Solstice Advanced Materials"
+    reason: "SOLS was a removal-only event after the spin-off failed the Nasdaq-100 minimum-weight test. FMP repeated SOLS in both symbol and removedTicker."
+    provider_event:
+      added_ticker: SOLS
+      removed_ticker: SOLS
+      reason_contains: "minimum monthly weight requirements"
+      removed_security_contains: "Solstice Advanced Materials"
+    sources:
+      - "https://indexes.nasdaq.com/docs/Corporate_Actions_and_Events_Manual_Equities.pdf"
+      - "https://www.nasdaq.com/articles/looking-nasdaq-100-index-adds-and-deletes"
+      - "https://site.financialmodelingprep.com/developer/docs/legacy-endpoints"
+
+  - id: hona_spin_off_added_to_parent_index
+    effective_date: "2026-06-29"
+    added_ticker: HONA
+    removed_ticker: null
+    added_security: "Honeywell Aerospace Inc."
+    removed_security: null
+    reason: "Honeywell Aerospace began regular-way trading after its spin-off; Nasdaq policy adds a listed spinco to the same index as its parent on the effective date."
+    current_metadata:
+      name: "Honeywell Aerospace Inc."
+      sector: "Industrials"
+      sub_industry: "Aerospace & Defense"
+    sources:
+      - "https://www.nasdaq.com/press-release/honeywell-aerospace-completes-spin-honeywell-technologies-and-begins-trading-nasdaq"
+      - "https://indexes.nasdaqomx.com/docs/Corporate_Actions_and_Events_Manual_-_Equities.pdf"
+      - "https://api.nasdaq.com/api/quote/list-type/nasdaq100"
+
+  - id: ea_take_private_index_removal
+    effective_date: "2026-08-05"
+    added_ticker: null
+    removed_ticker: EA
+    added_security: null
+    removed_security: "Electronic Arts Inc."
+    reason: "EA completed its take-private transaction after the August 4 close and Nasdaq suspended trading before the August 5 open."
+    sources:
+      - "https://www.sec.gov/Archives/edgar/data/712515/000114036126031157/ef20079099_8k.htm"
+      - "https://api.nasdaq.com/api/quote/list-type/nasdaq100"

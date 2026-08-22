@@ -119,7 +119,10 @@ def _enabled_universes() -> list[str]:
     """
     from src.research_universes import research_universe_registry
 
-    values = research_universe_registry().ids()
+    values = [
+        entry.universe_id
+        for entry in research_universe_registry().full_research_entries()
+    ]
     if not values:
         raise ValueError("research universe registry cannot be empty")
     return values

@@ -320,9 +320,9 @@ def _rolling_last_percentile(series: pd.Series, window: int) -> pd.Series:
 
 
 def compute_volatility_features(volatility: pd.DataFrame) -> FeatureBundle:
-    """Compute Cboe volatility level, change, percentile, and term structure."""
+    """Compute Cboe volatility/correlation state and volatility term structure."""
     frame = _normalize_index(volatility, label="Cboe volatility history")
-    required = {"VIX", "VIX9D", "VIX3M"}
+    required = {"VIX", "VIX9D", "VIX3M", "COR1M"}
     missing = required - set(frame.columns)
     if missing:
         raise DataContractError(
@@ -330,7 +330,17 @@ def compute_volatility_features(volatility: pd.DataFrame) -> FeatureBundle:
         )
     values: dict[str, pd.Series] = {}
     registry: list[FeatureDefinition] = []
-    for symbol in ("VIX", "VIX9D", "VIX3M"):
+    instruments = (
+        ("VIX", "implied_volatility", "VIX closing level"),
+        ("VIX9D", "implied_volatility", "VIX9D closing level"),
+        ("VIX3M", "implied_volatility", "VIX3M closing level"),
+        (
+            "COR1M",
+            "implied_correlation",
+            "Cboe one-month option-implied average correlation",
+        ),
+    )
+    for symbol, group, level_description in instruments:
         series = pd.to_numeric(frame[symbol], errors="coerce")
         lower = symbol.lower()
         _add(
@@ -338,11 +348,11 @@ def compute_volatility_features(volatility: pd.DataFrame) -> FeatureBundle:
             registry,
             name=f"{lower}_level",
             series=series,
-            group="implied_volatility",
+            group=group,
             instrument=symbol,
             formula=f"{symbol}_close",
             lookback=1,
-            description=f"{symbol} closing level",
+            description=level_description,
             availability="Cboe value available after 17:00 America/New_York",
         )
         for window in (1, 5, 20):
@@ -351,7 +361,7 @@ def compute_volatility_features(volatility: pd.DataFrame) -> FeatureBundle:
                 registry,
                 name=f"{lower}_change_{window}d",
                 series=series.diff(window),
-                group="implied_volatility",
+                group=group,
                 instrument=symbol,
                 formula=f"{symbol}_t - {symbol}_t-{window}",
                 lookback=window,
@@ -363,7 +373,7 @@ def compute_volatility_features(volatility: pd.DataFrame) -> FeatureBundle:
             registry,
             name=f"{lower}_percentile_252d",
             series=_rolling_last_percentile(series, 252),
-            group="implied_volatility",
+            group=group,
             instrument=symbol,
             formula="empirical percentile of latest value in trailing 252 sessions",
             lookback=252,
@@ -541,6 +551,7 @@ def _average_pairwise_correlation(
     *,
     window: int,
     minimum_members: int,
+    minimum_coverage: float,
 ) -> pd.Series:
     """
     Efficiently estimate average pairwise correlation without 500x500 matrices.
@@ -559,7 +570,11 @@ def _average_pairwise_correlation(
         standard_deviation = sample.std(axis=0, ddof=1)
         sample = sample.loc[:, standard_deviation > 0]
         count = sample.shape[1]
-        if count < minimum_members:
+        required_count = max(
+            minimum_members,
+            int(math.ceil(len(columns) * minimum_coverage)),
+        )
+        if count < required_count:
             continue
         standardized = (
             sample - sample.mean(axis=0)
@@ -586,7 +601,12 @@ def compute_breadth_features(
     continuously_active = mask & mask.shift(1, fill_value=False)
     active_returns = returns.where(continuously_active)
     valid_count = active_returns.notna().sum(axis=1)
-    enough = valid_count >= config.min_cross_section_members
+    return_member_count = continuously_active.sum(axis=1)
+    return_coverage = valid_count / return_member_count.replace(0, np.nan)
+    enough = (
+        (valid_count >= config.min_cross_section_members)
+        & (return_coverage >= config.min_cross_section_coverage)
+    )
 
     advances = (active_returns > 0).sum(axis=1)
     declines = (active_returns < 0).sum(axis=1)
@@ -639,37 +659,78 @@ def compute_breadth_features(
         description="Share of PIT constituents with zero daily return",
     )
 
+    active_member_count = mask.sum(axis=1)
+    moving_average_coverage: dict[int, pd.Series] = {}
     for window in config.moving_average_windows:
         moving_average = prices.rolling(window, min_periods=window).mean()
         valid = mask & prices.notna() & moving_average.notna()
         denominator = valid.sum(axis=1)
+        coverage = denominator / active_member_count.replace(0, np.nan)
         numerator = ((prices > moving_average) & valid).sum(axis=1)
+        breadth = (numerator / denominator).where(
+            (denominator >= config.min_cross_section_members)
+            & (coverage >= config.min_cross_section_coverage)
+        )
+        moving_average_coverage[window] = coverage
         _add(
             values,
             registry,
             name=f"breadth_above_ma{window}_pct",
-            series=(numerator / denominator).where(
-                denominator >= config.min_cross_section_members
-            ),
+            series=breadth,
             group="breadth",
             instrument="SP500_PIT",
             formula=f"members_above_MA{window} / valid_PIT_members",
             lookback=window,
             description=f"Share of PIT constituents above MA{window}",
         )
+        for change_window in config.breadth_change_windows:
+            _add(
+                values,
+                registry,
+                name=(
+                    f"breadth_above_ma{window}_change_{change_window}d"
+                ),
+                series=breadth.diff(change_window),
+                group="breadth",
+                instrument="SP500_PIT",
+                formula=(
+                    f"breadth_above_MA{window}_t - "
+                    f"breadth_above_MA{window}_t-{change_window}"
+                ),
+                lookback=window + change_window,
+                description=(
+                    f"{change_window}-session change in the share of PIT "
+                    f"constituents above MA{window}"
+                ),
+            )
 
     rolling_high = prices.rolling(252, min_periods=252).max()
     rolling_low = prices.rolling(252, min_periods=252).min()
     high_valid = mask & prices.notna() & rolling_high.notna()
     low_valid = mask & prices.notna() & rolling_low.notna()
+    high_count = high_valid.sum(axis=1)
+    low_count = low_valid.sum(axis=1)
+    high_enough = (
+        (high_count >= config.min_cross_section_members)
+        & (
+            high_count / active_member_count.replace(0, np.nan)
+            >= config.min_cross_section_coverage
+        )
+    )
+    low_enough = (
+        (low_count >= config.min_cross_section_members)
+        & (
+            low_count / active_member_count.replace(0, np.nan)
+            >= config.min_cross_section_coverage
+        )
+    )
     _add(
         values,
         registry,
         name="breadth_new_high_252d_pct",
         series=(
-            ((prices >= rolling_high) & high_valid).sum(axis=1)
-            / high_valid.sum(axis=1)
-        ).where(high_valid.sum(axis=1) >= config.min_cross_section_members),
+            ((prices >= rolling_high) & high_valid).sum(axis=1) / high_count
+        ).where(high_enough),
         group="breadth",
         instrument="SP500_PIT",
         formula="members_at_252d_high / valid_PIT_members",
@@ -681,9 +742,8 @@ def compute_breadth_features(
         registry,
         name="breadth_new_low_252d_pct",
         series=(
-            ((prices <= rolling_low) & low_valid).sum(axis=1)
-            / low_valid.sum(axis=1)
-        ).where(low_valid.sum(axis=1) >= config.min_cross_section_members),
+            ((prices <= rolling_low) & low_valid).sum(axis=1) / low_count
+        ).where(low_enough),
         group="breadth",
         instrument="SP500_PIT",
         formula="members_at_252d_low / valid_PIT_members",
@@ -749,6 +809,7 @@ def compute_breadth_features(
             mask,
             window=config.correlation_window,
             minimum_members=config.correlation_min_members,
+            minimum_coverage=config.min_cross_section_coverage,
         ),
         group="cross_section",
         instrument="SP500_PIT",
@@ -761,6 +822,20 @@ def compute_breadth_features(
         "median_valid_members": float(valid_count.median()),
         "maximum_valid_members": int(valid_count.max()),
         "low_coverage_dates": int((~enough).sum()),
+        "minimum_required_member_coverage": float(
+            config.min_cross_section_coverage
+        ),
+        "return_member_coverage": {
+            "minimum": float(return_coverage.min()),
+            "median": float(return_coverage.median()),
+        },
+        "moving_average_member_coverage": {
+            f"ma{window}": {
+                "minimum": float(coverage.min()),
+                "median": float(coverage.median()),
+            }
+            for window, coverage in moving_average_coverage.items()
+        },
     }
     return _bundle(values, registry, diagnostics=diagnostics)
 

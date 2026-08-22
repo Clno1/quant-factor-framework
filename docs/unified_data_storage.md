@@ -1,6 +1,6 @@
 # 统一数据与存储架构
 
-更新日期：2026-08-08
+更新日期：2026-08-12
 
 本文描述当前实现，不保留旧 JSON 影子、逐票日线缓存或迁移期双写说明。
 
@@ -33,6 +33,11 @@ flowchart LR
     APP --> PAPER
     APP --> REQUEST["缺数请求"]
     REQUEST --> W
+    FMP --> SM["Security Master writer"]
+    SM --> BC["US_EQUITY_COVERAGE 月分片"]
+    BC --> PIT["US_LIQUID_5M PIT"]
+    PIT --> BFD["宽基 factor data"]
+    BFD --> RESEARCH
 ```
 
 ## 2. 每种数据真实长什么样
@@ -153,12 +158,18 @@ outputs/universes/SP500/factors/MOM_12M/
 它的作用不是保存全部因子值，而是证明页面、回测和模拟盘读取的每个因子来自同一批行情、同一
 个 PIT 股票池和一组完整 generation。
 
+全美宽基另有 `factor_data_publication.json`。它绑定 coverage DatasetVersion、derived universe、
+Security Master 和八因子月分片，只证明 raw/clean/rank 可查询，不证明 IC、ICIR 或 confidence
+通过。两种 publication 不得互相冒充。
+
 ## 3. 当前目录边界
 
 ```text
 data/
   catalog/                 # DuckDB 目录、writer lock、研究发布 lock
   lake/                    # 不可变 raw/curated 行情版本
+    security_master/       # 身份、ticker 区间、分类和历史研究政策的不可变 generation
+    universes/             # 由 coverage 派生的 PIT membership/eligibility
   pit_universes/           # 当前正式 SP500/NASDAQ100 PIT 文件和元数据
   raw/pit/                 # PIT 供应商事件、修正和构建诊断
   raw/universe/            # FMP 当前证券快照，如 US_ACTIVE
@@ -172,6 +183,7 @@ data/
 outputs/
   quant_app.sqlite3        # 可变业务主库
   universes/               # 正式因子和 group analytics 发布物
+    US_LIQUID_5M/factor_data/ # 宽基 long Parquet generation 与 pointer
   backtests/               # 大型回测结果与日志
   market_regime_research/  # 独立研究产物
   momentum_alerts/         # 独立告警状态/产物
@@ -207,6 +219,13 @@ scripts/run_data_pipeline.py
 scripts/refresh_us_active.py
 scripts/run_data_requests.py
   -> MarketDataWriter
+
+scripts/build_security_master.py
+scripts/backfill_us_equity_coverage.py
+scripts/update_us_equity_coverage.py
+scripts/build_us_liquid_pit.py
+scripts/run_broad_factor_data.py
+  -> 全美宽基专用、串行且版本绑定的 writer 链
 ```
 
 研究和交易消费者只能经过：
@@ -235,6 +254,7 @@ src/data/access.py
 | 08:45 | `quant-factor-research` | 绑定当日版本，发布两池因子研究、MAG7 参考结果和跨池结论 |
 | 09:15 | `quant-group-analytics-eod` | 从正式 SP500 行情版本生成 sector/sub-industry 强弱产物 |
 | 10:30 | `quant-paper-trading` | 校验行情和研究版本后运行 active 模拟盘账户 |
+| 11:30 | `quant-us-equity-coverage` | 已部署、首次链验收前保持关闭；正式启用后刷新 Security Master、月分片 coverage、PIT 宽基，成功后发布八因子并记录影子 |
 | 每 5 分钟 | `quant-data-requests` | 处理 Watchlist 缺数请求，成功后恢复等待中的消费者 |
 
 行情更新通常是增量的：如果某只股票的现有历史已经覆盖本次要求的起点，就从最后日期往前 21 个
@@ -242,6 +262,11 @@ src/data/access.py
 完整历史回补，不能只补最近 21 天。因子研究目前按完整研究窗口重算，不是只追加一天。原因是
 复权值可能被供应商修订，去极值、z-score、IC、稳定性和分组结果又是跨股票、跨时间的关联计算。
 它通过“相同版本已经有有效发布则 NOOP”避免无意义重复运行。
+
+宽基日链采用不同策略：每个交易日只刷新 21 日 overlap，重建受影响的行情月份；因子按“因子 x
+月份”比较输入指纹，只重算真正变化的月份。完整历史回填是上线一次和方法变化时的低频工作，不是
+每天重复。11:30 是为了避开 07:15-10:30 既有任务；服务器从美股收盘到下一次开盘仍有足够窗口，
+首次全量重建还可以使用周末并依靠 checkpoint 续跑。
 
 ## 6. Watchlist 缺数队列
 

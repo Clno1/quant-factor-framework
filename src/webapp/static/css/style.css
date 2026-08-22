@@ -441,6 +441,53 @@ body.is-navigating .nav-progress {
     background: rgba(105, 212, 155, 0.045);
 }
 
+.research-workspace-tabs {
+    display: flex;
+    gap: 22px;
+    margin: 0 0 24px;
+    border-bottom: 1px solid var(--border);
+}
+
+.research-workspace-tabs a {
+    padding: 10px 2px 9px;
+    color: var(--text-2);
+    border-bottom: 2px solid transparent;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.research-workspace-tabs a:hover,
+.research-workspace-tabs a.is-active {
+    color: var(--text-0);
+    border-bottom-color: var(--accent-2);
+}
+
+.research-factor-definition {
+    margin-top: 7px;
+    max-width: 360px;
+    color: var(--text-2);
+    font-size: 11px;
+}
+
+.research-factor-definition > summary {
+    width: max-content;
+    color: var(--accent-2);
+    cursor: pointer;
+}
+
+.research-factor-definition p {
+    margin: 6px 0 0;
+    line-height: 1.55;
+}
+
+.research-factor-formula {
+    margin-top: 7px;
+    color: var(--text-1);
+    overflow-wrap: anywhere;
+}
+
+.research-factor-risk { color: var(--amber) !important; }
+
 .research-verdict,
 .pool-verdict,
 .role-label {
@@ -466,6 +513,7 @@ body.is-navigating .nav-progress {
 .verdict-segment_specific,
 .verdict-watch,
 .verdict-insufficient,
+.verdict-blocked,
 .verdict-stale { color: #f3c568; background: rgba(218, 166, 61, 0.10); border-color: rgba(243, 197, 104, 0.28); }
 .verdict-conflict,
 .verdict-reject,
@@ -1598,6 +1646,52 @@ textarea.form-input {
     max-height: 360px;
     overflow-y: auto;
 }
+.backtest-failure-message {
+    margin: 0 10px 14px;
+    color: var(--text-1);
+    font-size: 13px;
+    line-height: 1.65;
+}
+.backtest-capacity-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    margin: 0 10px;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+}
+.backtest-capacity-grid > div {
+    min-width: 0;
+    padding: 12px 10px;
+    border-right: 1px solid var(--border);
+}
+.backtest-capacity-grid span,
+.backtest-capacity-grid strong {
+    display: block;
+}
+.backtest-capacity-grid span {
+    margin-bottom: 5px;
+    color: var(--text-2);
+    font-size: 11px;
+}
+.backtest-capacity-grid strong {
+    color: var(--text-0);
+    font-size: 13px;
+    overflow-wrap: anywhere;
+}
+.backtest-failure-actions {
+    margin: 14px 10px 4px;
+}
+.backtest-technical-error {
+    margin: 14px 10px 4px;
+    color: var(--text-2);
+    font-size: 12px;
+}
+.backtest-technical-error > summary {
+    cursor: pointer;
+}
+.backtest-technical-error .error-pre {
+    margin-top: 10px;
+}
 
 /* ---------- 诊断网格 ---------- */
 .diag-grid {
@@ -1811,10 +1905,19 @@ textarea.form-input {
     color: var(--text-2);
     font-size: 12px;
 }
+.factor-data-state-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 7px;
+}
+.factor-data-state-actions:empty { display: none; }
 .factor-data-state.is-blocked strong,
 .factor-data-state.is-error strong { color: #f07f88; }
 .factor-data-state.is-loading strong { color: var(--accent-2); }
 .factor-data-view {
+    width: 100%;
+    min-width: 0;
     padding-top: 20px;
 }
 .factor-data-summary {
@@ -1888,6 +1991,8 @@ textarea.form-input {
 }
 .factor-history-chart {
     width: 100%;
+    max-width: 100%;
+    min-width: 0;
     min-height: 360px;
     margin-bottom: 14px;
     border-top: 1px solid var(--border);

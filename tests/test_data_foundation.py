@@ -15,6 +15,7 @@ from src.data.foundation import (
     MarketDataReader,
     MarketDataWriter,
     _filter_non_xnys_bars,
+    validate_pit_bar_coverage,
 )
 from src.data.access import (
     MarketDataNotReadyError,
@@ -54,6 +55,42 @@ def _bars(ticker: str, dates: list[str]) -> pd.DataFrame:
         },
         index=index,
     )
+
+
+def test_pit_bar_coverage_replays_compact_removal_events():
+    membership = pd.DataFrame([
+        {
+            "date": "2026-07-20",
+            "ticker": ticker,
+            "active": True,
+            "snapshot_type": "MONTH_END",
+        }
+        for ticker in ("AAA", "BBB")
+    ] + [{
+        "date": "2026-07-21",
+        "ticker": "BBB",
+        "active": False,
+        "snapshot_type": "FORCED_EXIT",
+    }])
+    bars = pd.DataFrame([
+        {"date": "2026-07-20", "ticker": "AAA"},
+        {"date": "2026-07-20", "ticker": "BBB"},
+        {"date": "2026-07-21", "ticker": "AAA"},
+    ])
+    bars["date"] = pd.to_datetime(bars["date"])
+
+    checks = validate_pit_bar_coverage(
+        bars,
+        membership,
+        start=pd.Timestamp("2026-07-20"),
+        target=pd.Timestamp("2026-07-22"),
+        min_daily_coverage=0.95,
+    )
+
+    daily = next(check for check in checks if check.name == "pit_daily_bar_coverage")
+    assert not daily.passed
+    assert daily.observed["worst_session"] == "2026-07-22"
+    assert daily.observed["active"] == 1
 
 
 class DataFoundationTests(unittest.TestCase):

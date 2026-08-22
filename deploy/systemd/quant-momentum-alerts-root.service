@@ -14,6 +14,7 @@ Environment=PYTHONPATH=/home/projects/quant
 Environment=MPLCONFIGDIR=/home/projects/quant/data/cache/matplotlib
 EnvironmentFile=/etc/quant/momentum-alerts.env
 ExecStartPre=/home/projects/quant/.venv/bin/python -c "import exchange_calendars, sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
+ExecStartPre=/home/projects/quant/.venv/bin/python /home/projects/quant/scripts/verify_momentum_discord_routing.py --component hourly
 ExecStart=/home/projects/quant/.venv/bin/python /home/projects/quant/scripts/run_momentum_alerts.py --env-file /etc/quant/momentum-alerts.env --send --scheduled-hourly
 TimeoutStartSec=50min
 UMask=0077
@@ -21,5 +22,5 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=read-only
-ReadWritePaths=/home/projects/quant/data /home/projects/quant/outputs /home/projects/quant/logs /home/projects/quant/runlog
-
+ReadWritePaths=/home/projects/quant/data /home/projects/quant/outputs /home/projects/quant/logs
+ReadWritePaths=-/home/projects/quant/runlog

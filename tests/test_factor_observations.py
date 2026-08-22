@@ -12,9 +12,11 @@ from src.data.foundation import MarketDataCatalog, MarketDataReader, MarketDataW
 from src.factors import artifacts, publication
 from src.factors.observations import FactorObservationError, FactorObservationReader
 from src.research_universes.models import (
+    FactorPublicationMode,
     MembershipType,
     ResearchUniverse,
     ResearchUniverseRole,
+    UniversePurpose,
 )
 from src.research_universes.registry import ResearchUniverseRegistry
 from src.utils.io import atomic_save_json, load_json
@@ -47,8 +49,11 @@ def _registry(tmp_path: Path) -> ResearchUniverseRegistry:
         {
             "TEST": ResearchUniverse(
                 universe_id="TEST",
+                display_name="Test",
+                purpose=UniversePurpose.VALIDATION,
                 role=ResearchUniverseRole.PRIMARY,
                 membership_type=MembershipType.PIT,
+                factor_publication_mode=FactorPublicationMode.FULL_RESEARCH,
                 benchmark="SPY",
                 confidence_enabled=False,
                 cross_universe_enabled=True,
@@ -317,6 +322,38 @@ def test_history_matches_snapshot_and_preserves_exit_history(monkeypatch, tmp_pa
     assert history["rows"][2]["factor_rank"] is None
 
 
+def test_history_missing_ticker_uses_plain_language_and_alternatives(
+    monkeypatch, tmp_path
+):
+    env = _fixture(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        env.reader,
+        "_ticker_alternatives",
+        lambda *_args, **_kwargs: [
+            {
+                "universe_id": "SECONDARY",
+                "role": "SECONDARY",
+                "first_pit_member_date": "2024-01-02",
+                "last_pit_member_date": "2025-05-16",
+                "latest_valid_observation_date": "2025-05-16",
+                "current_member": False,
+            }
+        ],
+    )
+
+    with pytest.raises(FactorObservationError) as caught:
+        env.reader.history(
+            universe="TEST",
+            factor_id="MOM_1M",
+            ticker="MDB",
+        )
+
+    assert caught.value.code == "TICKER_NOT_IN_GENERATION"
+    assert "generation" not in str(caught.value)
+    assert caught.value.details["selected_universe"] == "TEST"
+    assert caught.value.details["available_universes"][0]["universe_id"] == "SECONDARY"
+
+
 def test_calculation_window_status_and_single_security_percentile(
     monkeypatch, tmp_path
 ):
@@ -494,6 +531,11 @@ def test_metadata_reports_unpublished_and_invalid_without_throwing(
         "2026-07-17",
         "2026-07-20",
         "2026-07-21",
+    ]
+    assert meta["ticker_options"] == [
+        {"ticker": "AAA", "name": "Alpha"},
+        {"ticker": "BBB", "name": "BBB"},
+        {"ticker": "CCC", "name": "Gamma"},
     ]
     assert {row["factor_id"] for row in meta["universes"][0]["factors"]} == {
         "MOM_1M",

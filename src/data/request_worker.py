@@ -29,9 +29,16 @@ class RequestProcessingResult:
 
 def _membership_for_request(
     request: DataRequest,
+    *,
+    earliest_existing_date: Any = None,
 ) -> pd.DataFrame:
     payload = request.payload
     baseline = pd.Timestamp(payload["initial_start"]).normalize()
+    if earliest_existing_date is not None:
+        baseline = min(
+            baseline,
+            pd.Timestamp(earliest_existing_date).normalize(),
+        )
     return pd.DataFrame(
         {
             "date": baseline,
@@ -54,7 +61,11 @@ def process_data_request(
         universe_frame = pd.DataFrame(payload.get("universe_records") or [])
         if universe_frame.empty or "ticker" not in universe_frame.columns:
             raise ValueError("Data request contains no universe records")
-        membership = _membership_for_request(request)
+        latest = writer.catalog.latest_version(request.data_universe)
+        membership = _membership_for_request(
+            request,
+            earliest_existing_date=(latest.min_date if latest is not None else None),
+        )
         result = writer.update_universe(
             request.data_universe,
             target_session=None,

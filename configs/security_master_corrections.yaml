@@ -1,0 +1,79 @@
+# Reviewed Security Master symbol transitions omitted by the FMP event feed.
+#
+# Every transition must identify exact provider profile fields and cite primary
+# evidence. The loader rejects source-free entries, provider drift and pairs
+# that do not share an issue-level CUSIP or ISIN.
+schema_version: 1
+universe: US_SECURITY_MASTER
+
+reviewed_symbol_transitions:
+  - id: viaca_to_paraa_name_change
+    effective_date: "2022-02-17"
+    old_ticker: VIACA
+    new_ticker: PARAA
+    old_profile:
+      name_contains: "Paramount Global"
+      isin: US92556H1077
+      cusip: 92556H107
+      is_active: false
+    new_profile:
+      name_contains: "Paramount Global"
+      isin: US92556H1077
+      cusip: 92556H107
+      is_active: false
+    reason: "ViacomCBS changed its name to Paramount Global; Class A common stock began trading as PARAA at market open on 2022-02-17."
+    sources:
+      - "https://www.sec.gov/Archives/edgar/data/813828/000081382823000005/R10.htm"
+
+  - id: ucbi_to_ucb_exchange_transfer
+    effective_date: "2024-08-06"
+    old_ticker: UCBI
+    new_ticker: UCB
+    old_profile:
+      name_contains: "United Community Banks"
+      isin: US90984P3038
+      cusip: 90984P303
+      is_active: false
+    new_profile:
+      name_contains: "United Community Banks"
+      isin: US90984P3038
+      cusip: 90984P303
+      is_active: true
+    reason: "United Community Banks transferred its common-stock listing from Nasdaq to NYSE and began trading as UCB on 2024-08-06."
+    sources:
+      - "https://www.sec.gov/Archives/edgar/data/857855/000085785524000051/ucbi-20240726.htm"
+
+  - id: hspt_to_slbt_business_combination
+    effective_date: "2026-06-15"
+    old_ticker: HSPT
+    new_ticker: SLBT
+    old_profile:
+      name_contains: "Horizon Space Acquisition II"
+      isin: KYG8191L1169
+      cusip: G8191L116
+      is_active: false
+    new_profile:
+      name_contains: "SL Science Holding"
+      isin: KYG8191L1169
+      cusip: G8191L116
+      is_active: true
+    reason: "Horizon Space completed its business combination with SL Bio; the post-combination ordinary shares began Nasdaq trading as SLBT on 2026-06-15."
+    sources:
+      - "https://www.sec.gov/Archives/edgar/data/2070534/000110465926073797/tm2617928d1_ex99-1.htm"
+
+  - id: vach_to_vrxa_business_combination
+    effective_date: "2026-06-11"
+    old_ticker: VACH
+    new_ticker: VRXA
+    old_profile:
+      name_contains: "Voyager Acquisition"
+      isin: CH1476899161
+      is_active: false
+    new_profile:
+      name_contains: "Veraxa Biotech"
+      isin: CH1476899161
+      is_active: true
+    reason: "Voyager completed its business combination with Veraxa; the combined company's ordinary shares began Nasdaq trading as VRXA on 2026-06-11."
+    sources:
+      - "https://www.sec.gov/Archives/edgar/data/2079109/000182912626006302/veraxabiotech_8-a12ba.htm"
+      - "https://www.sec.gov/Archives/edgar/data/2079109/000182912626006329/veraxabiotech_ex99-1.htm"

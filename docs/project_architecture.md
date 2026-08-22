@@ -1,13 +1,15 @@
 # 项目运行架构
 
-更新日期：2026-08-09
+更新日期：2026-08-12
 
 ## 1. 系统由多个进程协作
 
 | 入口 | 职责 | 主输出 |
 |---|---|---|
 | `scripts/run_data_pipeline.py` | SP500/NASDAQ100 PIT、核心研究池日线摄取和正式版本发布 | `data/catalog/`、`data/lake/` |
-| `scripts/refresh_us_active.py` | 生成并发布版本化 `US_LIQUID_5M` | DuckDB + `data/lake/` |
+| `scripts/refresh_us_active.py` | 生成动量扫描用的短历史 `US_LIQUID_5M` DatasetVersion | DuckDB + `data/lake/` |
+| `scripts/run_broad_daily_pipeline.py` | 串行更新 Security Master、`US_EQUITY_COVERAGE` 和 derived PIT 宽基 | DuckDB + 月 Parquet |
+| `scripts/run_broad_factor_data.py` | 按因子/月增量发布宽基 raw/clean 数据 | `outputs/universes/US_LIQUID_5M/factor_data/` |
 | `scripts/run_data_requests.py` | 处理 Watchlist 专属行情请求 | DuckDB + SQLite 请求状态 |
 | `scripts/run_factor_research.py` | 对最新正式版本发布整批因子研究 | `outputs/universes/` |
 | `src.webapp.app:app` | 页面、API、创建业务对象和提交回测 | HTML/API + SQLite |
@@ -48,6 +50,12 @@ flowchart LR
     WEB --> WATCHLIST
     WEB --> BACKTEST
     WEB --> PAPER
+
+    FMP --> MASTER["Security Master"]
+    MASTER --> COVERAGE["US_EQUITY_COVERAGE"]
+    COVERAGE --> BROAD_PIT["derived US_LIQUID_5M PIT"]
+    BROAD_PIT --> BROAD_FACTOR["factor-data publication"]
+    BROAD_FACTOR --> WEB
 ```
 
 依赖规则：
@@ -118,6 +126,9 @@ research_publication.json
 
 排名是派生数据，不写 SQLite。查询不调用 FMP、不读取旧行情目录、不切换到另一个 latest version。
 旧单股页和 `src/analysis/single_stock.py` 已删除；历史任务事实继续由“决策回放”负责。
+
+全美宽基使用独立 `factor_data_publication.json`，它证明 raw/clean/rank 可查询，但不等于正式
+IC/ICIR/confidence 已通过。现有 FMP 只有 latest-known 行业时，宽基正式研究必须保持 `BLOCKED`。
 
 ## 5. 独立模块边界
 

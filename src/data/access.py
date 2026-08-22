@@ -754,7 +754,9 @@ def enqueue_market_data_request(
         )
     )
     payload = {
-        "schema_version": 1,
+        # Version 2 aligns fixed-basket membership with any earlier published
+        # history. It also prevents terminal v1 requests from blocking retries.
+        "schema_version": 2,
         "data_universe": safe_path_component(
             data_universe.upper(),
             label="data_universe",

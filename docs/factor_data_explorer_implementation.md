@@ -1,7 +1,7 @@
 # 因子数据浏览器实现说明
 
-更新日期：2026-08-09  
-状态：本地正式数据重发与验收完成；SG 部署和生产性能验收待完成
+更新日期：2026-08-12
+状态：指数池浏览器已在 SG 验收；全美宽基 adapter 本地完成但正式数据和 SG 影子尚未上线
 
 ## 1. 用户入口
 
@@ -24,6 +24,8 @@ GET /research/factor-data
 | 文件 | 职责 |
 |---|---|
 | `src/factors/observations.py` | 校验 publication、generation、行情版本和 PIT；派生 rank、percentile、quintile |
+| `src/factors/broad_observations.py` | 查询宽基 long Parquet、Security Master 和完整 PIT 截面 |
+| `src/factors/data_publication.py` | 校验宽基 factor-data publication 及全部父版本/子分片哈希 |
 | `src/webapp/research_routes.py` | meta、snapshot、history、CSV 和页面路由 |
 | `src/webapp/templates/factor_data.html` | 两个视图的结构与可访问控件 |
 | `src/webapp/static/js/factor_data.js` | URL 状态、查询、表格、Plotly、分页和 fail-closed 状态 |
@@ -47,6 +49,10 @@ flowchart LR
     PIT --> DERIVE
     DERIVE --> RESULT["rank / percentile / quintile"]
 ```
+
+SP500/NASDAQ100/MAG7 读取 `research_publication.json`；全美宽基读取独立
+`factor_data_publication.json`。两个 backend 返回同一结果类型，但后者只能声明因子数据可用，不能
+声明置信研究通过。
 
 每次冷读取会校验：
 
@@ -83,7 +89,11 @@ GET /api/research/factor-data/meta
 GET /api/research/factor-data/snapshot
 GET /api/research/factor-data/history
 GET /api/research/factor-data/export
+GET /api/securities/search
 ```
+
+证券搜索查询 Security Master，不再要求输入 ticker 先属于当前指数 generation。宽基正式发布后，
+MDB、AEVA 等非指数股票可在 `US_LIQUID_5M` 查询；影子期页面仍默认 SP500，用户可以显式选择宽基。
 
 snapshot 与 history 共用同一逐行构造函数，所以同一个 `date × ticker` 的 raw、clean、rank、
 percentile、quintile、PIT 和状态完全一致。CSV 每行附带 publication ID、factor generation ID、
@@ -103,7 +113,10 @@ dataset version ID 和 factor manifest SHA-256。
 页面显示中文业务状态。非交易日会展示前后正式观测日并允许显式跳转；NASDAQ100 未发布时会
 说明仍需 PIT、行情版本和因子研究发布。
 
-## 7. 本地验收
+宽基页面另有 `web_default_enabled` 灰度门槛。正式数据存在但五日影子尚未通过时，宽基仍可被显式
+选择验收，但不会自动成为默认股票池。
+
+## 7. 本地与 SG 验收
 
 - 完整测试：`409 passed`；
 - 隔离的已签名 publication 样本：正向/负向排名、PIT 加入退出、分页、单股历史、图表、日期回跳通过；
@@ -113,8 +126,11 @@ dataset version ID 和 factor manifest SHA-256。
   generation 均为 `2021-08-09` 至 `2026-08-07`；
 - MAG7 正式 DatasetVersion：`4da3efdf67624a1db7c559d764917387`；正式研究 publication：
   `0522bac7-5b94-4e64-b0db-c214f5306b74`；
-- NASDAQ100 candidate 仍因 Nasdaq 官方包含 `HONA`、FMP 包含 `EA` 而 fail closed，未创建正式
-  DatasetVersion，跨池 8 个结论保持 `INSUFFICIENT`；
+- SG NASDAQ100 DatasetVersion：`9c5abc4b58a5414e911153cdda6a429c`，范围
+  `2020-01-02` 至 `2026-08-10`，248,893 行、165 个历史/当前证券；
+- SG NASDAQ100 research publication：`763f89c3-3b62-4fd2-9d6b-968f3bf4b4b2`；
+- 最新 `MOM_12M` 截面绑定上述 publication、factor generation、dataset manifest 和 PIT hash，
+  102 个 PIT 成员中 100 个 clean 有效；
 - 真实 SP500 `MOM_12M/AAPL` 冷查询 1.65 秒、热查询 0.09 秒；单股历史热查询 0.02 秒以内；
 - 负向 `VOL_60D` 的前三名已确认按 `clean × -1` 排名；`FRC` 在 2023-05-03 显示
   `NOT_PIT_MEMBER`，不参与当日排名；
@@ -122,15 +138,16 @@ dataset version ID 和 factor manifest SHA-256。
 - 1440px 页面无整体横向溢出，宽表只在自身容器内保留 74px 横向滚动；
 - 390px 页面无整体横向溢出，宽表仅在自己的滚动容器内横向滚动，筛选器和按钮均在视口内。
 
-## 8. 尚未完成的生产门槛
+## 8. 尚未完成的性能门槛
 
-在 SG 宣布可用前必须：
+SG 功能、哈希合同和页面验收已经完成。重启 Web 后实测：
 
-1. 解决 NASDAQ100 PIT 来源不一致，发布其正式 PIT、行情和 8 因子研究；
-2. 在 SG 按四哈希合同重发 SP500、MAG7 和对应研究产物；
-3. 部署精确提交 `3a52611` 并重启 `quant-web.service`；
-4. 抽查一个正向因子、一个负向因子和一个 PIT 加入/退出证券；
-5. 在 SG 实测 snapshot/history 冷缓存 p95 小于 2 秒、热缓存 p95 小于 500 毫秒；
-6. 检查 Web journal 无 500、哈希回退或未处理前端错误。
+```text
+冷 snapshot  2.558781s
+热 snapshot  0.076481s - 0.077047s
+history       0.201320s
+```
 
-截至本次更新，本机正式重发和页面验收已经完成；SG 仍未连接，不能用上述本地结果代替生产验收。
+热缓存和 history 达标；单次冷缓存高于 `<2s` 目标。后续应对首次 publication/hash 校验和矩阵加载
+做启动预热或性能剖析，再采集多次冷启动样本计算 p95。优化完成前只能声明“生产功能可用”，不能
+声明“生产性能验收完成”。

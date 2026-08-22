@@ -7,11 +7,11 @@
 {% block content %}
 <header class="factor-data-header">
     <div>
-        <div class="factor-kicker">正式研究观测</div>
+        <div class="factor-kicker">版本绑定的因子观测</div>
         <h1 class="page-title">因子数据</h1>
         <p class="page-meta">查看单个因子的原始值、清洗后数值及其在当天完整 PIT 股票池中的位置。</p>
     </div>
-    <div id="factor-data-publication-status" class="factor-data-publication-status" aria-live="polite">正在检查正式研究发布</div>
+    <div id="factor-data-publication-status" class="factor-data-publication-status" aria-live="polite">正在检查因子数据发布</div>
 </header>
 
 <div class="factor-data-mode-row">
@@ -23,7 +23,7 @@
 
 <form id="factor-data-filters" class="factor-data-filters">
     <label class="form-field">
-        <span class="form-label">研究股票池</span>
+        <span class="form-label">比较与排名股票池</span>
         <select id="factor-data-universe" class="form-input" name="universe"></select>
     </label>
     <label class="form-field">
@@ -44,7 +44,7 @@
         </label>
         <label class="form-field factor-search-field">
             <span class="form-label">股票搜索</span>
-            <input id="factor-data-ticker-search" class="form-input mono" type="search" name="ticker" placeholder="代码或公司名称" autocomplete="off">
+            <input id="factor-data-ticker-search" class="form-input mono" type="search" name="ticker" placeholder="代码或公司名称" autocomplete="off" list="factor-data-ticker-options">
         </label>
         <label class="form-field">
             <span class="form-label">数据状态</span>
@@ -54,14 +54,16 @@
                 <option value="not_pit_member">非当日成分</option>
                 <option value="raw_missing">原始值缺失</option>
                 <option value="clean_missing">清洗值缺失</option>
+                <option value="classification_missing">行业分类缺失</option>
+                <option value="data_quality_rejected">数据质量未通过</option>
             </select>
         </label>
     </div>
 
     <div class="factor-mode-fields" data-visible-mode="history" hidden>
         <label class="form-field factor-history-ticker">
-            <span class="form-label">股票代码</span>
-            <input id="factor-history-ticker" class="form-input mono" type="text" name="history_ticker" placeholder="例如 AAPL" autocomplete="off">
+            <span class="form-label">股票代码或公司名称</span>
+            <input id="factor-history-ticker" class="form-input mono" type="search" name="history_ticker" placeholder="例如 MDB 或 MongoDB" autocomplete="off" list="factor-data-ticker-options">
         </label>
         <label class="form-field">
             <span class="form-label">开始日期</span>
@@ -84,10 +86,12 @@
         <a id="factor-data-export" class="btn" href="#" download>下载 CSV</a>
     </div>
 </form>
+<datalist id="factor-data-ticker-options"></datalist>
 
 <section id="factor-data-state" class="factor-data-state" aria-live="polite">
-    <strong>请选择研究股票池和因子</strong>
-    <span>页面只读取正式发布且通过完整性校验的数据。</span>
+    <strong>请选择比较股票池和因子</strong>
+    <span>页面只读取已发布且通过完整性校验的数据；宽基因子数据不代表因子已通过置信评估。</span>
+    <div id="factor-data-state-actions" class="factor-data-state-actions"></div>
 </section>
 
 <div id="factor-data-results" hidden>

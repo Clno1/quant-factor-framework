@@ -32,6 +32,7 @@ universe:
     main_factor_start: "2020-01-01"
     sp500_corrections: "configs/sp500_pit_corrections.yaml"
     nasdaq100_verification: "configs/nasdaq100_pit_verification.yaml"
+    nasdaq100_corrections: "configs/nasdaq100_pit_corrections.yaml"
 
 # 正式研究池角色注册表，也是预设股票池的唯一事实源。
 # Watchlist 不在这里；它属于用户目标投资池。
@@ -59,6 +60,8 @@ data:
     api_key: ""                    # 环境变量未设置时回退到这里
     request_timeout: 30            # 单次请求超时秒数
     retry: 3                       # 失败重试次数（指数退避）
+    # EOD bulk 文件体积较大，逐交易日主动限速，避免首次增量窗口触发 429。
+    bulk_request_interval_seconds: 10
 
   raw_dir: "data/raw"
 
@@ -77,6 +80,80 @@ data:
     request_poll_seconds: 15
     request_stale_minutes: 30
     custom_universe_min_coverage: 1.0
+
+  # 全美证券主表。默认构建命令只产出候选和审计报告；只有显式
+  # --publish 且所有质量门禁通过时，才推进 DuckDB 正式指针。
+  security_master:
+    snapshot_dir: "data/lake/security_master"
+    corrections: "configs/security_master_corrections.yaml"
+    history_policy: "configs/research_history_policy.yaml"
+    history_start: "2019-01-01"
+    profile_parts: [0, 1, 2, 3]
+    symbol_change_limit: 10000
+    delisted_page_size: 100
+    delisted_max_pages: 100
+    minimum_active_stocks: 3000
+    minimum_name_coverage: 0.99
+    minimum_classification_coverage: 0.95
+
+  # 全美行情覆盖层。历史回填按证券批次和年份落 Parquet，避免把完整
+  # coverage 宽表载入内存；正式发布必须绑定一个 Security Master generation。
+  broad_coverage:
+    name: "US_EQUITY_COVERAGE"
+    methodology_version: "BROAD_COVERAGE_V2_QUARANTINE"
+    history_start: "2019-01-01"
+    shard_size: 100
+    max_workers: 2
+    min_target_coverage: 0.98
+    # FMP 原始坏行只允许进入公开隔离台账，禁止修价或进入研究数据。
+    # 任一比例越界时整次发布继续 fail-closed。
+    max_bar_quarantine_ratio: 0.0005
+    max_target_bar_quarantine_ratio: 0.005
+    allowed_asset_types: [STOCK, ADR]
+    benchmark_tickers: [SPY, QQQ, IWM]
+    candidate_dir: "data/lake/staging/us_equity_coverage"
+    partition_frequency: "month"
+
+  # 由 coverage 行情派生的 PIT 宽基比较池。普通日复用最近月末快照；
+  # 退市从最后可交易日后的首个 XNYS session 起强制退出。
+  broad_universe:
+    name: "US_LIQUID_5M"
+    history_start: "2019-01-01"
+    research_start: "2020-01-01"
+    min_price: 1.0
+    min_adv20_usd: 5000000.0
+    adv_sessions: 20
+    min_valid_sessions: 15
+    include_adr: false
+    methodology_version: "US_LIQUID_5M_PIT_V2_COMPACT_EVENTS"
+    snapshot_dir: "data/lake/universes"
+
+  # 宽基因子数据与完整 IC/置信研究分开发布。首次回填和日常增量都按
+  # 因子 x 月份串行计算，避免在 2 GB SG 上构造全历史全股票宽表。
+  broad_factor_data:
+    universe: "US_LIQUID_5M"
+    output_dir: "outputs/universes/US_LIQUID_5M/factor_data"
+    # 五个不同交易日的 SG 影子核验通过后才改为 true。false 时页面仍可
+    # 显式选择宽基池验收，但不会自动替代标普 500 成为默认比较池。
+    web_default_enabled: false
+    methodology_version: "BROAD_FACTOR_DATA_V1"
+    preprocessing_methodology_version: "FACTOR_CLEAN_V1"
+    partition_frequency: "month"
+    minimum_latest_raw_coverage: 0.95
+    minimum_latest_clean_coverage: 0.95
+    maximum_zero_std_cross_section_ratio: 0.02
+    checkpoint_dir: "data/lake/staging/broad_factor_data"
+
+  # 正式宽基 IC/ICIR、置信评估和成本回测的发布门槛。当前 FMP profile
+  # 只有最新行业快照，因此会被 readiness 检查明确阻断；不能用降低阈值
+  # 或关闭行业中性化的方式绕过。
+  broad_factor_research:
+    universe: "US_LIQUID_5M"
+    output_dir: "outputs/universes/US_LIQUID_5M/research"
+    minimum_evaluable_sessions: 756
+    minimum_cross_section: 500
+    minimum_pit_industry_coverage: 0.95
+    accepted_classification_policies: [PIT_EFFECTIVE_DATED]
 
   # US_ACTIVE 是供应商当前快照；正式发布后使用语义更准确的名称。
   liquid_universe:
@@ -133,7 +210,8 @@ market_regime_research:
     minimum_barrier_pct: 0.02
 
   features:
-    moving_average_windows: [20, 50, 200]
+    moving_average_windows: [20, 50, 60, 120, 200]
+    breadth_change_windows: [5, 20]
     realized_volatility_windows: [20, 60]
     correlation_window: 60
     correlation_min_members: 30
@@ -141,10 +219,11 @@ market_regime_research:
     momentum_skip: 21              # 12-1 动量，跳过最近约一个月
     momentum_quantile: 0.10
     min_cross_section_members: 30
+    min_cross_section_coverage: 0.95 # 每日有效行情至少覆盖 95% 当日 PIT 成分股
 
   # 有效性筛选。2022 年起的数据封存，不参与候选发现或参数选择。
   screening:
-    candidate_registry: "configs/market_regime_screening_candidates.yaml"
+    candidate_registry: "configs/market_regime_screening_candidates_v2.yaml"
     holdout_start: "2022-01-01"
     first_validation_start: "1996-01-01"
     validation_years: 2
@@ -258,7 +337,7 @@ intraday_momentum_monitor:
     max_error_cycle_ratio: 0.05
     max_cycle_p95_seconds: 30.0
 
-# 美股盘前独立频道日报。生产当前只启用 momentum；Webhook 只来自环境变量或 .env.local。
+# 美股盘前双频道日报。momentum 与 sector rotation 使用独立 Webhook。
 # 这是单向编排层；因子、回测、模拟盘、alerts 和 group_analytics 均不依赖它。
 premarket_digest:
   enabled: false
@@ -276,7 +355,7 @@ premarket_digest:
     min_evaluable_coverage: 0.80
 
   sector_rotation:
-    enabled: false                      # 当前盘前 timer 只向 momentum 频道发送
+    enabled: true                       # 与 momentum 共用盘前 timer，但投递到独立频道
     universe: SP500
     taxonomy: FMP
     # 正式推送门槛高于单次 group writer 的最低发布门槛。

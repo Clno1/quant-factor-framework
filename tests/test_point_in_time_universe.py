@@ -119,6 +119,46 @@ def test_membership_mask_uses_latest_complete_snapshot(monkeypatch):
     assert diagnostics.applied is True
 
 
+def test_membership_mask_replays_compact_forced_exit_events(monkeypatch):
+    values = pd.DataFrame([
+        {
+            "date": "2026-01-01",
+            "ticker": ticker,
+            "active": True,
+            "snapshot_type": "MONTH_END",
+        }
+        for ticker in ("A", "B")
+    ] + [{
+        "date": "2026-01-05",
+        "ticker": "B",
+        "active": False,
+        "snapshot_type": "FORCED_EXIT",
+    }])
+    monkeypatch.setattr(
+        pit,
+        "load_point_in_time_membership",
+        lambda universe: (values, Path("/tmp/SP500.parquet")),
+    )
+
+    mask, diagnostics = pit.build_membership_mask(
+        pd.DatetimeIndex(["2026-01-02", "2026-01-05", "2026-01-06"]),
+        pd.Index(["A", "B"]),
+        "SP500",
+        required=True,
+    )
+
+    assert mask is not None
+    assert mask.loc[pd.Timestamp("2026-01-02")].to_dict() == {
+        "A": True,
+        "B": True,
+    }
+    assert mask.loc[pd.Timestamp("2026-01-05")].to_dict() == {
+        "A": True,
+        "B": False,
+    }
+    assert diagnostics.snapshots == 1
+
+
 def test_snapshot_must_cover_backtest_start(monkeypatch):
     values = _membership([
         ("2026-01-06", "A", True),

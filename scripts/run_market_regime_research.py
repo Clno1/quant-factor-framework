@@ -113,6 +113,14 @@ def _parser() -> argparse.ArgumentParser:
         help="Immutable Stage A run; defaults to outputs/.../latest.json",
     )
     screen.add_argument("--screening-id")
+    screen.add_argument(
+        "--candidate-registry",
+        type=Path,
+        help=(
+            "Frozen candidate YAML; defaults to the configured registry. "
+            "Use this to reproduce an older registry without editing config."
+        ),
+    )
 
     all_command = subparsers.add_parser(
         "all",
@@ -293,11 +301,13 @@ def _run_screen(
     *,
     research_run_id: str | None,
     screening_id: str | None,
+    candidate_registry_path: Path | None = None,
 ) -> dict[str, Any]:
     result = run_effectiveness_screen(
         settings,
         research_run_id=research_run_id,
         screening_id=screening_id,
+        candidate_registry_path=candidate_registry_path,
     )
     summary = json.loads(result.summary_path.read_text(encoding="utf-8"))
     return {
@@ -362,6 +372,7 @@ def main(argv: list[str] | None = None) -> int:
                     settings,
                     research_run_id=args.research_run_id,
                     screening_id=args.screening_id,
+                    candidate_registry_path=args.candidate_registry,
                 )
             )
             return 0

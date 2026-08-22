@@ -20,6 +20,11 @@ from typing import Any
 import pandas as pd
 
 from src.config import CONFIG, PROJECT_ROOT
+from src.data.membership_state import (
+    MembershipContractError,
+    complete_snapshot_dates,
+    replay_membership_states,
+)
 from src.data.universe_ids import LEGACY_US_ACTIVE, US_LIQUID_5M
 from src.utils.identifiers import (
     InvalidResourceId,
@@ -263,7 +268,10 @@ def build_membership_mask(
         raise ValueError("Cannot build PIT mask for an empty date index")
     if matrix_index.has_duplicates:
         raise ValueError("Cannot build PIT mask for duplicate dates")
-    snapshots = pd.DatetimeIndex(sorted(membership["date"].dropna().unique()))
+    try:
+        snapshots = complete_snapshot_dates(membership)
+    except MembershipContractError as exc:
+        raise ValueError(str(exc)) from exc
     if snapshots.empty:
         raise ValueError(
             f"PIT membership {source or universe} contains no snapshots"
@@ -278,30 +286,26 @@ def build_membership_mask(
             f"{first_date.date()}; historical membership is unknown"
         )
 
-    active_by_date: dict[pd.Timestamp, set[str]] = {}
-    for dt, sub in membership.groupby("date"):
-        active_by_date[pd.Timestamp(dt)] = set(sub.loc[sub["active"], "ticker"])
-
-    relevant_snapshots = snapshots[
-        (snapshots >= snapshots[baseline_position])
-        & (snapshots <= last_date)
-    ]
+    mask = pd.DataFrame(False, index=matrix_index, columns=columns)
     active_tickers: set[str] = set()
-    empty_snapshots: list[str] = []
-    for snapshot_date in relevant_snapshots:
-        active = active_by_date.get(pd.Timestamp(snapshot_date), set())
-        if not active:
-            empty_snapshots.append(
-                pd.Timestamp(snapshot_date).strftime("%Y-%m-%d")
-            )
-        active_tickers.update(active)
-    if empty_snapshots:
-        raise ValueError(
-            f"PIT membership {source or universe} has empty complete snapshots: "
-            f"{empty_snapshots[:10]}"
+    try:
+        states = replay_membership_states(
+            membership,
+            matrix_index,
+            key_column="ticker",
         )
-    matrix_tickers = set(cols)
-    missing_tickers = sorted(active_tickers - matrix_tickers)
+        for state in states:
+            active_tickers.update(state.active_keys)
+            active_cols = [
+                column
+                for column, upper in zip(columns, cols)
+                if upper in state.active_keys
+            ]
+            if active_cols:
+                mask.loc[state.date, active_cols] = True
+    except MembershipContractError as exc:
+        raise ValueError(str(exc)) from exc
+    missing_tickers = sorted(active_tickers - set(cols))
     if missing_tickers:
         raise ValueError(
             f"PIT membership for {universe} contains "
@@ -309,14 +313,6 @@ def build_membership_mask(
             "the factor/price matrix. Rebuild data for the union of historical "
             f"constituents. Sample: {missing_tickers[:20]}"
         )
-
-    mask = pd.DataFrame(False, index=matrix_index, columns=columns)
-    for dt in mask.index:
-        pos = snapshots.searchsorted(pd.Timestamp(dt), side="right") - 1
-        active = active_by_date.get(pd.Timestamp(snapshots[pos]), set())
-        active_cols = [c for c, upper in zip(columns, cols) if upper in active]
-        if active_cols:
-            mask.loc[dt, active_cols] = True
 
     return mask, PITDiagnostics(
         applied=True,

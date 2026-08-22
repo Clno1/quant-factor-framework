@@ -1,6 +1,6 @@
 # SG 服务器日常运维速查
 
-更新日期：2026-08-09
+更新日期：2026-08-13
 
 适用部署：`root@SG`、项目 `/home/projects/quant`、所有 Web 与 worker 统一使用
 `.venv`。完整架构和本地/服务器差异见
@@ -22,7 +22,8 @@ systemctl list-timers --all 'quant-*'
 预期：
 
 - `quant-web.service` 是 `active (running)`；
-- 九个生产 timer 有下一次触发时间；
+- 9 个业务 timer 和 1 个运维 watchdog timer 均有下一次触发时间；全美宽基完成首次回填并正式
+  启用后应为 11 个；
 - 当前 SG 基线的行情 status 有 SP500、MAG7 和 `US_LIQUID_5M`；研究池改造部署完成后还必须有
   NASDAQ100；
 - SQLite 报告 `passed=true`、`sqlite_integrity=["ok"]`、`issues=[]`。
@@ -38,20 +39,24 @@ systemctl list-timers --all 'quant-*'
 | Tue-Sat 08:45 | `quant-factor-research.timer` | 发布 SP500/NASDAQ100 因子研究、MAG7 参考结果和跨池结论 |
 | Tue-Sat 09:15 | `quant-group-analytics-eod.timer` | 读取正式 SP500 version，发布板块研究 |
 | Tue-Sat 10:30 | `quant-paper-trading.timer` | 运行 active 模拟盘账户 |
+| Tue-Sat 11:30 | `quant-us-equity-coverage.timer` | **已安装、暂未启用**：Security Master -> 全美 coverage -> PIT 宽基 -> 八因子 -> 双检查 |
 | 每 5 分钟 | `quant-data-requests.timer` | 处理 Watchlist 缺数请求 |
-| Mon-Fri 09:20 ET | `quant-premarket-digest.timer` | 只发送 momentum 盘前摘要 |
+| Mon-Fri 09:20 ET | `quant-premarket-digest.timer` | 分别发送 momentum 与 sector rotation 盘前摘要 |
 | 每小时 :35 SGT | `quant-momentum-alerts.timer` | worker 内部只保留 10:00–15:59 ET |
-| Mon-Fri 09:20 ET | `quant-intraday-momentum-monitor.timer` | 分钟 shadow；五日通过后自动晋级 |
+| Mon-Fri 09:20 ET | `quant-intraday-momentum-monitor.timer` | 分钟 shadow；五日验收通过后可人工启用推送 |
+| 每分钟 | `quant-operations-watchdog.timer` | 汇总任务、版本、投递、心跳与 systemd 证据，不发送 Discord 运维告警 |
 
 分钟 monitor 使用独立 SQLite outbox。环境开关、五个连续交易日和 `--auto` 三重条件必须同时
-满足才会发送 Discord；否则始终是 shadow。
+满足才会发送 Discord；否则始终是 shadow。生产环境默认关闭发送开关，五日通过只取得晋级
+资格，不会绕过人工启用步骤。
 
 本地 2026-08-08 已把 group timer 改为 09:15；SG 在部署这次 commit 前仍可能是上次审计的
 07:45 unit。以服务器上的 `systemctl cat quant-group-analytics-eod.timer` 为准。
 
-研究池改造尚未部署到 SG。NASDAQ100 PIT 任一门禁失败时，08:15 service 可以继续发布彼此独立的
-SP500/MAG7，但 unit 最终应为失败，NASDAQ100 不得前移；08:45 仍需发布可审计的
-`INSUFFICIENT` 跨池结论，不能沿用昨天的绿色状态。
+NASDAQ100 改造已于 2026-08-11 部署。NASDAQ100 PIT 任一门禁失败时，08:15 service 可以继续
+发布彼此独立的 SP500/MAG7，但 unit 最终应为失败，NASDAQ100 不得前移；08:45 仍需发布可审计的
+`INSUFFICIENT` 跨池结论，不能沿用昨天的绿色状态。全美宽基 unit 已于 2026-08-12 安装并通过
+`systemd-analyze verify`，但首次正式数据链未完成，timer 仍应为 `disabled`。
 
 ## 3. 查看最近结果和错误
 
@@ -65,6 +70,10 @@ systemctl show quant-data-requests.service -p Result -p ExecMainStatus -p Active
 systemctl show quant-premarket-digest.service -p Result -p ExecMainStatus -p ActiveState
 systemctl show quant-momentum-alerts.service -p Result -p ExecMainStatus -p ActiveState
 systemctl show quant-intraday-momentum-monitor.service -p Result -p ExecMainStatus -p ActiveState
+systemctl show quant-us-equity-coverage.service -p Result -p ExecMainStatus -p ActiveState -p MemoryPeak
+systemctl show quant-broad-factor-data.service -p Result -p ExecMainStatus -p ActiveState -p MemoryPeak
+systemctl show quant-broad-research-readiness.service -p Result -p ExecMainStatus -p ActiveState
+systemctl show quant-broad-shadow-observation.service -p Result -p ExecMainStatus -p ActiveState
 ```
 
 oneshot 成功后 `ActiveState=inactive` 正常，关键是：
@@ -85,6 +94,10 @@ journalctl -u quant-web.service -n 200 --no-pager
 journalctl -u quant-premarket-digest.service -n 200 --no-pager
 journalctl -u quant-momentum-alerts.service -n 200 --no-pager
 journalctl -u quant-intraday-momentum-monitor.service -n 300 --no-pager
+journalctl -u quant-us-equity-coverage.service -n 200 --no-pager
+journalctl -u quant-broad-factor-data.service -n 200 --no-pager
+journalctl -u quant-broad-research-readiness.service -n 100 --no-pager
+journalctl -u quant-broad-shadow-observation.service -n 100 --no-pager
 ```
 
 ## 4. Web 检查
@@ -104,6 +117,28 @@ unset QUANT_PASSWORD
 公网应通过 HTTPS 反向代理、VPN 或 SSH 隧道访问。Basic Auth 不提供传输加密，不应长期把原始
 18823 明文端口开放给 `0.0.0.0/0`。
 
+独立运维站在 SG 使用 `0.0.0.0:18825` 和另一套认证。它不会出现在主业务页面：
+
+```bash
+set -a
+. /etc/quant/operations-web.env
+set +a
+systemctl status quant-operations-watchdog.timer quant-operations-web.service --no-pager
+.venv/bin/python scripts/migrate_operations_storage.py verify --json
+ss -lntp | grep ':18825'
+curl -u "$QUANT_OPS_AUTH_USER:$QUANT_OPS_AUTH_PASSWORD" \
+  -sS http://127.0.0.1:18825/healthz
+unset QUANT_OPS_AUTH_PASSWORD
+```
+
+公网入口为 `http://43.156.89.232:18825/`。无认证访问应返回 `401`。腾讯云安全组需允许 TCP
+`18825`；应优先将来源限制为固定办公公网 IP。直接 IP 当前是 HTTP，Basic Auth 不提供传输
+加密，长期应迁移到独立域名或独立上游的 HTTPS 反向代理。
+
+统一页面、状态定义和 SG 安装方式见
+[`operations_observability.md`](operations_observability.md)。运维 watchdog 不发送 Discord 告警；
+既有 Discord 仍只承载盘前、板块轮动和动量等业务消息。
+
 ## 5. 手动补跑
 
 先确认没有同名 service 正在运行，再用 systemd 启动，避免绕过环境文件和权限：
@@ -114,9 +149,23 @@ systemctl start quant-market-data.service
 systemctl start quant-factor-research.service
 systemctl start quant-group-analytics-eod.service
 systemctl start quant-paper-trading.service
+systemctl start quant-us-equity-coverage.service
 ```
 
 任务有依赖顺序。上游失败时不要强行启动下游来制造陈旧结果。
+
+全美宽基只需手工启动 `quant-us-equity-coverage.service`；其余三个 unit 由 `OnSuccess=` 触发。
+首次回填期间不要直接启动该日常 service，也不要恢复绑定旧 Security Master 的
+`run=20260812T152208Z_57bca7cb`。先按实施文档重建并验证 Security Master，再以新 generation
+开始正式 coverage 回填。
+日常观察命令为：
+
+```bash
+.venv/bin/python scripts/check_broad_shadow_observation.py --json
+```
+
+返回 `OBSERVING` 表示当前日验证通过但尚未达到连续 5 日。任何 FAIL 都不得计入；首次回填和 unit
+安装步骤见 [`us_broad_factor_research_implementation.md`](us_broad_factor_research_implementation.md)。
 
 NASDAQ100 首次正式发布前先运行候选检查：
 
@@ -169,7 +218,12 @@ systemd-analyze verify \
   /etc/systemd/system/quant-data-requests.service \
   /etc/systemd/system/quant-premarket-digest.service \
   /etc/systemd/system/quant-momentum-alerts.service \
-  /etc/systemd/system/quant-intraday-momentum-monitor.service
+  /etc/systemd/system/quant-intraday-momentum-monitor.service \
+  /etc/systemd/system/quant-us-equity-coverage.service \
+  /etc/systemd/system/quant-broad-factor-data.service \
+  /etc/systemd/system/quant-broad-research-readiness.service \
+  /etc/systemd/system/quant-broad-shadow-observation.service \
+  /etc/systemd/system/quant-us-equity-coverage.timer
 ```
 
 然后：
@@ -187,6 +241,13 @@ systemctl enable --now \
   quant-premarket-digest.timer \
   quant-momentum-alerts.timer \
   quant-intraday-momentum-monitor.timer
+```
+
+上面的既有 timer 列表不自动包含全美宽基。只有首次正式回填、手工完整链和
+`systemd-analyze verify` 都成功后，才单独执行：
+
+```bash
+systemctl enable --now quant-us-equity-coverage.timer
 ```
 
 ## 7. 不能直接做的事

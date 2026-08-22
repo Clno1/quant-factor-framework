@@ -1,0 +1,215 @@
+schema_version: 1
+
+operations:
+  database_path: outputs/operations/operations.sqlite3
+  snapshot_path: outputs/operations/operations_snapshot.sqlite3
+  retention_days: 180
+
+  web:
+    host: 127.0.0.1
+    port: 18825
+    refresh_seconds: 15
+
+  watchdog:
+    interval_seconds: 60
+    heartbeat_grace_seconds: 120
+    inspect_systemd: auto
+    external_notifications: false
+
+  resources:
+    minimum_free_disk_gb: 15
+    minimum_available_memory_mb: 350
+
+jobs:
+  - job_id: us_daily_refresh
+    display_name: 全美活跃股票行情缓存
+    category: data
+    run_type: scheduled_batch
+    adapter: market_data
+    service_unit: quant-us-daily-refresh.service
+    timer_unit: quant-us-daily-refresh.timer
+    enabled_expected: true
+    order: 10
+    schedule:
+      timezone: Asia/Singapore
+      weekdays: [TU, WE, TH, FR, SA]
+      time: "07:15"
+      deadline_minutes: 50
+      target_policy: latest_publishable_xnys
+    evidence:
+      universes: [US_LIQUID_5M]
+    description: 发布供动量扫描使用的短周期全美活跃股票日线版本。
+
+  - job_id: core_market_data
+    display_name: 核心股票池行情
+    category: data
+    run_type: scheduled_batch
+    adapter: market_data
+    service_unit: quant-market-data.service
+    timer_unit: quant-market-data.timer
+    enabled_expected: true
+    order: 20
+    schedule:
+      timezone: Asia/Singapore
+      weekdays: [TU, WE, TH, FR, SA]
+      time: "08:15"
+      deadline_minutes: 50
+      target_policy: latest_publishable_xnys
+    evidence:
+      universes: [SP500, NASDAQ100, MAG7]
+    description: 发布标普500、纳斯达克100和科技七巨头的正式行情版本。
+
+  - job_id: factor_research
+    display_name: 多因子研究发布
+    category: research
+    run_type: scheduled_batch
+    adapter: factor_research
+    service_unit: quant-factor-research.service
+    timer_unit: quant-factor-research.timer
+    enabled_expected: true
+    order: 30
+    schedule:
+      timezone: Asia/Singapore
+      weekdays: [TU, WE, TH, FR, SA]
+      time: "08:45"
+      deadline_minutes: 150
+      target_policy: latest_publishable_xnys
+    evidence:
+      universes: [SP500, NASDAQ100, MAG7]
+    description: 发布八因子、置信评估和跨股票池研究结论。
+
+  - job_id: group_analytics
+    display_name: 板块与行业研究
+    category: research
+    run_type: scheduled_batch
+    adapter: group_analytics
+    service_unit: quant-group-analytics-eod.service
+    timer_unit: quant-group-analytics-eod.timer
+    enabled_expected: true
+    order: 40
+    schedule:
+      timezone: Asia/Singapore
+      weekdays: [TU, WE, TH, FR, SA]
+      time: "09:15"
+      deadline_minutes: 75
+      target_policy: latest_publishable_xnys
+    description: 使用正式标普500版本生成板块和子行业研究产物。
+
+  - job_id: paper_trading
+    display_name: 模拟盘日终运行
+    category: trading
+    run_type: scheduled_batch
+    adapter: paper_trading
+    service_unit: quant-paper-trading.service
+    timer_unit: quant-paper-trading.timer
+    enabled_expected: true
+    order: 50
+    schedule:
+      timezone: Asia/Singapore
+      weekdays: [TU, WE, TH, FR, SA]
+      time: "10:30"
+      deadline_minutes: 75
+      target_policy: latest_publishable_xnys
+    description: 对所有启用账户运行一次版本绑定的模拟决策、成交和记账。
+
+  - job_id: broad_us_pipeline
+    display_name: 全美宽基每日生产链
+    category: migration
+    run_type: migration
+    adapter: broad_pipeline
+    service_unit: quant-us-equity-coverage.service
+    timer_unit: quant-us-equity-coverage.timer
+    enabled_expected: false
+    order: 60
+    schedule:
+      timezone: Asia/Singapore
+      weekdays: [TU, WE, TH, FR, SA]
+      time: "11:30"
+      deadline_minutes: 600
+      target_policy: latest_publishable_xnys
+    description: 首次链由独立可恢复服务完成；验收后再启用本 timer，串行更新主表、coverage、PIT和八因子。
+
+  - job_id: data_requests
+    display_name: 自定义股票池缺数队列
+    category: data
+    run_type: interval_worker
+    adapter: data_requests
+    service_unit: quant-data-requests.service
+    timer_unit: quant-data-requests.timer
+    enabled_expected: true
+    order: 70
+    schedule:
+      interval_minutes: 5
+      stale_running_minutes: 30
+      oldest_pending_minutes: 20
+    description: 领取网页提交的缺数请求并发布目标股票池专属行情版本。
+
+  - job_id: premarket_digest
+    display_name: 盘前动量与板块轮动
+    category: delivery
+    run_type: scheduled_batch
+    adapter: premarket
+    service_unit: quant-premarket-digest.service
+    timer_unit: quant-premarket-digest.timer
+    enabled_expected: true
+    order: 80
+    schedule:
+      timezone: America/New_York
+      weekdays: [MO, TU, WE, TH, FR]
+      time: "09:20"
+      deadline_time: "09:29"
+      target_policy: current_xnys
+    evidence:
+      required_channels: [momentum, sector-rotation]
+    description: 分别向两个现有业务频道发送盘前动量和板块轮动摘要。
+
+  - job_id: hourly_momentum
+    display_name: 每小时动量扫描
+    category: delivery
+    run_type: market_window_batch
+    adapter: hourly_momentum
+    service_unit: quant-momentum-alerts.service
+    timer_unit: quant-momentum-alerts.timer
+    enabled_expected: true
+    order: 90
+    schedule:
+      timezone: America/New_York
+      weekdays: [MO, TU, WE, TH, FR]
+      window_start: "10:00"
+      window_end: "15:59"
+      trigger_minute: 35
+      deadline_minutes: 25
+      target_policy: current_xnys
+    description: 美股开盘期间每小时扫描候选；无候选也是合法成功结果。
+
+  - job_id: intraday_momentum
+    display_name: 盘中动量持续监控
+    category: monitoring
+    run_type: continuous_session
+    adapter: intraday_momentum
+    service_unit: quant-intraday-momentum-monitor.service
+    timer_unit: quant-intraday-momentum-monitor.timer
+    enabled_expected: true
+    order: 100
+    schedule:
+      timezone: America/New_York
+      weekdays: [MO, TU, WE, TH, FR]
+      window_start: "09:20"
+      window_end: "16:05"
+      heartbeat_timeout_seconds: 120
+      target_policy: current_xnys
+    description: 持续计算分钟动量与突破信号；当前是否发送由既有独立业务开关决定。
+
+  - job_id: operations_watchdog
+    display_name: 运维状态采集器
+    category: infrastructure
+    run_type: interval_worker
+    adapter: watchdog_self
+    service_unit: quant-operations-watchdog.service
+    timer_unit: quant-operations-watchdog.timer
+    enabled_expected: true
+    order: 110
+    schedule:
+      interval_minutes: 1
+      stale_running_minutes: 3
+    description: 每分钟核对任务证据并生成运维站只读快照，不发送外部告警。

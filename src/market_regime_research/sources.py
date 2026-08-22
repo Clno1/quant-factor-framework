@@ -41,8 +41,14 @@ CBOE_VOLATILITY_URLS = {
     "VIX9D": "https://cdn.cboe.com/api/global/us_indices/daily_prices/VIX9D_History.csv",
     "VIX3M": "https://cdn.cboe.com/api/global/us_indices/daily_prices/VIX3M_History.csv",
 }
+CBOE_CORRELATION_URLS = {
+    "COR1M": "https://cdn.cboe.com/api/global/us_indices/daily_prices/COR1M_History.csv",
+}
+CBOE_INDEX_URLS = {**CBOE_VOLATILITY_URLS, **CBOE_CORRELATION_URLS}
 FRED_CSV_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv"
 HY_OAS_SERIES_ID = "BAMLH0A0HYM2"
+HY_OAS_EXPECTED_START = pd.Timestamp("1996-12-31")
+HY_OAS_MIN_OBSERVATIONS = 5_000
 
 PRICE_COLUMNS = (
     "open",
@@ -315,7 +321,7 @@ def combine_price_semantics(
 
 
 def parse_cboe_history(payload: bytes | str, *, symbol: str) -> pd.DataFrame:
-    """Parse one official Cboe daily volatility-index CSV."""
+    """Parse one official Cboe daily volatility/correlation index CSV."""
     raw = payload.decode("utf-8-sig") if isinstance(payload, bytes) else payload
     frame = pd.read_csv(io.StringIO(raw))
     frame.columns = [str(column).strip().upper() for column in frame.columns]
@@ -331,7 +337,19 @@ def parse_cboe_history(payload: bytes | str, *, symbol: str) -> pd.DataFrame:
         frame[column] = pd.to_numeric(frame[column], errors="coerce")
     if frame[["OPEN", "HIGH", "LOW", "CLOSE"]].isna().any().any():
         raise DataContractError(f"Cboe {symbol} contains non-numeric OHLC values")
-    if (frame[["OPEN", "HIGH", "LOW", "CLOSE"]] <= 0).any().any():
+    levels = frame[["OPEN", "HIGH", "LOW", "CLOSE"]]
+    if symbol in CBOE_CORRELATION_URLS:
+        # An average correlation can be negative in principle.  Cboe publishes
+        # the index in percentage points.  The official history contains a few
+        # impossible intraday HIGH ticks, but the research feature consumes the
+        # official CLOSE.  Guard that signal value strictly and retain the raw
+        # OHLC anomalies for source-lineage diagnostics.
+        close = frame["CLOSE"]
+        if ((close < -100) | (close > 100)).any():
+            raise DataContractError(
+                f"Cboe {symbol} contains close values outside [-100, 100]"
+            )
+    elif (levels <= 0).any().any():
         raise DataContractError(f"Cboe {symbol} contains non-positive OHLC values")
     if (frame["HIGH"] < frame["LOW"]).any():
         raise DataContractError(f"Cboe {symbol} has high below low")
@@ -371,7 +389,7 @@ def _validate_volatility_contract(
         raise DataContractError("Cboe volatility cache contains duplicate dates")
     output = output.sort_index()
 
-    for symbol in CBOE_VOLATILITY_URLS:
+    for symbol in CBOE_INDEX_URLS:
         columns = [
             f"{symbol}_open",
             f"{symbol}_high",
@@ -394,8 +412,17 @@ def _validate_volatility_contract(
         observed = complete_price
         if not observed.any():
             raise DataContractError(f"Cboe volatility cache has no {symbol} values")
-        if (output.loc[observed, price_columns] <= 0).any().any():
-            raise DataContractError(f"Cboe {symbol} contains non-positive OHLC values")
+        levels = output.loc[observed, price_columns]
+        if symbol in CBOE_CORRELATION_URLS:
+            close = output.loc[observed, symbol]
+            if ((close < -100) | (close > 100)).any():
+                raise DataContractError(
+                    f"Cboe {symbol} contains close values outside [-100, 100]"
+                )
+        elif (levels <= 0).any().any():
+            raise DataContractError(
+                f"Cboe {symbol} contains non-positive OHLC values"
+            )
         if (
             output.loc[observed, f"{symbol}_high"]
             < output.loc[observed, f"{symbol}_low"]
@@ -440,6 +467,15 @@ def _cboe_containment_anomalies(frame: pd.DataFrame, symbol: str) -> int:
         sample[f"{symbol}_low"] > sample[[f"{symbol}_open", symbol]].min(axis=1)
     )
     return int(anomalies.sum())
+
+
+def _cboe_domain_anomalies(frame: pd.DataFrame, symbol: str) -> int:
+    """Count non-signal OHLC values outside an index's theoretical domain."""
+    if symbol not in CBOE_CORRELATION_URLS:
+        return 0
+    columns = [f"{symbol}_open", f"{symbol}_high", f"{symbol}_low", symbol]
+    sample = frame[columns].dropna(how="all")
+    return int(((sample < -100) | (sample > 100)).any(axis=1).sum())
 
 
 def parse_fred_series(
@@ -518,6 +554,20 @@ def _validate_credit_contract(frame: pd.DataFrame) -> pd.DataFrame:
     return output
 
 
+def _require_complete_hy_oas_history(frame: pd.DataFrame) -> None:
+    """Reject FRED's post-April-2026 three-year licensed-data truncation."""
+    first = pd.Timestamp(frame.index.min()).normalize()
+    if first != HY_OAS_EXPECTED_START or len(frame) < HY_OAS_MIN_OBSERVATIONS:
+        raise DataContractError(
+            "FRED HY OAS history is truncated: expected the series from "
+            f"{HY_OAS_EXPECTED_START.date()} with at least "
+            f"{HY_OAS_MIN_OBSERVATIONS} observations, got {first.date()} "
+            f"with {len(frame)}. Since April 2026 FRED exposes only three "
+            "years; use --skip-credit until a licensed full-history source "
+            "is configured."
+        )
+
+
 def _download_bytes(
     url: str,
     *,
@@ -548,11 +598,11 @@ def fetch_cboe_volatility_history(
     *,
     downloader: Callable[..., bytes] = _download_bytes,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
-    """Download and outer-join VIX, VIX9D, and VIX3M histories."""
+    """Download and outer-join the configured Cboe risk-index histories."""
     frames: list[pd.DataFrame] = []
     sources: list[dict[str, Any]] = []
     fetched_at = utc_now_iso()
-    for symbol, url in CBOE_VOLATILITY_URLS.items():
+    for symbol, url in CBOE_INDEX_URLS.items():
         payload = downloader(url)
         frame = parse_cboe_history(payload, symbol=symbol)
         frames.append(frame)
@@ -571,6 +621,7 @@ def fetch_cboe_volatility_history(
                     frame,
                     symbol,
                 ),
+                "ohlc_domain_anomalies": _cboe_domain_anomalies(frame, symbol),
             }
         )
     combined = _validate_volatility_contract(
@@ -582,7 +633,7 @@ def fetch_cboe_volatility_history(
 def _cached_cboe_metadata(frame: pd.DataFrame) -> dict[str, Any]:
     """Recreate source-level lineage when a validated bundle is reused."""
     sources: list[dict[str, Any]] = []
-    for symbol, url in CBOE_VOLATILITY_URLS.items():
+    for symbol, url in CBOE_INDEX_URLS.items():
         available_column = f"{symbol}_available_at"
         if symbol not in frame.columns or available_column not in frame.columns:
             raise DataContractError(
@@ -609,6 +660,7 @@ def _cached_cboe_metadata(frame: pd.DataFrame) -> dict[str, Any]:
                     frame,
                     symbol,
                 ),
+                "ohlc_domain_anomalies": _cboe_domain_anomalies(frame, symbol),
                 "cache_reused": True,
             }
         )
@@ -627,6 +679,7 @@ def fetch_hy_oas_history(
         output_name="hy_oas",
     )
     frame = _validate_credit_contract(frame)
+    _require_complete_hy_oas_history(frame)
     metadata = {
         "instrument": "HY_OAS",
         "provider": "FRED",
@@ -765,7 +818,7 @@ def _require_volatility_freshness(
     *,
     expected_end: pd.Timestamp,
 ) -> None:
-    for symbol in CBOE_VOLATILITY_URLS:
+    for symbol in CBOE_INDEX_URLS:
         observed = pd.to_numeric(frame[symbol], errors="coerce").dropna()
         if observed.empty or pd.Timestamp(observed.index.max()).normalize() != expected_end:
             last = (
@@ -895,11 +948,31 @@ def prepare_market_sources(
         )
 
     volatility_downloaded = force or not settings.volatility_path.exists()
-    if force or not settings.volatility_path.exists():
+    cached_volatility: pd.DataFrame | None = None
+    if not volatility_downloaded:
+        cached_volatility = pd.read_parquet(settings.volatility_path)
+        required_cboe_columns = {
+            column
+            for symbol in CBOE_INDEX_URLS
+            for column in (
+                f"{symbol}_open",
+                f"{symbol}_high",
+                f"{symbol}_low",
+                symbol,
+                f"{symbol}_available_at",
+            )
+        }
+        # Adding a newly configured official index is a cache-schema migration,
+        # not evidence that the existing values are corrupt.  Refresh the whole
+        # Cboe bundle so one manifest still binds all columns to one fetch.
+        if not required_cboe_columns.issubset(cached_volatility.columns):
+            volatility_downloaded = True
+    if volatility_downloaded:
         volatility, volatility_metadata = fetch_cboe_volatility_history()
     else:
+        assert cached_volatility is not None
         volatility = _validate_volatility_contract(
-            pd.read_parquet(settings.volatility_path)
+            cached_volatility
         )
         volatility_metadata = _cached_cboe_metadata(volatility)
     had_incomplete_volatility = bool((volatility.index > end_date).any())
@@ -925,12 +998,16 @@ def prepare_market_sources(
                     volatility,
                     symbol,
                 ),
+                "ohlc_domain_anomalies": _cboe_domain_anomalies(
+                    volatility,
+                    symbol,
+                ),
             }
         )
     source_entries.extend(volatility_metadata["sources"])
     source_entries.append(
         {
-            "instrument": "CBOE_VOLATILITY_BUNDLE",
+            "instrument": "CBOE_RISK_INDEX_BUNDLE",
             "provider": "Cboe",
             "path": str(settings.volatility_path.relative_to(settings.raw_root)),
             "file_sha256": sha256_file(settings.volatility_path),
@@ -950,6 +1027,7 @@ def prepare_market_sources(
             credit = _validate_credit_contract(
                 pd.read_parquet(settings.credit_path)
             )
+            _require_complete_hy_oas_history(credit)
             credit_downloaded = False
             credit_metadata = {
                 "instrument": "HY_OAS",
@@ -1096,12 +1174,17 @@ def load_prepared_credit(
             "FRED credit cache contains observations not yet available; "
             "rerun prepare"
         )
+    _require_complete_hy_oas_history(frame)
     return frame
 
 
 __all__ = [
+    "CBOE_CORRELATION_URLS",
+    "CBOE_INDEX_URLS",
     "CBOE_VOLATILITY_URLS",
     "FRED_CSV_URL",
+    "HY_OAS_EXPECTED_START",
+    "HY_OAS_MIN_OBSERVATIONS",
     "HY_OAS_SERIES_ID",
     "PRICE_COLUMNS",
     "combine_price_semantics",

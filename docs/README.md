@@ -1,6 +1,6 @@
 # 文档导航
 
-更新日期：2026-08-09
+更新日期：2026-08-20
 
 不要按文件名字母顺序硬读。建议按下面路径进入。
 
@@ -18,6 +18,8 @@
 - [`research_universe_redesign_implementation.md`](research_universe_redesign_implementation.md)：本次改造的代码落地、当前阻断、正式发布门槛和 SG 上线顺序。
 - [`factor_data_explorer_requirements.md`](factor_data_explorer_requirements.md)：按日期截面和单股历史查询 raw、clean、单因子排名的产品与数据契约。
 - [`factor_data_explorer_implementation.md`](factor_data_explorer_implementation.md)：查询服务、API、页面、严格版本门禁、本地验收与 SG 上线条件。
+- [`us_broad_factor_research_requirements.md`](us_broad_factor_research_requirements.md)：全美证券主表、`US_EQUITY_COVERAGE`、PIT `US_LIQUID_5M`、宽基因子排名和发布合同。
+- [`us_broad_factor_research_implementation.md`](us_broad_factor_research_implementation.md)：宽基代码落地、固定 SG 资源边界、首次回填、11:30 日链和五日影子切换手册。
 - [`factor_preprocessing.md`](factor_preprocessing.md)：raw、去极值、中性化和 z-score。
 - [`factor_confidence.md`](factor_confidence.md)：IC、ICIR、统计置信和稳定性。
 - [`point_in_time_universe.md`](point_in_time_universe.md)：PIT 股票池契约。
@@ -32,8 +34,8 @@
 
 ## 运维
 
+- [`operations_observability.md`](operations_observability.md)：独立 18825 运维站、统一状态台账、证据口径、认证、SG 直接 IP 入口和部署验收。
 - [`sg_operations_overview.md`](sg_operations_overview.md)：当前 SG 目标拓扑和已知差异。
-- [`sg_manual_deploy_3a52611.md`](sg_manual_deploy_3a52611.md)：提交 `3a52611` 的 SG 手工备份、部署、数据重发与验收命令。
 - [`server_daily_runbook.md`](server_daily_runbook.md)：日常检查、日志和发布命令。
 - [`singapore_server_deployment.md`](singapore_server_deployment.md)：通用首次安装模板。
 
@@ -47,6 +49,7 @@
 - [`market_regime_research_implementation.md`](market_regime_research_implementation.md)：大盘研究实现。
 - [`market_regime_effectiveness_screening.md`](market_regime_effectiveness_screening.md)：有效性筛选。
 - [`market_regime_research_code_audit.md`](market_regime_research_code_audit.md)：研究代码审计。
+- [`market_regime_breadth_cor1m_v2.md`](market_regime_breadth_cor1m_v2.md)：PIT 均线宽度、COR1M、v2 冻结假设和封存规则。
 - [`group_analytics_benchmark.md`](group_analytics_benchmark.md)：板块分析性能基线。
 
 旧迁移脚本说明、旧 root/Discord 超长手册和早期 group analytics 需求稿已经删除。需要追溯时使用

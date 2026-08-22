@@ -25,7 +25,7 @@ from src.data.pit import build_membership_mask
 from src.factors import artifacts as factor_artifacts
 from src.factors import publication as factor_publication
 from src.factors.library import get_factor_catalog
-from src.research_universes.models import MembershipType
+from src.research_universes.models import FactorPublicationMode, MembershipType
 from src.research_universes.registry import (
     ResearchUniverseRegistry,
     ResearchUniverseRegistryError,
@@ -101,6 +101,14 @@ class FactorObservationContract:
     date_start: str
     date_end: str
     classification_policy: str | None
+    publication_mode: str = "FULL_RESEARCH"
+    parent_dataset_version_id: str | None = None
+    universe_version_id: str | None = None
+    normalization_universe_id: str | None = None
+    eligibility_sha256: str | None = None
+    security_master_generation_id: str | None = None
+    security_master_sha256: str | None = None
+    preprocessing_methodology_version: str | None = None
 
     def to_dict(self, **extra: Any) -> dict[str, Any]:
         return {**asdict(self), **extra}
@@ -146,6 +154,7 @@ class FactorHistoryResult:
     actual_end: str
     summary: dict[str, Any]
     rows: list[dict[str, Any]]
+    security_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -157,6 +166,7 @@ class FactorHistoryResult:
             "ticker": self.ticker,
             "name": self.name,
             "sector": self.sector,
+            "security_id": self.security_id,
             "request_start": self.request_start,
             "request_end": self.request_end,
             "actual_start": self.actual_start,
@@ -223,6 +233,7 @@ class FactorObservationReader:
         registry: ResearchUniverseRegistry | None = None,
         expected_session: str | date | None = None,
         expected_session_provider: Callable[[], str] | None = None,
+        broad_backend: Any | None = None,
         cache_size: int = 12,
     ):
         self.market_reader = market_reader or MarketDataReader()
@@ -233,9 +244,26 @@ class FactorObservationReader:
             else None
         )
         self._expected_session_provider = expected_session_provider
+        self._broad_backend = broad_backend
         self._cache_size = max(1, int(cache_size))
         self._cache: dict[tuple[str, ...], _ObservationBundle] = {}
         self._cache_lock = threading.RLock()
+
+    def _broad(self) -> Any:
+        if self._broad_backend is None:
+            # Imported lazily because the broad adapter returns the domain
+            # result classes defined in this module.
+            from src.factors.broad_observations import (
+                BroadFactorObservationBackend,
+            )
+
+            self._broad_backend = BroadFactorObservationBackend(
+                expected_session_provider=self._expected_session,
+            )
+        return self._broad_backend
+
+    def _publication_mode(self, universe: str) -> FactorPublicationMode:
+        return self.registry.get(universe).factor_publication_mode
 
     def _expected_session(self) -> str:
         if self._fixed_expected_session is not None:
@@ -610,6 +638,7 @@ class FactorObservationReader:
             date_start=date_start,
             date_end=date_end,
             classification_policy=classification_policy,
+            normalization_universe_id=universe,
         )
         return _ObservationBundle(
             contract=contract,
@@ -640,6 +669,53 @@ class FactorObservationReader:
             while len(self._cache) > self._cache_size:
                 self._cache.pop(next(iter(self._cache)))
         return bundle
+
+    def _ticker_alternatives(
+        self,
+        ticker: str,
+        factor_id: str,
+        *,
+        exclude_universe: str,
+    ) -> list[dict[str, Any]]:
+        """Locate a ticker in other verified research generations."""
+        alternatives: list[dict[str, Any]] = []
+        for entry in self.registry.full_research_entries():
+            universe_id = entry.universe_id
+            if universe_id == exclude_universe:
+                continue
+            try:
+                bundle = self._bundle(universe_id, factor_id)
+            except FactorObservationError:
+                continue
+            if ticker not in bundle.raw.columns:
+                continue
+            member = bundle.membership_mask[ticker].fillna(False).astype(bool)
+            member_dates = bundle.raw.index[member]
+            valid = member & bundle.clean[ticker].notna()
+            valid_dates = bundle.raw.index[valid]
+            alternatives.append(
+                {
+                    "universe_id": universe_id,
+                    "role": entry.role.value,
+                    "first_pit_member_date": (
+                        pd.Timestamp(member_dates[0]).date().isoformat()
+                        if len(member_dates)
+                        else None
+                    ),
+                    "last_pit_member_date": (
+                        pd.Timestamp(member_dates[-1]).date().isoformat()
+                        if len(member_dates)
+                        else None
+                    ),
+                    "latest_valid_observation_date": (
+                        pd.Timestamp(valid_dates[-1]).date().isoformat()
+                        if len(valid_dates)
+                        else None
+                    ),
+                    "current_member": bool(member.iloc[-1]),
+                }
+            )
+        return alternatives
 
     @staticmethod
     def _row_identity(publication: dict[str, Any], factor_id: str) -> tuple[Any, ...]:
@@ -891,6 +967,24 @@ class FactorObservationReader:
     ) -> FactorSnapshotResult:
         universe = self._normalize_universe(universe)
         factor_id = self._normalize_factor(factor_id)
+        mode = self._publication_mode(universe)
+        if mode == FactorPublicationMode.FACTOR_DATA:
+            return self._broad().snapshot(
+                factor_id=factor_id,
+                observation_date=observation_date,
+                ticker=ticker,
+                status=status,
+                sort=sort,
+                order=order,
+                offset=offset,
+                limit=limit,
+            )
+        if mode != FactorPublicationMode.FULL_RESEARCH:
+            raise FactorObservationError(
+                "UNIVERSE_NOT_QUERYABLE",
+                f"{universe} 只提供行情覆盖，不发布 clean 或排名。",
+                status_code=422,
+            )
         if int(offset) < 0 or not 1 <= int(limit) <= 5000:
             raise FactorObservationError(
                 "INVALID_QUERY",
@@ -953,22 +1047,46 @@ class FactorObservationReader:
     ) -> FactorHistoryResult:
         universe = self._normalize_universe(universe)
         factor_id = self._normalize_factor(factor_id)
+        mode = self._publication_mode(universe)
+        if mode == FactorPublicationMode.FACTOR_DATA:
+            return self._broad().history(
+                factor_id=factor_id,
+                ticker=ticker,
+                start=start,
+                end=end,
+            )
+        if mode != FactorPublicationMode.FULL_RESEARCH:
+            raise FactorObservationError(
+                "UNIVERSE_NOT_QUERYABLE",
+                f"{universe} 只提供行情覆盖，不发布 clean 或排名。",
+                status_code=422,
+            )
         try:
             ticker = canonical_ticker(ticker)
         except InvalidResourceId as exc:
             raise FactorObservationError(
                 "TICKER_NOT_IN_GENERATION",
-                f"股票代码无效或不在当前 generation：{ticker}",
+                f"股票代码无效或不在当前正式因子数据范围内：{ticker}",
                 status_code=404,
             ) from exc
 
         def query() -> FactorHistoryResult:
             bundle = self._bundle(universe, factor_id)
             if ticker not in bundle.raw.columns:
+                alternatives = self._ticker_alternatives(
+                    ticker,
+                    factor_id,
+                    exclude_universe=universe,
+                )
                 raise FactorObservationError(
                     "TICKER_NOT_IN_GENERATION",
-                    f"{ticker} 从未出现在当前 {universe}/{factor_id} generation。",
+                    f"{ticker} 不在 {universe} 的当前正式 {factor_id} 因子数据范围内。",
                     status_code=404,
+                    details={
+                        "ticker": ticker,
+                        "selected_universe": universe,
+                        "available_universes": alternatives,
+                    },
                 )
             request_start = _date_text(
                 start or bundle.contract.date_start, field="start"
@@ -1040,6 +1158,20 @@ class FactorObservationReader:
 
         return self._with_publication_retry(query)
 
+    def search_securities(
+        self,
+        *,
+        query: str,
+        asof: str | date | None = None,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        """Search the dated Security Master, independent of matrix columns."""
+        return self._broad().search_securities(
+            query=query,
+            asof=asof,
+            limit=limit,
+        )
+
     def metadata(
         self,
         *,
@@ -1059,18 +1191,37 @@ class FactorObservationReader:
         catalog = get_factor_catalog()
         universe_rows: list[dict[str, Any]] = []
         available_dates: list[str] = []
-        for entry in self.registry.list():
+        ticker_options: list[dict[str, str]] = []
+        for entry in self.registry.factor_data_entries():
             universe_id = entry.universe_id
             row: dict[str, Any] = {
                 **entry.to_dict(),
                 "status": "MISSING",
+                "factor_data_status": "MISSING",
+                "research_status": "MISSING",
                 "publication_id": None,
                 "publication_target_session": None,
                 "dataset_version_id": None,
+                "parent_dataset_version_id": None,
+                "universe_version_id": None,
+                "capabilities": {
+                    "raw": False,
+                    "clean": False,
+                    "rank": False,
+                    "confidence": False,
+                },
                 "factors": [],
                 "error": None,
             }
             try:
+                if entry.factor_publication_mode == FactorPublicationMode.FACTOR_DATA:
+                    broad = self._broad().metadata(selected_factor=selected_factor)
+                    row.update(broad["universe"])
+                    if selected_universe == universe_id:
+                        available_dates = broad["available_dates"]
+                        ticker_options = broad.get("ticker_options") or []
+                    universe_rows.append(row)
+                    continue
                 publication = self._read_publication(universe_id)
                 factor_bindings = publication.get("factors") or {}
                 data = publication["data_foundation"]
@@ -1086,9 +1237,18 @@ class FactorObservationReader:
                 row.update(
                     {
                         "status": "PUBLISHED",
+                        "factor_data_status": "PUBLISHED",
+                        "research_status": "PUBLISHED",
                         "publication_id": publication["publication_id"],
                         "publication_target_session": data["target_session"],
                         "dataset_version_id": data["version_id"],
+                        "parent_dataset_version_id": data["version_id"],
+                        "capabilities": {
+                            "raw": True,
+                            "clean": True,
+                            "rank": True,
+                            "confidence": bool(entry.confidence_enabled),
+                        },
                         "factors": [
                             {
                                 "factor_id": factor_id,
@@ -1113,12 +1273,26 @@ class FactorObservationReader:
                         pd.Timestamp(value).date().isoformat()
                         for value in bundle.raw.index
                     ]
+                    ticker_options = [
+                        {
+                            "ticker": ticker,
+                            "name": self._metadata_row(bundle, ticker)[0],
+                        }
+                        for ticker in bundle.raw.columns
+                    ]
             except FactorObservationError as exc:
                 status = {
                     "RESEARCH_NOT_PUBLISHED": "MISSING",
                     "RESEARCH_STALE": "STALE",
+                    "FACTOR_DATA_NOT_PUBLISHED": "MISSING",
+                    "FACTOR_DATA_STALE": "STALE",
                 }.get(exc.code, "INVALID")
                 row["status"] = status
+                if entry.factor_publication_mode == FactorPublicationMode.FACTOR_DATA:
+                    row["factor_data_status"] = status
+                else:
+                    row["factor_data_status"] = status
+                    row["research_status"] = status
                 row["error"] = exc.to_dict()
             except (DataFoundationError, factor_publication.ResearchPublicationError) as exc:
                 row["status"] = "INVALID"
@@ -1144,6 +1318,7 @@ class FactorObservationReader:
             "selected_universe": selected_universe,
             "selected_factor": selected_factor,
             "available_dates": available_dates,
+            "ticker_options": ticker_options,
         }
 
 

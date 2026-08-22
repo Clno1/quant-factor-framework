@@ -146,6 +146,7 @@ def create_task(
         "risk_config": frozen_risk,
         "status": STATUS_PENDING,
         "created_at": now,
+        "status_changed_at": now,
         "started_at": None,
         "finished_at": None,
         "duration_sec": None,
@@ -184,6 +185,11 @@ def update_task(task_id: str, patch: dict[str, Any]) -> dict[str, Any]:
     task = load_task(task_id)
     if task is None:
         raise FileNotFoundError(f"Backtest task not found: {task_id}")
+    previous_status = task.get("status")
+    next_status = patch.get("status", previous_status)
+    if next_status != previous_status and "status_changed_at" not in patch:
+        patch = dict(patch)
+        patch["status_changed_at"] = datetime.now().isoformat(timespec="seconds")
     task.update(patch)
     _database().put_record(
         _RECORD_KIND,

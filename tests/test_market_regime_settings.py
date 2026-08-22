@@ -86,6 +86,35 @@ def test_settings_reject_invalid_rolling_windows(tmp_path):
         )
 
 
+def test_settings_enable_requested_breadth_windows_and_strict_coverage(tmp_path):
+    settings = load_market_regime_research_settings(
+        _config(),
+        raw_root=tmp_path / "raw",
+        output_root=tmp_path / "output",
+    )
+
+    assert settings.features.moving_average_windows == (20, 50, 60, 120, 200)
+    assert settings.features.breadth_change_windows == (5, 20)
+    assert settings.features.min_cross_section_coverage == 0.95
+    assert settings.screening.candidate_registry_path.name == (
+        "market_regime_screening_candidates_v2.yaml"
+    )
+
+
+def test_settings_reject_invalid_cross_section_coverage(tmp_path):
+    config = _config()
+    config["market_regime_research"]["features"] = {
+        "min_cross_section_coverage": 1.01,
+    }
+
+    with pytest.raises(ValueError, match="min_cross_section_coverage"):
+        load_market_regime_research_settings(
+            config,
+            raw_root=tmp_path / "raw",
+            output_root=tmp_path / "output",
+        )
+
+
 def test_settings_reject_instrument_start_after_end(tmp_path):
     config = _config()
     config["market_regime_research"]["instruments"][0]["start"] = "2027-01-01"

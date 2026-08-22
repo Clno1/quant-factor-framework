@@ -20,7 +20,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Mapping, Optional
+from typing import Any, Mapping, Optional
 
 import numpy as np
 import pandas as pd
@@ -36,6 +36,46 @@ from src.execution import (
 from src.utils.logger import get_logger
 
 log = get_logger(__name__)
+
+
+class BacktestCapacityError(ValueError):
+    """The requested portfolio cannot be filled inside the frozen ADV limit."""
+
+    code = "ADV_CAPACITY_EXCEEDED"
+
+    def __init__(self, breaches: list[dict[str, Any]]) -> None:
+        if not breaches:
+            raise ValueError("BacktestCapacityError requires at least one breach")
+        self.breaches = sorted(
+            breaches,
+            key=lambda item: (
+                float(item["max_portfolio_value"]),
+                str(item["decision_date"]),
+                str(item["ticker"]),
+            ),
+        )
+        self.worst = self.breaches[0]
+        super().__init__(
+            "Backtest portfolio exceeds configured ADV fill capacity: "
+            f"portfolio_value={self.worst['portfolio_value']:.2f} "
+            f"maximum_feasible={self.worst['max_portfolio_value']:.2f} "
+            f"breach_count={len(self.breaches)} "
+            f"decision_date={self.worst['decision_date']} "
+            f"execution_date={self.worst['execution_date']} "
+            f"group={self.worst['group']} ticker={self.worst['ticker']} "
+            f"requested={self.worst['requested_quantity']:.4f} "
+            f"allowed={self.worst['allowed_quantity']:.4f} "
+            f"adv={self.worst['adv']}."
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "code": self.code,
+            "breach_count": len(self.breaches),
+            "portfolio_value": float(self.worst["portfolio_value"]),
+            "max_portfolio_value": float(self.worst["max_portfolio_value"]),
+            "worst_order": dict(self.worst),
+        }
 
 
 @dataclass
@@ -385,10 +425,10 @@ def _build_trade_row(
     raw_price_override: float | None = None,
     event_type: str = "REBALANCE",
     pricing_method: str = "NEXT_OPEN",
-) -> dict | None:
+) -> tuple[dict | None, dict[str, Any] | None]:
     trade_weight = float(new_weight) - float(old_weight)
     if abs(trade_weight) <= 1e-12:
-        return None
+        return None, None
     trade_abs = abs(trade_weight)
     side = "BUY" if trade_weight > 0 else "SELL"
     raw_price = (
@@ -429,14 +469,38 @@ def _build_trade_row(
         volume=bar_volume,
         execution=execution,
     )
+    capacity_breach = None
     if estimated_quantity > max_quantity + 1e-9:
-        raise ValueError(
-            "Backtest order exceeds the configured ADV fill limit: "
-            f"decision_date={decision_date.date()} ticker={ticker} "
-            f"requested={estimated_quantity:.4f} allowed={max_quantity:.4f} "
-            f"adv={bar_volume}. Reduce portfolio_value, widen the universe, "
-            "or use an event-driven partial-fill model."
+        max_portfolio_value = (
+            max_quantity * raw_price / trade_abs
+            if trade_abs > 0 and max_quantity > 0
+            else 0.0
         )
+        volume_limit = float(
+            ((execution.get("slippage") or {}).get("volume_limit", 0.025))
+            or 0.0
+        )
+        capacity_breach = {
+            "decision_date": decision_date.strftime("%Y-%m-%d"),
+            "execution_date": date.strftime("%Y-%m-%d"),
+            "group": group,
+            "ticker": ticker,
+            "side": side,
+            "event_type": event_type,
+            "portfolio_value": portfolio_value,
+            "trade_abs_weight": trade_abs,
+            "raw_price": float(raw_price),
+            "requested_quantity": float(estimated_quantity),
+            "allowed_quantity": float(max_quantity),
+            "adv": float(bar_volume) if bar_volume is not None else None,
+            "participation_rate": (
+                float(estimated_quantity / bar_volume)
+                if bar_volume is not None and bar_volume > 0
+                else None
+            ),
+            "volume_limit": volume_limit,
+            "max_portfolio_value": float(max_portfolio_value),
+        }
     execution_result = calculate_execution(
         side=side,
         quantity=estimated_quantity,
@@ -485,7 +549,7 @@ def _build_trade_row(
         "fee": float(execution_result["fee"]),
         "total_cost_cash": total_cost_cash,
         "cost": total_cost_cash / portfolio_value if portfolio_value > 0 else 0.0,
-    }
+    }, capacity_breach
 
 
 def _build_execution_details(
@@ -518,6 +582,7 @@ def _build_execution_details(
     holdings_rows: list[dict] = []
     trades_rows: list[dict] = []
     cost_rows: list[dict] = []
+    capacity_breaches: list[dict[str, Any]] = []
 
     events = (
         forced_exit_events.copy()
@@ -627,6 +692,7 @@ def _build_execution_details(
                 else "MEMBERSHIP_EXIT"
             )
             if pricing_method == "TOTAL_LOSS_WRITE_OFF":
+                capacity_breach = None
                 trade_row = {
                     "date": execution_date.strftime("%Y-%m-%d"),
                     "decision_date": decision_date.strftime("%Y-%m-%d"),
@@ -664,7 +730,7 @@ def _build_execution_details(
                     "cost": 0.0,
                 }
             else:
-                trade_row = _build_trade_row(
+                trade_row, capacity_breach = _build_trade_row(
                     date=execution_date,
                     decision_date=decision_date,
                     group=group_name,
@@ -678,6 +744,8 @@ def _build_execution_details(
                     event_type=event_type,
                     pricing_method=pricing_method,
                 )
+            if capacity_breach is not None:
+                capacity_breaches.append(capacity_breach)
             if trade_row is None:
                 continue
             trades_rows.append(trade_row)
@@ -795,7 +863,7 @@ def _build_execution_details(
 
             group_trade_rows: list[dict] = []
             for ticker, trade_weight in delta.items():
-                trade_row = _build_trade_row(
+                trade_row, capacity_breach = _build_trade_row(
                     date=pd.Timestamp(effective_date),
                     decision_date=pd.Timestamp(decision_date),
                     group=group_name,
@@ -806,6 +874,8 @@ def _build_execution_details(
                     execution_price_df=execution_price_df,
                     volume_df=volume_df,
                 )
+                if capacity_breach is not None:
+                    capacity_breaches.append(capacity_breach)
                 if trade_row is None:
                     continue
                 group_trade_rows.append(trade_row)
@@ -840,6 +910,8 @@ def _build_execution_details(
             "Membership-exit events fall outside the measured horizon: "
             f"{remaining[['execution_date', 'ticker']].head(10).to_dict('records')}"
         )
+    if capacity_breaches:
+        raise BacktestCapacityError(capacity_breaches)
 
     holdings = pd.DataFrame(holdings_rows)
     trades = pd.DataFrame(trades_rows)

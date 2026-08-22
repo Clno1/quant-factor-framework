@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="section-block first-section">
+    <div class="section-heading">
+        <div>
+            <h2>全部纳管任务</h2>
+            <p>这里显示任务应该何时运行、实际运行到了哪里，以及最终产物是否可用。</p>
+        </div>
+    </div>
+    <div class="table-wrap">
+        <table class="ops-table">
+            <thead><tr><th>任务</th><th>运行方式</th><th>状态</th><th>目标日</th><th>阶段</th><th>systemd</th><th>下次触发</th></tr></thead>
+            <tbody>
+            {% for job in jobs %}
+                <tr>
+                    <td><a class="primary-link" href="/jobs/{{ job.job_id }}">{{ job.display_name }}</a><small class="row-note mono">{{ job.job_id }}</small></td>
+                    <td>{{ category_label(job.category) }}<small class="row-note">{{ job.run_type }}</small></td>
+                    <td><span class="status status-{{ (job.status or 'UNKNOWN') | lower }}">{{ status_label(job.status) }}</span></td>
+                    <td class="mono">{{ job.target_session or '-' }}</td>
+                    <td>{{ job.stage or '-' }}<small class="row-note">{{ job.status_reason or '' }}</small></td>
+                    <td>{{ job.systemd.get('service_active') or '本地不可用' }}<small class="row-note">{{ job.systemd.get('service_result') or '-' }}</small></td>
+                    <td class="mono">{{ format_time(job.systemd.get('next_trigger')) }}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endblock %}

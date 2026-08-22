@@ -55,7 +55,10 @@ def _sanitize(obj: Any) -> Any:
 
 
 def _enabled_breakout_universes() -> list[str]:
-    configured = research_universe_registry().ids()
+    configured = [
+        entry.universe_id
+        for entry in research_universe_registry().factor_data_entries()
+    ]
     seen: dict[str, None] = {}
     for universe in [*configured, *list_universes()]:
         seen.setdefault(str(universe).upper(), None)

@@ -1,8 +1,35 @@
-schema_version: 1
+schema_version: 2
 universes:
-  SP500:
-    role: PRIMARY
+  US_EQUITY_COVERAGE:
+    display_name: 全美证券行情覆盖
+    purpose: COVERAGE
+    verdict_role: NONE
     membership_type: PIT
+    factor_publication_mode: RAW_ONLY
+    confidence_enabled: false
+    cross_universe_enabled: false
+    minimum_cross_section: 0
+    minimum_industry_coverage: 0.0
+
+  US_LIQUID_5M:
+    display_name: 全美流动股票
+    purpose: ESTIMATION
+    verdict_role: NONE
+    membership_type: PIT
+    factor_publication_mode: FACTOR_DATA
+    parent_data_universe: US_EQUITY_COVERAGE
+    benchmark: IWM
+    confidence_enabled: false
+    cross_universe_enabled: false
+    minimum_cross_section: 500
+    minimum_industry_coverage: 0.0
+
+  SP500:
+    display_name: 标普 500
+    purpose: VALIDATION
+    verdict_role: PRIMARY
+    membership_type: PIT
+    factor_publication_mode: FULL_RESEARCH
     benchmark: SPY
     confidence_enabled: true
     cross_universe_enabled: true
@@ -10,8 +37,11 @@ universes:
     minimum_industry_coverage: 0.95
 
   NASDAQ100:
-    role: SECONDARY
+    display_name: 纳斯达克 100
+    purpose: VALIDATION
+    verdict_role: SECONDARY
     membership_type: PIT
+    factor_publication_mode: FULL_RESEARCH
     benchmark: QQQ
     confidence_enabled: true
     cross_universe_enabled: true
@@ -19,8 +49,11 @@ universes:
     minimum_industry_coverage: 0.95
 
   MAG7:
-    role: REFERENCE
+    display_name: 科技七巨头
+    purpose: REFERENCE
+    verdict_role: REFERENCE
     membership_type: STATIC
+    factor_publication_mode: FULL_RESEARCH
     benchmark: QQQ
     confidence_enabled: false
     cross_universe_enabled: false

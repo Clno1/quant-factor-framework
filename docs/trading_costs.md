@@ -1,6 +1,6 @@
 # 回测与模拟盘交易费用说明
 
-更新日期：2026-08-09
+更新日期：2026-08-11
 
 本文记录系统内回测和模拟盘使用的成交、滑点、手续费模型。相关代码集中在
 `src/execution/models.py`，默认参数在 `configs/default.yaml` 的
@@ -20,7 +20,7 @@
 | 参数 | 默认值 | 含义 |
 | --- | ---: | --- |
 | `timing` | `next_open` | T 日决策，下一根开盘价成交 |
-| `portfolio_value` | `100000` | 回测中将权重换算成股数的名义组合规模 |
+| `portfolio_value` | `100000` | 回测中将权重换算成股数的名义组合规模；新建回测页可覆盖并冻结到任务 |
 | `fee_model` | `ibkr_us_pro_fixed` | 默认使用 IBKR Pro Fixed 风格美股费用 |
 | `slippage_model` | `volume_share` | 默认使用成交量占比滑点模型 |
 | `slippage_bps` | `5` | `constant_bps` 模型的单边滑点；不用于绕过成交量校验 |
@@ -90,11 +90,27 @@ slippage_cost = abs(quantity) * raw_price * slippage_bps / 10000
 
 1. `estimated_notional = abs(trade_weight) * portfolio_value`
 2. `estimated_quantity = estimated_notional / raw_price`
-3. 校验 `estimated_quantity <= trailing_ADV × volume_limit`；超过时拒绝回测，
-   不假装整单成交，也不在横截面回测中暗做部分成交。
+3. 校验 `estimated_quantity <= trailing_ADV × volume_limit`；引擎会扫描完整回测区间并汇总
+   所有超限订单，以最严格订单反推出该历史区间可承载的最大 `portfolio_value`。只要存在
+   超限就拒绝发布结果，不假装整单成交，也不在横截面回测中暗做部分成交。
 4. 调用 `calculate_execution(...)` 得到成交价、滑点成本、费用明细。
 5. `cost = total_cost_cash / portfolio_value`
 6. 在调仓生效日从对应组的日收益中扣除 `cost`。
+
+容量失败会以结构化 `ADV_CAPACITY_EXCEEDED` 写入任务，页面显示当前资金、全区间容量、
+最严格股票、请求/允许股数和订单参与率。页面给出的重建资金在历史容量上再保留 10% 缓冲，
+但它只是同一冻结数据版本下的容量建议，不代表未来流动性保证。技术堆栈默认折叠保留，
+便于运维审计。结构化全区间结果显示为“安全建议资金”；旧任务里只有首笔英文错误的，页面会
+兼容解析并明确标为“首个失败订单推算 / 初步估算资金”，重跑后仍可能发现更严格的历史订单。
+
+股票数少于目标分组数两倍时，runner 会在执行前降低有效分组数。例如 6 只股票配置 5 组会实际
+使用 3 组，Top 组合为 Q3，避免大部分分组只有 0 或 1 只股票。实际分组会在成功和容量失败任务中
+持久化并展示；创建时的 5 组只是请求值，不再冒充最终执行值。
+
+自定义 Watchlist 的行情版本必须达到最近可发布交易日。版本陈旧时任务进入
+`WAITING_FOR_DATA`，统一缺数 worker 发布专属版本后由 Web 后台监视器自动恢复；不会用旧版本继续
+回测。2026-08-13 SG 验收中，6 票 Watchlist 从 `2026-08-10` 补到 `2026-08-12`，随后以
+`14,700 USD`、3 个有效分组完成回测，实际计算 10.847 秒。
 
 只有同时存在成交开盘价和下一次估值开盘价的调仓才进入回测绩效。区间尾部若只有
 `T+1 open`、没有 `T+2 open`，页面仍可显示 T 日信号，但不会生成一笔成本与收益期限不一致的

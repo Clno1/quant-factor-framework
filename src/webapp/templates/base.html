@@ -30,16 +30,8 @@
                     <summary class="side-group-title">研究</summary>
                     <div class="side-subnav">
                         <a href="/research"
-                           class="side-link {% if request.url.path == '/' or request.url.path == '/research' %}active{% endif %}">
+                           class="side-link {% if request.url.path == '/' or (request.url.path.startswith('/research') and not request.url.path.startswith('/research/factor-data')) or request.url.path.startswith('/factors') or request.url.path.startswith('/factor/') %}active{% endif %}">
                             <span>研究总览</span>
-                        </a>
-                        <a href="/research/universes"
-                           class="side-link {% if request.url.path.startswith('/research/universes') %}active{% endif %}">
-                            <span>研究股票池</span>
-                        </a>
-                        <a href="/factors"
-                           class="side-link {% if request.url.path.startswith('/factors') or request.url.path.startswith('/factor/') or request.url.path.startswith('/research/factors/') %}active{% endif %}">
-                            <span>因子库</span>
                         </a>
                         <a href="/research/factor-data"
                            class="side-link {% if request.url.path.startswith('/research/factor-data') %}active{% endif %}">

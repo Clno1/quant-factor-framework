@@ -1,7 +1,7 @@
 # 研究股票池分层与 NASDAQ100 改造实施记录
 
-更新日期：2026-08-09  
-状态：代码、本地正式 SP500/MAG7 重发与 409 项回归完成；NASDAQ100 数据门禁和 SG 部署待完成
+更新日期：2026-08-11
+状态：SG 双核心研究池、跨池研究和网页功能已正式发布；因子数据冷缓存性能仍待优化
 
 本文件记录
 [`research_universe_redesign_requirements.md`](research_universe_redesign_requirements.md)
@@ -22,28 +22,27 @@ Research Universe registry
   -> 回测 / 模拟盘冻结快照与逐票成本账本
 ```
 
-截至 2026-08-09，本机主池和参考池已经按新合同重发，但仍不能把完整双池改造或 SG 宣称为完成：
+截至 2026-08-11，SG 已完成双核心池正式发布：
 
-- 本机 SP500 正式版本 `6d080d2a1822440f8b64ea536a246d50` 与研究 publication
-  `7f0472d3-8c8e-447c-af98-70d91a469218` 已通过四哈希和因子 generation 校验；
-- 本机 MAG7 正式版本 `4da3efdf67624a1db7c559d764917387` 与研究 publication
-  `0522bac7-5b94-4e64-b0db-c214f5306b74` 已发布；
-- NASDAQ100 当前成分严格比对发现 FMP 独有 `EA`、Nasdaq 官方独有 `HONA`，候选发布按设计
-  fail closed；
-- NASDAQ100 尚无正式行情和 8 因子研究发布；
-- 当前跨池 generation `20260809T153058_3626ef6a39` 的 8 个因子均为
-  `INSUFFICIENT`；
-- 可部署代码基线为提交 `3a52611`；本轮尚未连接 SG，服务器仍以实机版本为准。
+- SP500 DatasetVersion `fcd51776db3b4266be12926cbe0d57b3`，目标交易日 `2026-08-10`；
+- NASDAQ100 DatasetVersion `9c5abc4b58a5414e911153cdda6a429c`，165 个历史/当前证券、
+  248,893 行、目标日覆盖率 100%；
+- NASDAQ100 research publication `763f89c3-3b62-4fd2-9d6b-968f3bf4b4b2`，8 个因子均完成
+  raw/clean、IC、置信评估和 next-open 分组回测；
+- MAG7 DatasetVersion `e4c7ad541f3d4480a0b15844adb59195`；
+- 三个研究池目标交易日一致，跨池结论为 `ROBUST=3`、`SEGMENT_SPECIFIC=1`、
+  `INSUFFICIENT=4`；
+- Web、研究 API、因子数据日期截面和真实 systemd unit 已通过生产验收。
 
 ## 2. 分阶段状态
 
 | 阶段 | 代码状态 | 正式数据/生产状态 |
 |---|---|---|
-| Phase 0 正确性 | 完成 | 本机 SP500/MAG7 已重发；SG 待重发 |
-| Phase 1 领域模型 | 完成 | 待随代码部署 SG |
-| Phase 2 NASDAQ100 数据 | 构建器、10 组官方事件门禁、调度完成 | 当前成分不一致，禁止发布 |
-| Phase 3 跨池研究 | 评估、不可变 generation、原子 pointer 完成 | NASDAQ100 缺失，结论为 `INSUFFICIENT` |
-| Phase 4 网页 | 页面、API、导航、冻结证据和成本账本完成 | 本地验收通过，待部署 SG |
+| Phase 0 正确性 | 完成 | SG 三池均为 2026-08-10 正式版本 |
+| Phase 1 领域模型 | 完成 | SG 已部署并由网页/API 消费 |
+| Phase 2 NASDAQ100 数据 | 完成 | PIT、行情、事件账本和四哈希已发布 |
+| Phase 3 跨池研究 | 完成 | 双池 8 因子与跨池 generation 已发布 |
+| Phase 4 网页 | 完成 | 页面/API 功能通过；冷缓存性能待优化 |
 | Phase 5 用户池晋升 | 不在本期范围 | 未实施 |
 
 ## 3. 数据正确性改造
@@ -98,6 +97,7 @@ Universe 不发布正式 IC PASS。
 
 - `src/data/nasdaq100_pit.py`：指数专用规范化、候选重建、官方当前成分比对和发布；
 - `configs/nasdaq100_pit_verification.yaml`：10 组官方加入/退出事件和来源；
+- `configs/nasdaq100_pit_corrections.yaml`：精确事件修正、官方来源和逐条审计；
 - `scripts/run_data_pipeline.py pit`：依次运行所有 PIT 研究池，单池失败不覆盖旧 publication；
 - `quant-market-data.service`：行情阶段包含 SP500、NASDAQ100 和 MAG7。
 
@@ -109,15 +109,20 @@ Universe 不发布正式 IC PASS。
 4. PIT 快照规模、事件和历史并集检查；
 5. 行情、PIT、行业覆盖和四文件哈希检查。
 
-当前失败证据位于：
+FMP 在 2026-08-10 的当前名单和历史事件中存在六类已确认差异。系统保留原始 payload，不做
+宽泛 alias，只在日期、加入代码、删除代码、证券名和原因同时匹配时应用审核规则：
 
-```text
-data/raw/pit/NASDAQ100/asof=2026-08-07/
-  run=pit_20260809T093001_8244a7bc/diagnostics.json
-```
+| 事件 | 处理 |
+|---|---|
+| HONA 2026-06-29 | 补充 spin-off 加入事件，并以 Nasdaq 当前名单交叉确认 |
+| EA 2026-08-05 | 补充私有化删除事件 |
+| TTWO/SGEN 2023-12-18 | 修复 FMP 有 `symbol` 但缺 `addedSecurity` 导致的加入丢失 |
+| SOLS 2025-11-06 | 把 FMP 同票加入/删除修正为删除事件 |
+| XLNX 2022-02-22 | 把错误的 `Annual Re-ranking` 原因修正为 AMD 并购 |
+| ANSS 2025-07-28 | 把错误的 `Annual Re-ranking` 原因修正为 Synopsys 并购 |
 
-该失败不应通过手写无来源 alias 绕过。先等待供应商跟进；若持续不一致，再依据正式指数公告增加
-精确日期、精确证券和可审计来源的规则。
+正式 PIT run `pit_20260811T050906_58c2a182` 在 systemd 环境中再次通过：40 个快照、0 条不一致。
+供应商以后修改任一被审核字段时，规则不会模糊匹配，而会重新 fail closed。
 
 ## 6. 跨池结论
 
@@ -198,19 +203,26 @@ risk_config
 回测和模拟盘详情都显示逐票开盘原价、成交价、参与率、动态滑点，以及券商佣金、SEC、FINRA
 TAF/CAT、清算、转付、交易所和总摩擦成本。
 
-## 9. SG 正式上线顺序
+## 9. SG 正式上线记录
 
-先完成代码审阅、测试和 commit，再执行以下步骤；本轮尚未执行这些服务器动作。
+2026-08-11 的变更前备份位于：
 
-1. 一致性备份 SG 代码、`/etc/quant`、systemd、DuckDB、SQLite、`data/lake` 和 `outputs`。
-2. 部署精确 commit，不覆盖 SG 的 `data/`、`outputs/`、`logs/` 和密钥文件。
-3. 安装 root units，运行 `systemd-analyze verify`。
-4. 先运行 NASDAQ100 candidate；不通过时停止正式 NASDAQ100 发布。
-5. 两个 PIT 池通过后，强制重发 SP500、NASDAQ100、MAG7 的当日 v2 行情版本。
-6. 使用 Reader 验证四类文件哈希，再运行 08:45 研究链。
-7. 要求 SP500/NASDAQ100 同一 target session，跨池不再为 `INSUFFICIENT`。
-8. 重启 Web，验收研究、排名、回测、模拟盘和 API。
-9. 保留旧版本和备份，不删除历史 Parquet、SQLite 或 DuckDB。
+```text
+/home/projects/quant-backups/nasdaq100-pit-fix-20260811T124759CST/
+```
+
+两个临时屏蔽 NASDAQ100 的 systemd drop-in 已移入该备份目录，没有删除。验收结果：
+
+1. NASDAQ100 candidate 和正式 PIT 均为 PASS；
+2. DatasetVersion `9c5abc4b58a5414e911153cdda6a429c` 通过 Reader 哈希校验；
+3. 8 因子研究和跨池 generation 正式发布；
+4. `systemd-analyze verify` 通过，唯一提示是腾讯云 `tat_agent` 的旧 `/var/run` 路径；
+5. 实际启动 `quant-market-data.service`：SP500/NASDAQ100 PIT 均发布，三池行情均为 NOOP，
+   退出码 0；
+6. 实际启动 `quant-factor-research.service`：三池研究均为 NOOP，跨池重新发布，退出码 0；
+7. `quant-web.service` active，认证后的研究页、因子数据页和 API 均返回 200。
+8. 修复五个旧 unit 对已删除 `runlog/` 的强制挂载后，US_LIQUID_5M 与板块 EOD 依赖链也完成
+   实跑，最终没有失败的 Quant unit。
 
 关键命令：
 
@@ -246,11 +258,14 @@ TAF/CAT、清算、转付、交易所和总摩擦成本。
 
 ## 10. 完成门槛
 
-只有以下条件全部成立，才把本改造标为生产完成：
+以下数据正确性和生产功能门槛已经满足：
 
 - SP500、NASDAQ100 最新 DatasetVersion 都有四类完整哈希并通过 Reader；
 - 两池 PIT 历史活跃 ticker 的 raw/clean 和行业覆盖审计通过；
 - 两池 8 因子研究绑定同一 target session；
 - 跨池 manifest 的所有 source binding 均为 `AVAILABLE`；
-- SG `systemd-analyze verify`、storage check、Web/API 和 journal 验收通过；
+- SG `systemd-analyze verify`、Reader、Web/API 和 journal 验收通过；
 - SG 重启后只读取已完成的原子 publication。
+
+独立性能门槛尚未完全满足：SG 因子截面冷缓存实测 2.56 秒，高于目标 2 秒；热缓存约 0.077 秒、
+单股历史约 0.20 秒。该项不阻止数据发布，但在性能优化完成前不得标记为“性能验收完成”。

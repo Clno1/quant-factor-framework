@@ -1,12 +1,11 @@
-# 美股开盘前 Discord 日报（生产当前仅动量）
+# 美股开盘前 Discord 日报（动量与板块轮动）
 
 ## 1. 目标与边界
 
-实现支持两个独立频道，但当前生产 unit 在每个 XNYS 交易日美东时间 09:20 只运行
-`--channel momentum`：
+生产 unit 在每个 XNYS 交易日美东时间 09:20 运行 `--channel all`，分别处理两个独立频道：
 
 - `#momentum-alerts`：截至上一完整交易日收盘的动量突破/Setup 候选；
-- `#sector-rotation`：代码保留但配置关闭，不由当前 timer 发送。
+- `#sector-rotation`：上一完整交易日的板块与细分行业强弱。
 
 实现位于独立的 `src/premarket_digest/` 叶子编排层。允许的依赖方向是：
 
@@ -352,8 +351,7 @@ sudo chown root:quant /etc/quant/premarket-digest.env
 sudo chmod 0640 /etc/quant/premarket-digest.env
 ```
 
-当前上线只需人工确认 `#momentum-alerts` 恰好收到一条不含 mention 的测试消息；sector
-Webhook 可以保留但不会被 `--channel momentum` 使用。未确认前不得启用 timer。独立 env 文件是运行时
+上线前需人工确认两个频道分别恰好收到一条不含 mention 的测试消息。未确认前不得启用 timer。独立 env 文件是运行时
 注入隔离，不是强安全边界：这些 unit 同属 `quant` 用户/组，`root:quant 0640` 的文件仍可被
 该组读取。需要强隔离时，应使用独立 service user、专用 ACL/组或 systemd credentials。
 
@@ -405,8 +403,9 @@ python scripts/run_premarket_digest.py --send --session 2026-07-16 \
 任何非 systemd 的手工 `--send` 都必须显式加 `--allow-outside-window`；正常定时任务使用
 `--send --scheduled`，自动推导当天 session，不能同时传 `--session`。
 
-安装 timer 前，先确认 `US_LIQUID_5M` 正式版本契约和 `T-1` 动量精确/可计算覆盖通过。当前 unit
-显式固定 `--channel momentum`，不受 sector 发布门槛影响。通过后执行：
+安装 timer 前，先确认 `US_LIQUID_5M` 正式版本契约、`T-1` 动量精确/可计算覆盖，以及
+sector/sub-industry 两级正式产物门槛均通过。当前 unit 显式固定 `--channel all`；单个频道失败时
+按各自状态记录并返回非零，由 systemd 在发送窗口内重试。通过后执行：
 
 ```bash
 python3 -c 'import sys; assert sys.version_info >= (3, 11), sys.version'

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ title }} · Quant Operations</title>
+    <link rel="stylesheet" href="/static/css/operations.css?v={{ asset_version }}">
+</head>
+<body data-refresh-seconds="{{ refresh_seconds }}">
+    <aside class="sidebar">
+        <a class="brand" href="/" aria-label="返回运维总览">
+            <span class="brand-mark">Q</span>
+            <span>
+                <strong>量化运维中心</strong>
+                <small>Operations Console</small>
+            </span>
+        </a>
+        <nav class="navigation" aria-label="运维导航">
+            <a href="/" class="nav-link {% if page == 'overview' %}active{% endif %}">运维总览</a>
+            <a href="/jobs" class="nav-link {% if page == 'jobs' %}active{% endif %}">任务中心</a>
+            <a href="/freshness" class="nav-link {% if page == 'freshness' %}active{% endif %}">数据新鲜度</a>
+            <a href="/deliveries" class="nav-link {% if page == 'deliveries' %}active{% endif %}">消息投递</a>
+            <a href="/projects" class="nav-link {% if page == 'projects' %}active{% endif %}">上线专项</a>
+            <a href="/incidents" class="nav-link {% if page == 'incidents' %}active{% endif %}">异常中心</a>
+        </nav>
+        <div class="sidebar-note">
+            <span class="read-only-dot"></span>
+            <span>只读站点，不执行任务</span>
+        </div>
+    </aside>
+    <main class="main-shell">
+        <header class="topbar">
+            <div>
+                <p class="eyebrow">生产运行证据</p>
+                <h1>{{ title }}</h1>
+            </div>
+            <div class="topbar-meta">
+                <span>新加坡时间</span>
+                <strong id="ops-clock">--:--:--</strong>
+            </div>
+        </header>
+        <div class="content">
+            {% block content %}{% endblock %}
+        </div>
+    </main>
+    <script src="/static/js/operations.js?v={{ asset_version }}"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

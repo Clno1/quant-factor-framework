@@ -2,7 +2,7 @@
 V2 路由：因子库 / 策略库 / 回测 三件套。
 
 页面：
-  GET  /factors                          因子库（只读列表）
+  GET  /factors                          重定向到统一研究总览
   GET  /strategies                       策略列表
   GET  /strategies/new                   新建策略页
   GET  /strategies/{sid}                 策略详情
@@ -24,9 +24,12 @@ JSON API：
 """
 from __future__ import annotations
 
+from datetime import datetime
 import math
 from pathlib import Path
+import re
 from typing import Any
+from urllib.parse import urlencode
 from uuid import UUID
 
 import pandas as pd
@@ -151,9 +154,240 @@ def _format_money(x, digits: int = 2) -> str:
         return "—"
 
 
+_LEGACY_ADV_ERROR = re.compile(
+    r"decision_date=(?P<decision_date>\d{4}-\d{2}-\d{2}).*?"
+    r"ticker=(?P<ticker>[A-Z0-9.\-]+).*?"
+    r"requested=(?P<requested>[+\-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+\-]?\d+)?).*?"
+    r"allowed=(?P<allowed>[+\-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+\-]?\d+)?).*?"
+    r"adv=(?P<adv>[+\-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+\-]?\d+)?)",
+    re.DOTALL,
+)
+
+
+def _backtest_failure_view(task: dict[str, Any]) -> dict[str, Any] | None:
+    """Turn persisted engine failures into a concise operator-facing diagnosis."""
+    if task.get("status") != bt_store.STATUS_FAILED:
+        return None
+    technical_error = str(task.get("error") or "未知错误")
+    details = task.get("error_details") or {}
+    if details.get("code") == "ADV_CAPACITY_EXCEEDED":
+        order = dict(details.get("worst_order") or {})
+        portfolio_value = float(details.get("portfolio_value") or 0.0)
+        max_portfolio_value = float(details.get("max_portfolio_value") or 0.0)
+        breach_count = int(details.get("breach_count") or 0)
+        capacity_scope = "全区间最严格订单"
+        recommendation_is_full_period = True
+    else:
+        match = _LEGACY_ADV_ERROR.search(technical_error)
+        if match is None:
+            first_line = technical_error.splitlines()[0] if technical_error else "未知错误"
+            return {
+                "kind": "generic",
+                "title": "回测执行失败",
+                "message": first_line,
+                "technical_error": technical_error,
+            }
+        requested = float(match.group("requested"))
+        allowed = float(match.group("allowed"))
+        adv = float(match.group("adv"))
+        portfolio_value = float(
+            (task.get("execution") or {}).get("portfolio_value") or 0.0
+        )
+        max_portfolio_value = (
+            portfolio_value * allowed / requested
+            if requested > 0 and portfolio_value > 0
+            else 0.0
+        )
+        volume_limit = float(
+            (((task.get("execution") or {}).get("slippage") or {}).get(
+                "volume_limit", 0.025
+            ))
+            or 0.0
+        )
+        order = {
+            "decision_date": match.group("decision_date"),
+            "execution_date": None,
+            "group": None,
+            "ticker": match.group("ticker"),
+            "requested_quantity": requested,
+            "allowed_quantity": allowed,
+            "adv": adv,
+            "participation_rate": requested / adv if adv > 0 else None,
+            "volume_limit": volume_limit,
+        }
+        breach_count = None
+        capacity_scope = "首个失败订单推算"
+        recommendation_is_full_period = False
+
+    suggested_portfolio_value = None
+    if max_portfolio_value > 0:
+        step = 100.0 if max_portfolio_value >= 1000 else 10.0
+        suggested_portfolio_value = max(
+            step,
+            math.floor(max_portfolio_value * 0.90 / step) * step,
+        )
+    retry_url = None
+    universe = str(task.get("universe") or "")
+    strategy_id = str(task.get("strategy_id") or "")
+    if suggested_portfolio_value and strategy_id:
+        params = {
+            "strategy_id": strategy_id,
+            "portfolio_value": f"{suggested_portfolio_value:.2f}",
+        }
+        if universe.startswith("watchlist:"):
+            params["watchlist_id"] = universe.split(":", 1)[1]
+        retry_url = f"/backtests/new?{urlencode(params)}"
+
+    return {
+        "kind": "capacity",
+        "title": "组合规模超过历史流动性容量",
+        "message": (
+            "系统拒绝假装整笔成交。请降低名义组合资金、扩大股票池，"
+            "或另行建设能跨交易日挂单的事件驱动部分成交模型。"
+        ),
+        "portfolio_value": portfolio_value,
+        "max_portfolio_value": max_portfolio_value,
+        "suggested_portfolio_value": suggested_portfolio_value,
+        "recommendation_is_full_period": recommendation_is_full_period,
+        "capacity_scope": capacity_scope,
+        "breach_count": breach_count,
+        "order": order,
+        "retry_url": retry_url,
+        "technical_error": technical_error,
+    }
+
+
+def _backtest_group_view(task: dict[str, Any]) -> dict[str, Any]:
+    """Resolve requested versus effective groups, including legacy small-pool tasks."""
+    requested_n_groups = int(task.get("n_groups") or CONFIG.backtest.n_groups)
+    requested_top_group = int(task.get("top_group") or requested_n_groups)
+    diagnostics = task.get("diagnostics") or {}
+    plan = diagnostics.get("execution_plan") or {}
+    if plan:
+        return {
+            "requested_n_groups": int(
+                plan.get("requested_n_groups") or requested_n_groups
+            ),
+            "effective_n_groups": int(
+                plan.get("effective_n_groups") or requested_n_groups
+            ),
+            "requested_top_group": int(
+                plan.get("requested_top_group") or requested_top_group
+            ),
+            "effective_top_group": int(
+                plan.get("effective_top_group") or requested_top_group
+            ),
+            "n_tickers": int(plan.get("n_tickers") or 0),
+            "small_universe_adjusted": bool(
+                plan.get("small_universe_adjusted", False)
+            ),
+        }
+
+    effective_n_groups = diagnostics.get("effective_n_groups")
+    effective_top_group = diagnostics.get("effective_top_group")
+    snapshot_items = (task.get("watchlist_snapshot") or {}).get("items") or []
+    tickers = {
+        str(item.get("ticker") or "").strip().upper()
+        for item in snapshot_items
+        if str(item.get("ticker") or "").strip()
+    }
+    n_tickers = len(tickers)
+    if effective_n_groups is None:
+        effective_n_groups = requested_n_groups
+        if n_tickers and n_tickers < requested_n_groups * 2:
+            effective_n_groups = max(
+                2,
+                min(requested_n_groups, n_tickers // 2),
+            )
+    effective_n_groups = int(effective_n_groups)
+    effective_top_group = int(
+        effective_top_group
+        if effective_top_group is not None
+        else min(requested_top_group, effective_n_groups)
+    )
+    return {
+        "requested_n_groups": requested_n_groups,
+        "effective_n_groups": effective_n_groups,
+        "requested_top_group": requested_top_group,
+        "effective_top_group": effective_top_group,
+        "n_tickers": n_tickers,
+        "small_universe_adjusted": effective_n_groups != requested_n_groups,
+    }
+
+
+def _backtest_timing_view(
+    task: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Return refresh-stable wall-clock and active-stage durations."""
+
+    def parse(value: Any) -> datetime | None:
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(str(value))
+        except ValueError:
+            return None
+
+    def seconds_between(start: datetime | None, end: datetime | None) -> float | None:
+        if start is None or end is None:
+            return None
+        if start.tzinfo is None and end.tzinfo is not None:
+            end = end.replace(tzinfo=None)
+        elif start.tzinfo is not None and end.tzinfo is None:
+            end = end.replace(tzinfo=start.tzinfo)
+        return round(max(0.0, (end - start).total_seconds()), 1)
+
+    created_at = parse(task.get("created_at"))
+    status_changed_at = parse(task.get("status_changed_at"))
+    started_at = parse(task.get("started_at"))
+    finished_at = parse(task.get("finished_at"))
+    reference = now
+    if reference is None:
+        anchor = started_at or created_at
+        reference = datetime.now(anchor.tzinfo) if anchor and anchor.tzinfo else datetime.now()
+    status = str(task.get("status") or "")
+    active = status in {
+        bt_store.STATUS_PENDING,
+        bt_store.STATUS_WAITING_FOR_DATA,
+        bt_store.STATUS_RUNNING,
+    }
+    end = reference if active else finished_at
+    total_elapsed = seconds_between(created_at, end)
+
+    stage_names = {
+        bt_store.STATUS_PENDING: "queue",
+        bt_store.STATUS_WAITING_FOR_DATA: "waiting_for_data",
+        bt_store.STATUS_RUNNING: "running",
+    }
+    stage = stage_names.get(status, "finished")
+    if status == bt_store.STATUS_RUNNING:
+        stage_elapsed = seconds_between(started_at, reference)
+    elif status in {bt_store.STATUS_PENDING, bt_store.STATUS_WAITING_FOR_DATA}:
+        stage_elapsed = seconds_between(
+            status_changed_at or created_at,
+            reference,
+        )
+    elif task.get("duration_sec") is not None:
+        stage_elapsed = round(max(0.0, float(task["duration_sec"])), 1)
+    else:
+        stage_elapsed = seconds_between(started_at, finished_at)
+
+    return {
+        "active": active,
+        "stage": stage,
+        "total_elapsed_sec": total_elapsed,
+        "stage_elapsed_sec": stage_elapsed,
+    }
+
+
 def _enabled_universes() -> list[str]:
     """Return registered presets plus readable historical output partitions."""
-    cfg_list = research_universe_registry().ids()
+    cfg_list = [
+        entry.universe_id
+        for entry in research_universe_registry().full_research_entries()
+    ]
     existing = list_universes()
     seen: dict[str, None] = {}
     for u in cfg_list + existing:
@@ -443,21 +677,8 @@ def _build_strategy_ranking(
 
 @router_v2.get("/factors", response_class=HTMLResponse)
 def factors_page(request: Request):
-    try:
-        factors = _factor_catalog_payload()
-    except FactorLibraryError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    # 按分类分组
-    categories: dict[str, list[dict]] = {}
-    for f in factors:
-        categories.setdefault(f["category"], []).append(f)
-    return templates.TemplateResponse(request, "factor_library.html", {
-        "title": "因子库",
-        "categories": categories,
-        "factors": factors,
-        "total": len(factors),
-        "universes": _enabled_universes(),
-    })
+    del request
+    return RedirectResponse(url="/research", status_code=307)
 
 
 @router_v2.get("/api/factors_catalog")
@@ -652,6 +873,7 @@ def backtests_new_page(
     request: Request,
     strategy_id: str | None = Query(None),
     watchlist_id: str | None = Query(None),
+    portfolio_value: float | None = Query(None, gt=0, le=1_000_000_000_000),
 ):
     from src.watchlists import list_watchlists
     strategies = list_strategies()
@@ -661,10 +883,17 @@ def backtests_new_page(
     default_end = str(CONFIG.date_range.end)
     default_exec = {
         "timing": str(getattr(CONFIG.backtest.execution, "timing", "next_open")),
+        "portfolio_value": (
+            float(portfolio_value)
+            if portfolio_value is not None
+            else float(getattr(CONFIG.backtest.execution, "portfolio_value", 100000))
+        ),
         "fee_model": str(getattr(CONFIG.backtest.execution, "fee_model", "ibkr_us_pro_fixed")),
         "slippage_model": str(getattr(CONFIG.backtest.execution, "slippage_model", "volume_share")),
         "slippage_bps": float(getattr(CONFIG.backtest.execution, "slippage_bps", 5)),
         "commission_bps": float(getattr(CONFIG.backtest.execution, "commission_bps", 2)),
+        "volume_limit": float(getattr(CONFIG.backtest.execution.slippage, "volume_limit", 0.025)),
+        "adv_window": int(getattr(CONFIG.backtest.execution.slippage, "adv_window", 20)),
     }
     return templates.TemplateResponse(request, "backtest_new.html", {
         "title": "新建回测",
@@ -764,6 +993,9 @@ def backtest_detail_page(request: Request, tid: UUID):
     return templates.TemplateResponse(request, "backtest_detail.html", {
         "title": f"回测 · {task.get('name') or tid[:8]}",
         "task": task,
+        "group_view": _backtest_group_view(task),
+        "task_timing": _backtest_timing_view(task),
+        "failure": _backtest_failure_view(task),
         "metrics_fmt": metrics_fmt,
         "components_rows": components_rows,
         "research_snapshot": task.get("research_evidence_snapshot") or {},
@@ -818,9 +1050,12 @@ def api_backtest_status(tid: UUID):
     return JSONResponse(_sanitize({
         "id": task.get("id"),
         "status": task.get("status"),
+        "created_at": task.get("created_at"),
+        "status_changed_at": task.get("status_changed_at"),
         "started_at": task.get("started_at"),
         "finished_at": task.get("finished_at"),
         "duration_sec": task.get("duration_sec"),
+        "timing": _backtest_timing_view(task),
         "error": task.get("error"),
         "metrics": task.get("metrics"),
         "data_request_id": task.get("data_request_id"),
@@ -911,6 +1146,12 @@ def api_create_backtest(payload: dict = Body(...)):
                 detail="execution.timing 只允许 next_open；同日收盘成交已禁用",
             )
         try:
+            portfolio_value = (
+                float(raw_exec["portfolio_value"])
+                if "portfolio_value" in raw_exec
+                and raw_exec["portfolio_value"] is not None
+                else None
+            )
             slip = (
                 float(raw_exec["slippage_bps"])
                 if "slippage_bps" in raw_exec and raw_exec["slippage_bps"] is not None
@@ -925,6 +1166,18 @@ def api_create_backtest(payload: dict = Body(...)):
             raise HTTPException(
                 status_code=400,
                 detail=f"execution 数字解析失败：{e}",
+            )
+        if portfolio_value is not None and (
+            not math.isfinite(portfolio_value)
+            or portfolio_value <= 0
+            or portfolio_value > 1_000_000_000_000
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "portfolio_value 超出合理范围 "
+                    f"(0, 1,000,000,000,000]: {portfolio_value}"
+                ),
             )
         if slip is not None and (
             not math.isfinite(slip) or slip < 0 or slip > 1000
@@ -954,6 +1207,7 @@ def api_create_backtest(payload: dict = Body(...)):
             )
         execution = {
             "timing": timing or None,
+            "portfolio_value": portfolio_value,
             "fee_model": fee_model or None,
             "slippage_model": slippage_model or None,
             "slippage_bps": slip,

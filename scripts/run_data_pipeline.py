@@ -63,6 +63,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="reviewed NASDAQ100 endpoint and event verification registry",
     )
     pit.add_argument(
+        "--nasdaq100-corrections",
+        help="reviewed NASDAQ100 provider-omission correction registry",
+    )
+    pit.add_argument(
         "--env-file",
         default=None,
         help="KEY=VALUE file (default: project .env.local)",
@@ -129,18 +133,26 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def _configured_universes() -> list[str]:
     from src.research_universes import research_universe_registry
 
-    return research_universe_registry().ids()
+    return [
+        entry.universe_id
+        for entry in research_universe_registry().full_research_entries()
+    ]
 
 
 def _research_initial_start(universe: str) -> str | None:
     """Return the fixed history baseline for registered research universes."""
     from src.config import CONFIG
-    from src.research_universes import research_universe_registry
+    from src.research_universes import (
+        FactorPublicationMode,
+        research_universe_registry,
+    )
     from src.research_universes.registry import ResearchUniverseRegistryError
 
     try:
-        research_universe_registry().get(universe)
+        entry = research_universe_registry().get(universe)
     except ResearchUniverseRegistryError:
+        return None
+    if entry.factor_publication_mode != FactorPublicationMode.FULL_RESEARCH:
         return None
     start = str(CONFIG.universe.point_in_time.main_factor_start).strip()
     if not start:
@@ -234,7 +246,7 @@ def _run_update(args: argparse.Namespace) -> int:
 
 
 def _run_pit(args: argparse.Namespace) -> int:
-    from src.research_universes import MembershipType, research_universe_registry
+    from src.research_universes import research_universe_registry
     from src.utils.env import load_local_env
     from src.utils.logger import get_logger
 
@@ -242,8 +254,7 @@ def _run_pit(args: argparse.Namespace) -> int:
     log = get_logger("run_data_pipeline")
     configured = [
         entry.universe_id
-        for entry in research_universe_registry().list()
-        if entry.membership_type == MembershipType.PIT
+        for entry in research_universe_registry().embedded_pit_entries()
     ]
     universes = [
         str(value).strip().upper()
@@ -272,6 +283,11 @@ def _run_pit(args: argparse.Namespace) -> int:
                     verification_path=getattr(
                         args,
                         "nasdaq100_verification",
+                        None,
+                    ),
+                    corrections_path=getattr(
+                        args,
+                        "nasdaq100_corrections",
                         None,
                     ),
                 )

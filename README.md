@@ -27,6 +27,8 @@ flowchart LR
 |---|---|---|
 | 配置 | `configs/default.yaml` | 股票池、数据、因子、回测、费用、Web 和定时参数 |
 | 行情基础设施 | `src/data/foundation.py` | 摄取、质量校验、不可变版本发布和统一读取 |
+| 全美宽基数据 | `src/data/security_master_store.py`、`src/data/broad_coverage.py` | 稳定证券身份、全美行情覆盖和月分片发布 |
+| 宽基 PIT/因子数据 | `src/data/derived_universe.py`、`src/factors/broad_pipeline.py` | `US_LIQUID_5M` PIT 比较池和可浏览 raw/clean/rank |
 | PIT 股票池 | `src/data/sp500_pit.py`、`src/data/pit.py` | 重建并校验历史成分，防止幸存者偏差 |
 | 因子 | `src/factors/` | raw factor 计算和因子注册 |
 | 因子清洗 | `src/preprocessing/` | 去极值、中性化、横截面 z-score |
@@ -35,6 +37,7 @@ flowchart LR
 | 回测 | `src/backtest/` | 版本绑定、逐票目标权重、成交、成本和净值 |
 | 模拟盘 | `src/papertrading/` | 订单、pending、成交、持仓、现金和每日净值 |
 | Web | `src/webapp/` | FastAPI 页面与 API |
+| 独立运维监控 | `src/operations/`、`src/operations_web/` | 汇总结构化运行证据，在独立端口提供只读状态页面 |
 | 缺数队列 | `src/data/request_worker.py` | 为 Watchlist 创建并发布专属行情版本 |
 | 动量与独立研究 | `src/breakouts/`、`src/market_regime_research/` | 独立扫描和大盘状态研究，不暗中修改多因子分数 |
 
@@ -84,6 +87,16 @@ python scripts/run_mvp.py --serve-only --host 127.0.0.1 --port 18823
 
 浏览器访问 `http://127.0.0.1:18823`。
 
+独立运维站不挂到主业务页面。先生成状态快照，再在 `18825` 启动：
+
+```bash
+python scripts/run_operations_watchdog.py --no-systemd
+python scripts/run_operations_web.py --host 127.0.0.1 --port 18825
+```
+
+浏览器访问 `http://127.0.0.1:18825`。完整证据口径和 SG 安装方式见
+[`docs/operations_observability.md`](docs/operations_observability.md)。
+
 ## 数据与研究更新
 
 手动执行完整主链时，顺序如下：
@@ -106,6 +119,11 @@ python scripts/run_mvp.py --no-web --only-universe MAG7 --universe 5
 ```
 
 动态 SP500 不允许用 `--universe N` 截断后伪装成正式 PIT 研究。
+
+全美宽基代码已经独立实现，但 2019 起正式全量数据和 SG 五日影子尚未完成。首次回填、11:30
+日常增量和页面默认切换不能混入上面的指数研究命令，必须按
+[`docs/us_broad_factor_research_implementation.md`](docs/us_broad_factor_research_implementation.md)
+执行。当前 latest-known 行业不能发布正式宽基 IC/ICIR/confidence。
 
 ## Web 业务对象
 

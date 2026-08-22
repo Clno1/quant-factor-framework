@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 
 from src.backtest.quintile import (
+    BacktestCapacityError,
     _apply_membership_exit_policy,
     _assign_groups_on_rebalance,
     _build_execution_details,
@@ -441,6 +442,49 @@ def test_volume_share_without_volume_has_zero_fill_capacity():
         volume=None,
         execution=execution,
     ) == 0.0
+
+
+def test_backtest_capacity_error_reports_the_strictest_full_period_limit():
+    dates = pd.date_range("2026-01-05", periods=4, freq="B")
+    assignment = pd.DataFrame(
+        {"A": [1.0] * 4, "B": [2.0] * 4},
+        index=dates,
+    )
+    execution = resolve_execution_config({
+        "portfolio_value": 100_000.0,
+        "fee_model": "simple_bps",
+        "commission_bps": 0.0,
+        "slippage_model": "volume_share",
+        "slippage": {
+            "volume_limit": 0.025,
+            "price_impact": 0.0,
+            "spread_bps": 0.0,
+            "adv_window": 20,
+        },
+    })
+    volumes = pd.DataFrame(
+        {"A": [100_000.0] * 4, "B": [40_000.0] * 4},
+        index=dates,
+    )
+
+    with pytest.raises(BacktestCapacityError) as raised:
+        _build_execution_details(
+            assignment,
+            dates,
+            pd.DatetimeIndex([dates[0]]),
+            2,
+            execution=execution,
+            execution_price_df=_matrix(dates, ["A", "B"], 10.0),
+            volume_df=volumes,
+        )
+
+    details = raised.value.to_dict()
+    assert details["code"] == "ADV_CAPACITY_EXCEEDED"
+    assert details["breach_count"] == 2
+    assert details["max_portfolio_value"] == pytest.approx(10_000.0)
+    assert details["worst_order"]["ticker"] == "B"
+    assert details["worst_order"]["participation_rate"] == pytest.approx(0.25)
+    assert details["worst_order"]["volume_limit"] == pytest.approx(0.025)
 
 
 def test_penultimate_signal_does_not_create_truncated_horizon_trade():

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 from scipy.special import expit
+import yaml
 
 from src.market_regime_research.artifacts import publish_research_run
 from src.market_regime_research.models import (
@@ -238,6 +240,38 @@ hypotheses:
             horizons=[5],
             scan_unregistered=False,
         )
+
+
+def test_v2_candidate_registry_is_frozen_and_contains_breadth_and_cor1m():
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "configs"
+        / "market_regime_screening_candidates_v2.yaml"
+    )
+    payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    feature_names = sorted(
+        {item["feature_name"] for item in payload["hypotheses"]}
+    )
+    feature_registry = pd.DataFrame(
+        {
+            "feature_name": feature_names,
+            "group": ["fixture"] * len(feature_names),
+        }
+    )
+
+    candidates, metadata = load_candidate_registry(
+        path,
+        feature_registry,
+        horizons=[5, 20, 60],
+        scan_unregistered=False,
+    )
+
+    candidate_ids = {candidate.candidate_id for candidate in candidates}
+    assert metadata["registry_version"] == "2.0.0"
+    assert metadata["prospective_shadow_start"] == "2026-08-21"
+    assert "top_cor1m_change_5d__5d" in candidate_ids
+    assert "top_breadth_above_ma120__20d" in candidate_ids
+    assert "bottom_breadth_ma20_change_5d__5d" in candidate_ids
 
 
 def test_screening_artifacts_are_immutable_and_self_describing(tmp_path):

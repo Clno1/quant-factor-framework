@@ -15,7 +15,11 @@ from fastapi.templating import Jinja2Templates
 
 from src.config import CONFIG, PROJECT_ROOT
 from src.data.foundation import MarketDataCatalog, MarketDataReader
+from src.data.membership_state import replay_membership_states
+from src.data.security_master_store import SecurityMasterStore
+from src.data.universe_publication import DerivedUniverseStore
 from src.factors import get_factor_catalog, list_factor_ids
+from src.factors.data_publication import FactorDataStore
 from src.factors.observations import (
     FactorObservationError,
     FactorObservationReader,
@@ -28,6 +32,7 @@ from src.research_universes.publication import (
     CrossUniversePublicationError,
     load_cross_universe_publication,
 )
+from src.research_universes.models import FactorPublicationMode
 from src.research_universes.registry import research_universe_registry
 from src.utils.identifiers import InvalidResourceId, safe_path_component
 from src.utils.io import load_json
@@ -45,6 +50,8 @@ _FACTOR_OBSERVATION_STATUS_CODES = (
     "CALCULATION_WINDOW_INSUFFICIENT",
     "RAW_MISSING",
     "CLEAN_MISSING",
+    "CLASSIFICATION_MISSING",
+    "DATA_QUALITY_REJECTED",
 )
 
 
@@ -176,8 +183,140 @@ def research_universe_payload() -> list[dict[str, Any]]:
     expected = _expected_session()
     catalog = MarketDataCatalog()
     reader = MarketDataReader(catalog=catalog)
+    derived_store = DerivedUniverseStore(
+        catalog=catalog,
+        snapshot_root=CONFIG.abs_path(str(CONFIG.data.broad_universe.snapshot_dir)),
+        market_reader=reader,
+    )
+    factor_data_store = FactorDataStore(
+        market_reader=reader,
+        universe_store=derived_store,
+    )
     output: list[dict[str, Any]] = []
     for entry in research_universe_registry().list():
+        if entry.factor_publication_mode == FactorPublicationMode.FACTOR_DATA:
+            version = derived_store.latest(entry.universe_id)
+            manifest: dict[str, Any] = {}
+            integrity_error: str | None = None
+            parent = None
+            if version is not None:
+                try:
+                    manifest = derived_store.verify(
+                        version,
+                        verify_parent_partition_children=False,
+                    )
+                    parent = reader.require_version(
+                        str(entry.parent_data_universe),
+                        version.parent_dataset_version_id,
+                        verify_partition_children=False,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    integrity_error = str(exc)
+            data_status = "MISSING"
+            if version is not None:
+                if integrity_error:
+                    data_status = "INVALID"
+                elif version.target_session.isoformat() != expected:
+                    data_status = "STALE"
+                else:
+                    data_status = "PUBLISHED"
+            factor_status = "MISSING"
+            factor_pointer: dict[str, Any] | None = None
+            factor_error: str | None = None
+            try:
+                factor_pointer = factor_data_store.load_publication(
+                    verify_partitions=False
+                )
+                if factor_pointer.get("universe_version_id") != (
+                    version.universe_version_id if version else None
+                ):
+                    factor_status = "INVALID"
+                    factor_error = "因子数据与当前宽基股票池版本不一致"
+                elif factor_pointer.get("target_session") != expected:
+                    factor_status = "STALE"
+                else:
+                    factor_status = "PUBLISHED"
+            except Exception as exc:  # noqa: BLE001
+                factor_error = str(exc)
+            accepted_policies = {
+                str(value).upper()
+                for value in CONFIG.data.broad_factor_research.accepted_classification_policies
+            }
+            classification_policy = str(
+                (factor_pointer or {}).get("classification_policy") or ""
+            ).upper()
+            if factor_pointer and classification_policy not in accepted_policies:
+                formal_research = {
+                    "status": "BLOCKED",
+                    "target_session": None,
+                    "publication_id": None,
+                    "reason_code": "PIT_CLASSIFICATION_POLICY",
+                    "reason": (
+                        "当前行业分类是最新快照回填，不是历史时点可知数据；"
+                        "因此禁止发布宽基 IC、ICIR 和置信评估。"
+                    ),
+                }
+            else:
+                formal_research = {
+                    "status": "MISSING",
+                    "target_session": None,
+                    "publication_id": None,
+                    "reason_code": "BROAD_RESEARCH_NOT_PUBLISHED",
+                    "reason": "尚未发布正式宽基研究。",
+                }
+            output.append({
+                **entry.to_dict(),
+                "data_status": data_status,
+                "factor_data_status": factor_status,
+                "research_status": formal_research["status"],
+                "data_version_id": parent.version_id if parent else None,
+                "universe_version_id": (
+                    version.universe_version_id if version else None
+                ),
+                "target_session": (
+                    version.target_session.isoformat() if version else None
+                ),
+                "current_members": (
+                    version.current_member_count if version else None
+                ),
+                "historical_union": (
+                    version.historical_member_count if version else None
+                ),
+                "industry_coverage": None,
+                "classification": {},
+                "quality_checks": manifest.get("quality_checks") or [],
+                "integrity_error": integrity_error,
+                "pit_metadata": None,
+                "hashes": {
+                    "bars_sha256": parent.checksum_sha256 if parent else None,
+                    "universe_sha256": (
+                        version.eligibility_sha256 if version else None
+                    ),
+                    "membership_sha256": (
+                        version.membership_sha256 if version else None
+                    ),
+                    "manifest_sha256": (
+                        version.manifest_sha256 if version else None
+                    ),
+                },
+                "research": {
+                    "status": factor_status,
+                    "target_session": (
+                        factor_pointer.get("target_session")
+                        if factor_pointer else None
+                    ),
+                    "publication_id": (
+                        factor_pointer.get("publication_id")
+                        if factor_pointer else None
+                    ),
+                    "publication_mode": "FACTOR_DATA",
+                    "reason": factor_error,
+                },
+                "formal_research": formal_research,
+                "classification_policy": classification_policy or None,
+            })
+            continue
+
         version = catalog.latest_version(entry.universe_id)
         manifest: dict[str, Any] = {}
         universe_file: dict[str, Any] = {}
@@ -201,14 +340,15 @@ def research_universe_payload() -> list[dict[str, Any]]:
         )
         if not classification:
             classification = universe_file
+        requires_membership = (
+            entry.factor_publication_mode == FactorPublicationMode.FULL_RESEARCH
+            and entry.membership_type.value != "STATIC"
+        )
         complete_hashes = bool(
             version
             and version.checksum_sha256
             and version.universe_checksum_sha256
-            and (
-                version.membership_checksum_sha256
-                or entry.membership_type.value == "STATIC"
-            )
+            and (version.membership_checksum_sha256 or not requires_membership)
             and version.manifest_checksum_sha256
         )
         data_status = "MISSING"
@@ -219,12 +359,26 @@ def research_universe_payload() -> list[dict[str, Any]]:
                 data_status = "STALE"
             else:
                 data_status = "PUBLISHED"
-        research = _research_pointer_status(entry.universe_id, expected)
+        if entry.factor_publication_mode == FactorPublicationMode.FULL_RESEARCH:
+            research = _research_pointer_status(entry.universe_id, expected)
+            factor_data_status = research["status"]
+            research_status = research["status"]
+        else:
+            research = {
+                "status": "NOT_APPLICABLE",
+                "target_session": None,
+                "publication_mode": "RAW_ONLY",
+            }
+            factor_data_status = "NOT_APPLICABLE"
+            research_status = "NOT_APPLICABLE"
         output.append(
             {
                 **entry.to_dict(),
                 "data_status": data_status,
+                "factor_data_status": factor_data_status,
+                "research_status": research_status,
                 "data_version_id": version.version_id if version else None,
+                "universe_version_id": None,
                 "target_session": version.target_session.isoformat() if version else None,
                 "current_members": (
                     int(manifest.get("current_ticker_count"))
@@ -285,7 +439,13 @@ def research_status_payload() -> dict[str, Any]:
             ),
             "data_delay_sessions": _session_delay(expected, market_session),
             "universes": {
-                item["universe_id"]: item["research"] for item in universes
+                item["universe_id"]: {
+                    **item["research"],
+                    "factor_data_status": item.get("factor_data_status"),
+                    "formal_research_status": item.get("research_status"),
+                    "formal_research": item.get("formal_research"),
+                }
+                for item in universes
             },
             "cross_status": cross_status,
             "cross_target_session": pointer.get("target_session") if pointer else None,
@@ -377,6 +537,9 @@ def _factor_page_rows(
                 "display_name": meta.display_name,
                 "category": meta.category,
                 "formula": meta.formula,
+                "description": meta.description,
+                "direction": meta.direction,
+                "risk_note": meta.risk_note,
                 "sp500": primary,
                 "nasdaq100": secondary,
                 "ic_mean_display": _fmt(primary.get("ic_mean"), 4),
@@ -469,6 +632,143 @@ def _membership_detail(universe_id: str, version_id: str | None) -> dict[str, An
     }
 
 
+def _derived_membership_detail(
+    universe_id: str,
+    universe_version_id: str | None,
+) -> dict[str, Any]:
+    if not universe_version_id:
+        return {"current_members": [], "changes": [], "error": "UNIVERSE_VERSION_MISSING"}
+    catalog = MarketDataCatalog()
+    reader = MarketDataReader(catalog=catalog)
+    store = DerivedUniverseStore(
+        catalog=catalog,
+        snapshot_root=CONFIG.abs_path(str(CONFIG.data.broad_universe.snapshot_dir)),
+        market_reader=reader,
+    )
+    try:
+        version = store.get(universe_id, universe_version_id)
+        if version is None:
+            raise FileNotFoundError("derived universe version does not exist")
+        membership = store.load_membership(
+            universe_id, version_id=universe_version_id
+        )
+        security_settings = CONFIG.data.security_master
+        security_store = SecurityMasterStore(
+            CONFIG.abs_path(str(CONFIG.data.foundation.catalog_path)),
+            CONFIG.abs_path(str(security_settings.snapshot_dir)),
+        )
+        security_generation, security_frames = security_store.load_published()
+        if (
+            security_generation.generation_id
+            != version.security_master_generation_id
+            or security_generation.manifest_sha256
+            != version.security_master_manifest_sha256
+        ):
+            raise RuntimeError(
+                "Security Master differs from the derived universe version"
+            )
+    except Exception as exc:  # noqa: BLE001
+        return {"current_members": [], "changes": [], "error": str(exc)}
+
+    event_dates = pd.DatetimeIndex(
+        sorted(pd.to_datetime(membership["date"]).dt.normalize().unique())
+    )
+    snapshots: list[tuple[pd.Timestamp, pd.DataFrame]] = []
+    for state in replay_membership_states(
+        membership,
+        event_dates,
+        key_column="security_id",
+        value_column="ticker",
+    ):
+        active = pd.DataFrame({
+            "security_id": list(state.active_keys),
+            "ticker": [
+                state.value_by_key[security_id]
+                for security_id in state.active_keys
+            ],
+        })
+        snapshots.append((state.date, active))
+    if not snapshots:
+        return {"current_members": [], "changes": [], "error": "EMPTY_MEMBERSHIP"}
+
+    master = security_frames["master"].copy()
+    master["security_id"] = master["security_id"].astype(str)
+    classifications = security_frames.get("classifications", pd.DataFrame()).copy()
+    latest_classification = pd.DataFrame(columns=["security_id", "sector", "sub_industry"])
+    if not classifications.empty:
+        sort_columns = [
+            column
+            for column in ("knowledge_date", "effective_from", "source_asof")
+            if column in classifications.columns
+        ]
+        if sort_columns:
+            classifications = classifications.sort_values(sort_columns)
+        latest_classification = classifications.drop_duplicates(
+            "security_id", keep="last"
+        )[["security_id", "sector", "sub_industry"]]
+        latest_classification["security_id"] = latest_classification[
+            "security_id"
+        ].astype(str)
+    current = snapshots[-1][1].merge(
+        master[["security_id", "name", "current_ticker"]],
+        on="security_id",
+        how="left",
+        validate="many_to_one",
+    ).merge(
+        latest_classification,
+        on="security_id",
+        how="left",
+        validate="many_to_one",
+    )
+    current["ticker"] = current["ticker"].fillna(current["current_ticker"])
+    current_members = current[
+        ["ticker", "name", "sector", "sub_industry"]
+    ].fillna("").sort_values("ticker").to_dict("records")
+
+    changes: list[dict[str, Any]] = []
+    previous: set[str] | None = None
+    ticker_by_id = dict(zip(master["security_id"], master["current_ticker"], strict=True))
+    for snapshot_date, group in snapshots:
+        active = set(group["security_id"].astype(str))
+        if previous is not None:
+            additions = sorted(ticker_by_id.get(value, value) for value in active - previous)
+            removals = sorted(ticker_by_id.get(value, value) for value in previous - active)
+            if additions or removals:
+                changes.append({
+                    "date": snapshot_date.date().isoformat(),
+                    "additions": additions,
+                    "removals": removals,
+                })
+        previous = active
+    return {
+        "current_members": current_members,
+        "changes": list(reversed(changes[-30:])),
+        "snapshot_count": len(snapshots),
+        "start": snapshots[0][0].date().isoformat(),
+        "end": snapshots[-1][0].date().isoformat(),
+        "error": None,
+    }
+
+
+def _membership_detail_for_item(item: dict[str, Any]) -> dict[str, Any]:
+    if item.get("factor_publication_mode") == "FACTOR_DATA":
+        return _derived_membership_detail(
+            str(item["universe_id"]), item.get("universe_version_id")
+        )
+    if item.get("factor_publication_mode") == "RAW_ONLY":
+        return {
+            "current_members": [],
+            "changes": [],
+            "snapshot_count": 0,
+            "start": None,
+            "end": item.get("target_session"),
+            "error": None,
+        }
+    return _membership_detail(
+        str(item["universe_id"]), item.get("data_version_id")
+    )
+
+
 def _universe_factor_rows(universe_id: str) -> list[dict[str, Any]]:
     rows, _pointer, _error = _factor_page_rows()
     output: list[dict[str, Any]] = []
@@ -491,11 +791,15 @@ def _universe_factor_rows(universe_id: str) -> list[dict[str, Any]]:
 @router.get("/research", response_class=HTMLResponse)
 def research_overview(
     request: Request,
+    view: str = Query("factors"),
     verdict: str | None = Query(None),
     category: str | None = Query(None),
     pool: str | None = Query(None),
     pool_verdict: str | None = Query(None),
 ):
+    selected_view = str(view or "factors").strip().lower()
+    if selected_view not in {"factors", "universes"}:
+        selected_view = "factors"
     rows, pointer, error = _factor_page_rows(
         verdict=verdict,
         category=category,
@@ -516,6 +820,12 @@ def research_overview(
             "selected_pool": (pool or "").upper(),
             "selected_pool_verdict": (pool_verdict or "").upper(),
             "categories": categories,
+            "selected_view": selected_view,
+            "universe_rows": (
+                research_universe_payload()
+                if selected_view == "universes"
+                else []
+            ),
         },
     )
 
@@ -528,11 +838,8 @@ def cross_universe_page(request: Request):
 
 @router.get("/research/universes", response_class=HTMLResponse)
 def research_universes_page(request: Request):
-    return templates.TemplateResponse(
-        request,
-        "research_universes.html",
-        {"title": "研究股票池", "universes": research_universe_payload()},
-    )
+    del request
+    return RedirectResponse(url="/research?view=universes", status_code=307)
 
 
 @router.get("/research/universes/{universe_id}", response_class=HTMLResponse)
@@ -548,8 +855,9 @@ def research_universe_page(request: Request, universe_id: str):
     )
     if item is None:
         raise HTTPException(status_code=404, detail="Research universe not found")
-    detail = _membership_detail(universe_id, item.get("data_version_id"))
-    runs = MarketDataCatalog().list_ingestion_runs(universe_id, limit=12)
+    detail = _membership_detail_for_item(item)
+    run_universe = item.get("parent_data_universe") or universe_id
+    runs = MarketDataCatalog().list_ingestion_runs(run_universe, limit=12)
     return templates.TemplateResponse(
         request,
         "research_universe_detail.html",
@@ -557,7 +865,11 @@ def research_universe_page(request: Request, universe_id: str):
             "title": f"{universe_id} · 研究股票池",
             "universe": item,
             "membership": detail,
-            "factor_rows": _universe_factor_rows(universe_id),
+            "factor_rows": (
+                _universe_factor_rows(universe_id)
+                if item.get("factor_publication_mode") == "FULL_RESEARCH"
+                else []
+            ),
             "ingestion_runs": runs,
         },
     )
@@ -654,6 +966,22 @@ def api_factor_data_meta(
         _raise_observation_error(exc)
 
 
+@router.get("/api/securities/search")
+def api_security_search(
+    q: str = Query(..., min_length=1),
+    asof: str | None = Query(None),
+    limit: int = Query(20, ge=1, le=100),
+):
+    try:
+        return factor_observation_reader.search_securities(
+            query=q,
+            asof=(asof or "").strip() or None,
+            limit=limit,
+        )
+    except FactorObservationError as exc:
+        _raise_observation_error(exc)
+
+
 @router.get("/api/research/factor-data/snapshot")
 def api_factor_data_snapshot(
     universe: str = Query(...),
@@ -705,12 +1033,25 @@ def api_factor_data_history(
 def _factor_export_frame(
     rows: list[dict[str, Any]], contract: dict[str, Any]
 ) -> pd.DataFrame:
-    identity = {
-        "publication_id": contract["publication_id"],
-        "factor_generation_id": contract["factor_generation_id"],
-        "dataset_version_id": contract["dataset_version_id"],
-        "factor_manifest_sha256": contract["factor_manifest_sha256"],
-    }
+    identity_fields = (
+        "publication_mode",
+        "publication_id",
+        "publication_target_session",
+        "factor_generation_id",
+        "factor_manifest_sha256",
+        "dataset_version_id",
+        "dataset_manifest_sha256",
+        "parent_dataset_version_id",
+        "universe_version_id",
+        "membership_sha256",
+        "eligibility_sha256",
+        "security_master_generation_id",
+        "security_master_sha256",
+        "normalization_universe_id",
+        "preprocessing_methodology_version",
+        "classification_policy",
+    )
+    identity = {field: contract.get(field) for field in identity_fields}
     return pd.DataFrame([{**row, **identity} for row in rows])
 
 
@@ -818,13 +1159,14 @@ def api_research_universe(universe_id: str):
         raise HTTPException(status_code=404, detail="Research universe not found")
     return {
         **item,
-        "membership": _membership_detail(
-            universe_id,
-            item.get("data_version_id"),
+        "membership": _membership_detail_for_item(item),
+        "factors": (
+            _universe_factor_rows(universe_id)
+            if item.get("factor_publication_mode") == "FULL_RESEARCH"
+            else []
         ),
-        "factors": _universe_factor_rows(universe_id),
         "ingestion_runs": MarketDataCatalog().list_ingestion_runs(
-            universe_id,
+            item.get("parent_data_universe") or universe_id,
             limit=12,
         ),
     }

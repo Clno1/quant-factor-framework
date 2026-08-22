@@ -4,14 +4,22 @@
 <header class="research-page-header">
     <div>
         <h1 class="page-title">{{ title }}</h1>
-        {% if publication %}
+        {% if selected_view == 'factors' and publication %}
         <p class="page-meta">研究版本 <span class="mono">{{ publication.generation_id }}</span> · 数据截止交易日 <span class="mono">{{ publication.target_session }}</span></p>
-        {% elif publication_error %}
+        {% elif selected_view == 'factors' and publication_error %}
         <p class="page-meta status-fail">{{ research_text(publication_error) }}</p>
+        {% else %}
+        <p class="page-meta">查看全美行情覆盖、宽基比较池、稳健性验证池及各自的数据发布能力。</p>
         {% endif %}
     </div>
 </header>
 
+<nav class="research-workspace-tabs" aria-label="研究总览视图">
+    <a href="/research" class="{% if selected_view == 'factors' %}is-active{% endif %}">因子研究</a>
+    <a href="/research?view=universes" class="{% if selected_view == 'universes' %}is-active{% endif %}">股票池与数据</a>
+</nav>
+
+{% if selected_view == 'factors' %}
 <section class="research-reading-guide" aria-labelledby="research-guide-title">
     <div>
         <h2 id="research-guide-title">这张表在回答什么</h2>
@@ -109,7 +117,16 @@
             <tr>
                 <td>
                     <a href="/research/factors/{{ row.factor_id }}"><strong>{{ row.display_name }}</strong></a>
-                    <div class="cell-note"><span class="mono">{{ row.factor_id }}</span> · {{ row.category }}</div>
+                    <div class="cell-note">
+                        <span class="mono">{{ row.factor_id }}</span> · {{ row.category }} ·
+                        {% if row.direction > 0 %}高值优先{% elif row.direction < 0 %}低值优先{% else %}方向自适应{% endif %}
+                    </div>
+                    <details class="research-factor-definition">
+                        <summary>查看定义</summary>
+                        {% if row.formula %}<div class="mono research-factor-formula">{{ row.formula }}</div>{% endif %}
+                        <p>{{ row.description }}</p>
+                        {% if row.risk_note %}<p class="research-factor-risk">风险提示：{{ row.risk_note }}</p>{% endif %}
+                    </details>
                 </td>
                 <td>
                     <span class="research-verdict verdict-{{ row.verdict|lower }}" title="系统代码：{{ row.verdict }}">{{ research_label(row.verdict) }}</span>
@@ -131,4 +148,61 @@
         </tbody>
     </table>
 </div>
+{% else %}
+<section class="research-reading-guide" aria-labelledby="universe-guide-title">
+    <div>
+        <h2 id="universe-guide-title">不同数据层回答不同问题</h2>
+        <p><strong>全美行情覆盖回答“有没有数据”，全美流动股票回答“和谁一起清洗与排名”，标普500和纳斯达克100回答“因子是否经得住正式验证”。</strong>这些都不是建议买入名单。</p>
+    </div>
+    <dl class="research-guide-grid">
+        <div><dt>行情覆盖层</dt><dd>保存可识别美股的历史 OHLCV，不直接产生 clean 和排名。</dd></div>
+        <div><dt>宽基比较池</dt><dd>按历史时点流动性筛选，决定每天参与 clean、排名和百分位的股票。</dd></div>
+        <div><dt>正式验证池</dt><dd>计算 IC、ICIR、显著性、分组回测和跨池稳健性结论。</dd></div>
+    </dl>
+</section>
+
+<div class="research-table-wrap">
+    <table class="data research-table">
+        <thead>
+            <tr>
+                <th>股票池或数据层</th>
+                <th>职责</th>
+                <th>当前成分证券数</th>
+                <th>历史出现证券总数</th>
+                <th>成分名单口径</th>
+                <th>行业覆盖</th>
+                <th>数据版本</th>
+                <th>因子或研究发布</th>
+                <th>对照指数</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for item in universe_rows %}
+            <tr>
+                <td><a href="/research/universes/{{ item.universe_id }}"><strong>{{ universe_label(item.universe_id) }}</strong></a></td>
+                {% set responsibility = item.role if item.role != 'NONE' else item.purpose %}
+                <td><span class="role-label role-{{ responsibility|lower }}" title="系统代码：{{ responsibility }}">{{ research_label(responsibility) }}</span><div class="cell-note">{{ research_label(item.factor_publication_mode) }}</div></td>
+                <td>{{ item.current_members if item.current_members is not none else '—' }}</td>
+                <td>{{ item.historical_union if item.historical_union is not none else '—' }}</td>
+                <td title="系统代码：{{ item.membership_type }}">{{ research_label(item.membership_type) }}</td>
+                <td>{% if item.industry_coverage is not none %}{{ '%.1f%%'|format(item.industry_coverage * 100) }}{% else %}—{% endif %}</td>
+                <td>
+                    <span class="pool-verdict verdict-{{ item.data_status|lower }}" title="系统代码：{{ item.data_status }}">{{ research_label(item.data_status) }}</span>
+                    <div class="cell-note mono">{{ (item.data_version_id or '—')[:12] }}</div>
+                </td>
+                <td>
+                    <span class="pool-verdict verdict-{{ item.research.status|lower }}" title="系统代码：{{ item.research.status }}">{{ research_label(item.research.status) }}</span>
+                    <div class="cell-note mono">{{ item.research.target_session or '—' }}</div>
+                    {% if item.research.publication_mode == 'FACTOR_DATA' %}
+                    <div class="cell-note">宽基因子数据，不代表置信评估通过</div>
+                    <div class="cell-note"><span class="pool-verdict verdict-{{ item.formal_research.status|lower }}" title="系统代码：{{ item.formal_research.status }}">正式研究：{{ research_label(item.formal_research.status) }}</span></div>
+                    {% endif %}
+                </td>
+                <td>{{ item.benchmark or '—' }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
 {% endblock %}

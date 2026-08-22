@@ -116,6 +116,7 @@ def run_effectiveness_screen(
     *,
     research_run_id: str | None = None,
     screening_id: str | None = None,
+    candidate_registry_path: Path | None = None,
 ) -> ScreeningRunResult:
     """Run Stage B against a validated Stage A artifact set."""
     resolved_run_id, run_dir = resolve_research_run(
@@ -125,8 +126,11 @@ def run_effectiveness_screen(
     features, labels, feature_registry, research_manifest = (
         load_validated_research_run(run_dir)
     )
+    resolved_candidate_registry = Path(
+        candidate_registry_path or settings.screening.candidate_registry_path
+    ).resolve()
     candidates, registry_metadata = load_candidate_registry(
-        settings.screening.candidate_registry_path,
+        resolved_candidate_registry,
         feature_registry,
         horizons=settings.labels.horizons,
         scan_unregistered=settings.screening.scan_unregistered,
@@ -150,11 +154,9 @@ def run_effectiveness_screen(
             "algorithm_version"
         ),
         "research_artifacts": dict(research_manifest.get("artifacts", {})),
-        "candidate_registry_path": str(
-            settings.screening.candidate_registry_path
-        ),
+        "candidate_registry_path": str(resolved_candidate_registry),
         "candidate_registry_sha256": file_sha256(
-            settings.screening.candidate_registry_path
+            resolved_candidate_registry
         ),
     }
     return publish_screening_run(

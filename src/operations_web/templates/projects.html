@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block content %}
+{% for project in rows %}
+<section class="project-header">
+    <div>
+        <p class="eyebrow">上线门槛</p>
+        <div class="title-line"><h2>{{ project.display_name }}</h2><span class="status status-{{ project.status | lower }}">{{ status_label(project.status) }}</span></div>
+        <p>{{ project.summary }}</p>
+    </div>
+    <dl class="key-facts">
+        <div><dt>目标交易日</dt><dd class="mono">{{ project.metrics.get('target_session') or '-' }}</dd></div>
+        <div><dt>影子观察</dt><dd>{{ project.metrics.get('shadow_passed', 0) }}/{{ project.metrics.get('shadow_required', 5) }}</dd></div>
+        <div><dt>网页默认开关</dt><dd>{{ '已开启' if project.metrics.get('web_default_enabled') else '保持关闭' }}</dd></div>
+    </dl>
+</section>
+<section class="stage-timeline" aria-label="专项阶段">
+    {% for stage in project.stages %}
+    <article class="stage-row">
+        <div class="stage-index">{{ stage.order }}</div>
+        <div class="stage-line"><span></span></div>
+        <div class="stage-body">
+            <div class="stage-title"><h3>{{ stage.name }}</h3><span class="status status-{{ stage.status | lower }}">{{ status_label(stage.status) }}</span></div>
+            <p>{{ stage.detail }}</p>
+            {% if stage.metadata.get('blockers') %}<small>阻断项：{{ stage.metadata.get('blockers') | join('、') }}</small>{% endif %}
+        </div>
+    </article>
+    {% endfor %}
+</section>
+{% else %}
+<section class="empty-state"><h2>暂无上线专项</h2><p>watchdog 尚未发现专项状态文件。</p></section>
+{% endfor %}
+{% endblock %}
