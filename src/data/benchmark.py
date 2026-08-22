@@ -1,15 +1,16 @@
 """Version-bound benchmark loading for formal backtests.
 
 A benchmark is part of a research result's data contract, not a display-only
-fallback.  Named research universes obtain their benchmark ticker from the
+fallback. Named research universes obtain their benchmark ticker from the
 version-controlled research-universe registry (for example SP500 -> SPY and
-NASDAQ100 -> QQQ).  The loader first looks for that ticker in the primary
-immutable dataset version and otherwise resolves it from the immutable broad
-US-equity coverage publication.
+NASDAQ100 -> QQQ). The loader first looks for that ticker in the primary
+immutable dataset version and otherwise resolves a deterministic immutable
+US-equity coverage version as of the primary dataset's target session.
 """
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from datetime import date
 from typing import Any, Mapping
 
 import pandas as pd
@@ -46,6 +47,16 @@ class BenchmarkBundle:
     total_return_open: pd.Series
     total_return_close: pd.Series
     holding_returns: pd.Series
+
+
+def _benchmark_ticker(requested_universe: str) -> str:
+    entry = research_universe_registry().get(str(requested_universe).upper())
+    ticker = str(entry.benchmark or "").strip().upper()
+    if not ticker:
+        raise BenchmarkDataError(
+            f"Research universe {requested_universe} has no registered benchmark"
+        )
+    return ticker
 
 
 def _wide_from_bars(bars: pd.DataFrame, ticker: str) -> dict[str, pd.DataFrame]:
@@ -117,6 +128,130 @@ def _validate_pinned_contract(
     return version
 
 
+def _published_version_asof(
+    reader: MarketDataReader,
+    universe: str,
+    target_session: date,
+) -> DatasetVersion | None:
+    """Return a deterministic immutable publication at/before target_session.
+
+    The mutable `published_versions` pointer is deliberately not used here. For
+    a fixed primary dataset target session, we pick the newest available target
+    date and, if that date was republished, the earliest immutable publication.
+    Future publications therefore cannot silently change an old backtest's
+    benchmark identity.
+    """
+    catalog = reader.catalog
+    if not catalog.path.exists():
+        return None
+    connection = catalog._connect(read_only=True)  # noqa: SLF001 - integrity query
+    try:
+        projection = catalog._version_projection(connection)  # noqa: SLF001
+        row = connection.execute(
+            f"""
+            SELECT {projection}
+            FROM dataset_versions
+            WHERE universe = ?
+              AND status = 'PUBLISHED'
+              AND target_session <= ?
+            ORDER BY target_session DESC, created_at ASC, version_id ASC
+            LIMIT 1
+            """,
+            [str(universe).upper(), target_session],
+        ).fetchone()
+    finally:
+        connection.close()
+    if row is None:
+        return None
+    version = catalog._version_from_row(row)  # noqa: SLF001
+    reader.verify_version(version)
+    return version
+
+
+def _ticker_exists_in_version(
+    reader: MarketDataReader,
+    version: DatasetVersion,
+    ticker: str,
+) -> bool:
+    sample = reader.load_bars(
+        version.universe,
+        tickers=[ticker],
+        start=version.target_session,
+        end=version.target_session,
+        version=version,
+    )
+    return not sample.empty
+
+
+def _resolve_unpinned_source(
+    requested_universe: str,
+    *,
+    primary_version: DatasetVersion | None,
+    reader: MarketDataReader,
+) -> tuple[str, DatasetVersion, str]:
+    ticker = _benchmark_ticker(requested_universe)
+    if primary_version is not None and _ticker_exists_in_version(
+        reader, primary_version, ticker
+    ):
+        return ticker, primary_version, "PRIMARY_DATASET"
+
+    if primary_version is not None:
+        version = _published_version_asof(
+            reader,
+            US_EQUITY_COVERAGE,
+            primary_version.target_session,
+        )
+    else:
+        try:
+            version = reader.require_latest(US_EQUITY_COVERAGE)
+        except DataFoundationError:
+            version = None
+    if version is None:
+        raise BenchmarkDataError(
+            f"Registered benchmark {ticker} is not present in the primary "
+            "publication and no deterministic immutable US_EQUITY_COVERAGE "
+            "publication exists on/before the primary target session. Publish "
+            "benchmark coverage before running a formal backtest."
+        )
+    if not _ticker_exists_in_version(reader, version, ticker):
+        raise BenchmarkDataError(
+            f"Resolved immutable benchmark publication {version.version_id} "
+            f"does not contain {ticker} on target session {version.target_session}"
+        )
+    return ticker, version, "US_EQUITY_COVERAGE"
+
+
+def resolve_registered_benchmark_contract(
+    requested_universe: str,
+    *,
+    primary_version: DatasetVersion | None,
+    pinned_contract: Mapping[str, Any] | None = None,
+    reader: MarketDataReader | None = None,
+) -> BenchmarkDataContract:
+    """Resolve benchmark identity without loading its full history."""
+    reader = reader or MarketDataReader()
+    ticker = _benchmark_ticker(requested_universe)
+    if pinned_contract:
+        version = _validate_pinned_contract(
+            pinned_contract,
+            ticker=ticker,
+            reader=reader,
+        )
+        source = str(pinned_contract.get("source") or "PINNED")
+        if not _ticker_exists_in_version(reader, version, ticker):
+            raise BenchmarkDataError(
+                f"Pinned benchmark publication {version.version_id} lacks {ticker}"
+            )
+        return _contract(ticker=ticker, version=version, source=source)
+
+    ticker, version, source = _resolve_unpinned_source(
+        requested_universe,
+        primary_version=primary_version,
+        reader=reader,
+    )
+    return _contract(ticker=ticker, version=version, source=source)
+
+
 def load_registered_benchmark(
     requested_universe: str,
     *,
@@ -132,70 +267,37 @@ def load_registered_benchmark(
     interval [t open, t+1 open), matching the formal next-open backtest.
     """
     reader = reader or MarketDataReader()
-    entry = research_universe_registry().get(str(requested_universe).upper())
-    ticker = str(entry.benchmark or "").strip().upper()
-    if not ticker:
-        raise BenchmarkDataError(
-            f"Research universe {requested_universe} has no registered benchmark"
-        )
-
-    if pinned_contract:
-        version = _validate_pinned_contract(
-            pinned_contract, ticker=ticker, reader=reader
-        )
-        bars = reader.load_bars(
-            version.universe,
-            tickers=[ticker],
-            start=start,
-            end=end,
-            version=version,
-        )
-        source = str(pinned_contract.get("source") or "PINNED")
-    else:
-        bars = pd.DataFrame()
-        version = primary_version
-        source = "PRIMARY_DATASET"
-        if primary_version is not None:
-            bars = reader.load_bars(
-                primary_version.universe,
-                tickers=[ticker],
-                start=start,
-                end=end,
-                version=primary_version,
-            )
-        if bars.empty:
-            try:
-                version = reader.require_latest(US_EQUITY_COVERAGE)
-                bars = reader.load_bars(
-                    US_EQUITY_COVERAGE,
-                    tickers=[ticker],
-                    start=start,
-                    end=end,
-                    version=version,
-                )
-                source = "US_EQUITY_COVERAGE"
-            except DataFoundationError as exc:
-                raise BenchmarkDataError(
-                    f"Registered benchmark {ticker} is not present in the primary "
-                    "publication and immutable US_EQUITY_COVERAGE is unavailable. "
-                    "Publish benchmark coverage before running a formal backtest."
-                ) from exc
-        if version is None:
-            raise BenchmarkDataError("Benchmark publication version could not be resolved")
-
+    contract = resolve_registered_benchmark_contract(
+        requested_universe,
+        primary_version=primary_version,
+        pinned_contract=pinned_contract,
+        reader=reader,
+    )
+    version = reader.require_version(
+        contract.data_universe,
+        contract.dataset_version_id,
+    )
+    bars = reader.load_bars(
+        version.universe,
+        tickers=[contract.ticker],
+        start=start,
+        end=end,
+        version=version,
+    )
     if bars.empty:
         raise BenchmarkDataError(
-            f"Published benchmark {ticker} has no rows in the requested period"
+            f"Published benchmark {contract.ticker} has no rows in the requested period"
         )
-    wide = _wide_from_bars(bars, ticker)
+    wide = _wide_from_bars(bars, contract.ticker)
     semantics = PriceSemantics.from_wide(wide)
+    ticker = contract.ticker
     total_return_open = semantics.total_return_open[ticker].rename(ticker)
     total_return_close = semantics.total_return_close[ticker].rename(ticker)
     holding_returns = (
         total_return_open.pct_change(fill_method=None).shift(-1).rename("Benchmark")
     )
     return BenchmarkBundle(
-        contract=_contract(ticker=ticker, version=version, source=source),
+        contract=contract,
         total_return_open=total_return_open,
         total_return_close=total_return_close,
         holding_returns=holding_returns,
@@ -207,4 +309,5 @@ __all__ = [
     "BenchmarkDataContract",
     "BenchmarkDataError",
     "load_registered_benchmark",
+    "resolve_registered_benchmark_contract",
 ]
