@@ -54,6 +54,41 @@ def _cache_benchmark_contract(
         _BENCHMARK_CONTRACTS[key] = dict(contract)
 
 
+def _attach_unregistered_basket_benchmark(
+    legacy_price: pd.DataFrame | None,
+    semantics: PriceSemantics,
+    *,
+    universe: str,
+    selected_version,
+) -> None:
+    """Keep ad-hoc/watchlist research price-safe without inventing SPY/QQQ.
+
+    Unregistered universes have no formal benchmark in the research registry.
+    Their historical behavior was an equal-weight internal basket benchmark.
+    Preserve that behavior explicitly using total-return open-to-open returns,
+    and label it so downstream output cannot confuse it with a registered ETF.
+    """
+    basket = (
+        semantics.total_return_open.pct_change(fill_method=None).shift(-1).mean(axis=1)
+    ).rename("Benchmark")
+    contract = {
+        "schema_version": 1,
+        "ticker": None,
+        "data_universe": str(universe).upper(),
+        "dataset_version_id": selected_version.version_id,
+        "dataset_run_id": selected_version.run_id,
+        "target_session": selected_version.target_session.isoformat(),
+        "bars_sha256": selected_version.checksum_sha256,
+        "manifest_sha256": selected_version.manifest_checksum_sha256,
+        "source": "UNREGISTERED_EQUAL_WEIGHT_TOTAL_RETURN_BASKET",
+    }
+    if legacy_price is not None:
+        legacy_price.attrs["benchmark_returns"] = basket
+        legacy_price.attrs["benchmark_contract"] = contract
+    semantics.total_returns.attrs["benchmark_returns"] = basket
+    semantics.total_returns.attrs["benchmark_contract"] = contract
+
+
 def _decorate_wide(
     reader: MarketDataReader,
     universe: str,
@@ -100,7 +135,16 @@ def _decorate_wide(
         )
     except ResearchUniverseRegistryError:
         # Coverage/watchlist universes are data containers, not named research
-        # universes and therefore have no registry benchmark by design.
+        # universes. Preserve their explicit historical basket comparison while
+        # never labelling it as a registered SPY/QQQ benchmark.
+        _attach_unregistered_basket_benchmark(
+            legacy_price,
+            semantics,
+            universe=universe,
+            selected_version=selected_version,
+        )
+        wide["returns"] = semantics.total_returns
+        wide["total_return_returns"] = semantics.total_returns
         return wide
     except BenchmarkDataError as exc:
         if legacy_price is not None:
@@ -177,6 +221,9 @@ def install_data_contract_benchmark_adapter() -> None:
                         reader=reader,
                     ).to_dict()
                 except ResearchUniverseRegistryError:
+                    # Ad-hoc/watchlist contracts intentionally have no registered
+                    # benchmark identity. Their explicit basket benchmark is
+                    # attached to the in-memory backtest result instead.
                     resolved = None
                 except BenchmarkDataError as exc:
                     payload["benchmark_error"] = str(exc)
