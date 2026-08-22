@@ -45,13 +45,26 @@ def _semantic_payload(price_df: pd.DataFrame | None) -> dict[str, Any] | None:
     }
 
 
+def _execution_close(price_df: pd.DataFrame | None) -> pd.DataFrame | None:
+    """Return the explicit executable close without requiring attribution fields.
+
+    Tradability needs only executable price units. Requiring the complete
+    total-return payload here made this narrow adapter fall back to adjusted
+    close whenever a caller attached only ``execution_close``. The formal
+    backtest adapter remains strict and still requires the full semantic payload.
+    """
+    if price_df is None:
+        return None
+    candidate = (getattr(price_df, "attrs", {}) or {}).get("execution_close")
+    return candidate if isinstance(candidate, pd.DataFrame) and not candidate.empty else None
+
+
 def build_tradable_mask_integrity(*args, **kwargs):
     """Use executable close for price floors/dollar volume when semantics exist."""
-    price_df = kwargs.get("price_df")
-    semantic = _semantic_payload(price_df)
-    if semantic is not None:
+    execution_close = _execution_close(kwargs.get("price_df"))
+    if execution_close is not None:
         kwargs = dict(kwargs)
-        kwargs["price_df"] = semantic["execution_close"]
+        kwargs["price_df"] = execution_close
     return _LEGACY_BUILD_TRADABLE(*args, **kwargs)
 
 
