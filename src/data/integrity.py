@@ -14,13 +14,13 @@ from typing import Any
 import pandas as pd
 
 from src.data.benchmark import BenchmarkDataError, load_registered_benchmark
-from src.data.foundation import DataContract if False else MarketDataReader  # type: ignore
+from src.data.foundation import MarketDataReader
 from src.data.price_semantics import PriceSemantics
 
 
 # DataContract lives in access.py; importing it at module import time would
 # create a circular dependency because access imports foundation. It is patched
-# lazily in ``install_data_integrity_adapter``.
+# lazily in ``install_data_contract_benchmark_adapter``.
 _LOCK = RLock()
 _BENCHMARK_CONTRACTS: dict[tuple[str, str], dict[str, Any]] = {}
 _INSTALLED = False
@@ -89,9 +89,8 @@ def _decorate_wide(
             reader=reader,
         )
     except Exception as exc:  # Benchmark is mandatory only at formal backtest boundary.
-        if isinstance(exc, BenchmarkDataError):
-            if legacy_price is not None:
-                legacy_price.attrs["benchmark_error"] = str(exc)
+        if isinstance(exc, BenchmarkDataError) and legacy_price is not None:
+            legacy_price.attrs["benchmark_error"] = str(exc)
         return wide
 
     contract = benchmark.contract.to_dict()
@@ -109,8 +108,8 @@ def _decorate_wide(
 
 
 def install_data_integrity_adapter() -> None:
-    """Install the reader/DataContract compatibility bridge exactly once."""
-    global _INSTALLED, _ORIGINAL_LOAD_WIDE, _ORIGINAL_CONTRACT_TO_DICT
+    """Install the reader compatibility bridge exactly once."""
+    global _INSTALLED, _ORIGINAL_LOAD_WIDE
     with _LOCK:
         if _INSTALLED:
             return
