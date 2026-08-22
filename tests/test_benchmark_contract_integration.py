@@ -83,6 +83,7 @@ def test_formal_semantic_backtest_cannot_fall_back_to_equal_weight_benchmark() -
     adjusted_close.attrs["total_return_open"] = pd.DataFrame(
         90.0, index=dates, columns=factor.columns
     )
+    adjusted_close.attrs["total_return_close"] = adjusted_close.copy()
     adjusted_close.attrs["benchmark_error"] = "SPY publication missing"
     volume = pd.DataFrame(1_000_000.0, index=dates, columns=factor.columns)
 
