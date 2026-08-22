@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pandas as pd
 import pytest
 
@@ -7,6 +9,7 @@ import src.backtest.runner as runner_module
 from src.backtest.integrity import quintile_backtest_integrity
 from src.data.access import DataContract
 import src.data.integrity as data_integrity
+from src.data.price_semantics import PriceSemantics
 from src.research_universes import research_universe_registry
 
 
@@ -98,3 +101,47 @@ def test_formal_semantic_backtest_cannot_fall_back_to_equal_weight_benchmark() -
             volume_df=volume,
             benchmark_returns=None,
         )
+
+
+def test_unregistered_watchlist_uses_explicit_total_return_basket_benchmark() -> None:
+    dates = pd.date_range("2024-01-02", periods=3, freq="B")
+    columns = ["AAA", "BBB"]
+    wide = {
+        "open": pd.DataFrame(
+            [[100.0, 50.0], [100.0, 50.0], [100.0, 50.0]],
+            index=dates,
+            columns=columns,
+        ),
+        "close": pd.DataFrame(
+            [[100.0, 50.0], [100.0, 50.0], [100.0, 50.0]],
+            index=dates,
+            columns=columns,
+        ),
+        "adj_close": pd.DataFrame(
+            [[90.0, 45.0], [91.0, 45.0], [91.0, 46.0]],
+            index=dates,
+            columns=columns,
+        ),
+        "volume": pd.DataFrame(1_000.0, index=dates, columns=columns),
+    }
+    semantics = PriceSemantics.from_wide(wide)
+    legacy_price = wide["adj_close"]
+    version = SimpleNamespace(
+        version_id="watch-v1",
+        run_id="watch-run",
+        target_session=pd.Timestamp("2024-01-04").date(),
+        checksum_sha256="bars-sha",
+        manifest_checksum_sha256="manifest-sha",
+    )
+    data_integrity._attach_unregistered_basket_benchmark(
+        legacy_price,
+        semantics,
+        universe="WATCHLIST_TEST",
+        selected_version=version,
+    )
+    benchmark = legacy_price.attrs["benchmark_returns"]
+    expected = semantics.total_return_open.pct_change(fill_method=None).shift(-1).mean(axis=1)
+    pd.testing.assert_series_equal(benchmark, expected.rename("Benchmark"))
+    contract = legacy_price.attrs["benchmark_contract"]
+    assert contract["ticker"] is None
+    assert contract["source"] == "UNREGISTERED_EQUAL_WEIGHT_TOTAL_RETURN_BASKET"
