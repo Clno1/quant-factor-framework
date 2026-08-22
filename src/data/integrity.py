@@ -2,7 +2,7 @@
 
 The project has many mature consumers of ``MarketDataReader.load_wide_tables``.
 Rather than duplicating those consumers while migrating price/exposure semantics,
-this adapter decorates the reader once at package import time.  It adds explicit
+this adapter decorates the reader once at package import time. It adds explicit
 semantic matrices and auditable temporal-policy metadata while preserving the
 legacy keys until callers have migrated.
 """
@@ -13,7 +13,11 @@ from typing import Any
 
 import pandas as pd
 
-from src.data.benchmark import BenchmarkDataError, load_registered_benchmark
+from src.data.benchmark import (
+    BenchmarkDataError,
+    load_registered_benchmark,
+    resolve_registered_benchmark_contract,
+)
 from src.data.foundation import MarketDataReader
 from src.data.price_semantics import PriceSemantics
 from src.research_universes.registry import ResearchUniverseRegistryError
@@ -38,6 +42,16 @@ def _single_policy(metadata: pd.DataFrame, column: str) -> str | None:
     if len(values) == 1:
         return values[0]
     return "MIXED" if values else None
+
+
+def _cache_benchmark_contract(
+    requested_universe: str,
+    primary_version_id: str,
+    contract: dict[str, Any],
+) -> None:
+    key = (str(requested_universe).upper(), str(primary_version_id))
+    with _LOCK:
+        _BENCHMARK_CONTRACTS[key] = dict(contract)
 
 
 def _decorate_wide(
@@ -94,9 +108,7 @@ def _decorate_wide(
         return wide
 
     contract = benchmark.contract.to_dict()
-    key = (str(universe).upper(), selected_version.version_id)
-    with _LOCK:
-        _BENCHMARK_CONTRACTS[key] = contract
+    _cache_benchmark_contract(universe, selected_version.version_id, contract)
     if legacy_price is not None:
         legacy_price.attrs["benchmark_returns"] = benchmark.holding_returns
         legacy_price.attrs["benchmark_contract"] = contract
@@ -134,7 +146,7 @@ def install_data_integrity_adapter() -> None:
 
 
 def install_data_contract_benchmark_adapter() -> None:
-    """Expose a cached immutable benchmark contract in DataContract.to_dict()."""
+    """Expose immutable benchmark identity in every named-universe DataContract."""
     global _ORIGINAL_CONTRACT_TO_DICT
     from src.data.access import DataContract
 
@@ -148,6 +160,35 @@ def install_data_contract_benchmark_adapter() -> None:
             key = (str(self.requested_universe).upper(), self.dataset_version_id)
             with _LOCK:
                 benchmark = _BENCHMARK_CONTRACTS.get(key)
+
+            if benchmark is None:
+                # Task creation can serialize a contract before wide tables are
+                # loaded. Resolve only immutable metadata here so SPY/QQQ is
+                # frozen from the beginning, not appended merely at task end.
+                reader = MarketDataReader()
+                try:
+                    primary = reader.require_version(
+                        str(self.data_universe).upper(),
+                        self.dataset_version_id,
+                    )
+                    resolved = resolve_registered_benchmark_contract(
+                        self.requested_universe,
+                        primary_version=primary,
+                        reader=reader,
+                    ).to_dict()
+                except ResearchUniverseRegistryError:
+                    resolved = None
+                except BenchmarkDataError as exc:
+                    payload["benchmark_error"] = str(exc)
+                    resolved = None
+                if resolved is not None:
+                    _cache_benchmark_contract(
+                        self.requested_universe,
+                        self.dataset_version_id,
+                        resolved,
+                    )
+                    benchmark = resolved
+
             if benchmark is not None:
                 payload["benchmark"] = dict(benchmark)
             return payload
