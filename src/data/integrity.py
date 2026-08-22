@@ -16,6 +16,7 @@ import pandas as pd
 from src.data.benchmark import BenchmarkDataError, load_registered_benchmark
 from src.data.foundation import MarketDataReader
 from src.data.price_semantics import PriceSemantics
+from src.research_universes.registry import ResearchUniverseRegistryError
 
 
 # DataContract lives in access.py; importing it at module import time would
@@ -49,8 +50,6 @@ def _decorate_wide(
     end,
 ) -> dict[str, pd.DataFrame]:
     semantics = PriceSemantics.from_wide(wide)
-    # New explicit keys. Legacy open/close/adj_close/returns remain for callers
-    # that have not migrated yet.
     wide["execution_open"] = semantics.execution_open
     wide["execution_close"] = semantics.execution_close
     wide["total_return_open"] = semantics.total_return_open
@@ -70,9 +69,6 @@ def _decorate_wide(
     if "market_cap" in wide:
         wide["market_cap"].attrs["market_cap_policy"] = market_cap_policy
 
-    # Legacy runner variables still name adj_close as `prices`. Attach the
-    # explicit counterparts so the backtest compatibility adapter can route
-    # each operation to the correct units without guessing.
     legacy_price = wide.get("adj_close")
     if legacy_price is not None:
         legacy_price.attrs["execution_close"] = semantics.execution_close
@@ -88,8 +84,12 @@ def _decorate_wide(
             primary_version=selected_version,
             reader=reader,
         )
-    except Exception as exc:  # Benchmark is mandatory only at formal backtest boundary.
-        if isinstance(exc, BenchmarkDataError) and legacy_price is not None:
+    except ResearchUniverseRegistryError:
+        # Coverage/watchlist universes are data containers, not named research
+        # universes and therefore have no registry benchmark by design.
+        return wide
+    except BenchmarkDataError as exc:
+        if legacy_price is not None:
             legacy_price.attrs["benchmark_error"] = str(exc)
         return wide
 
