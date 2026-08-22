@@ -26,6 +26,7 @@ jobs:
           tests/test_research_integrity_repairs.py
           tests/test_benchmark_contract_integration.py
           tests/test_membership_exit_price_semantics.py
+          tests/test_ic_hac_confidence.py
       - name: Existing trading integrity tests
         run: python -m pytest -q tests/test_trading_integrity.py
       - name: Related regression suite
