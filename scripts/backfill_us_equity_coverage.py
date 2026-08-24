@@ -41,6 +41,7 @@ from src.data.price_semantics import (  # noqa: E402
     build_price_semantics_contract,
 )
 from src.data.foundation import (  # noqa: E402
+    DataFoundationError,
     MarketDataCatalog,
     MarketDataReader,
     QualityCheck,
@@ -55,7 +56,7 @@ from src.utils.io import atomic_save_json  # noqa: E402
 from src.utils.market_calendar import latest_publishable_xnys_session  # noqa: E402
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -148,6 +149,19 @@ def _auto_resume_run_dir(
             + ", ".join(str(path) for path in matches)
         )
     return (matches[0] if matches else None), diagnostics
+
+
+def _authenticated_manifest_or_none(
+    reader: MarketDataReader,
+    published: Any,
+) -> dict[str, Any] | None:
+    """Treat only a legacy semantic contract as a full-rebuild signal."""
+    try:
+        return reader.verify_version(published, require_price_semantics=True)
+    except DataFoundationError as exc:
+        if "predates the authenticated price-semantics contract" not in str(exc):
+            raise
+        return None
 
 
 def _published_security_master() -> tuple[
@@ -410,12 +424,13 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         and published is not None
         and published.target_session == target.date()
     ):
-        manifest = MarketDataReader(catalog=catalog).verify_version(
+        manifest = _authenticated_manifest_or_none(
+            MarketDataReader(catalog=catalog),
             published,
-            require_price_semantics=True,
         )
         if (
-            manifest.get("security_master_generation_id")
+            manifest is not None
+            and manifest.get("security_master_generation_id")
             == generation.generation_id
             and manifest.get("security_master_manifest_sha256")
             == generation.manifest_sha256
@@ -457,6 +472,10 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         history_start=history_start,
         target_session=target,
     )
+    price_semantics = build_price_semantics_contract(
+        source=FMP_CANONICAL_SOURCE,
+        history_mode="FULL_REBUILD",
+    )
     checkpoint_identity = {
         "target_session": target.date().isoformat(),
         "history_start": history_start.date().isoformat(),
@@ -466,6 +485,7 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         "selected_security_count": len(universe),
         "batch_size": int(args.batch_size),
         "methodology_version": str(settings.methodology_version),
+        "price_semantics": price_semantics,
         "universe_content_sha256": _frame_fingerprint(universe),
         "aliases_content_sha256": _frame_fingerprint(aliases),
     }
@@ -516,6 +536,7 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             "selected_security_count": len(universe),
             "batch_size": int(args.batch_size),
             "methodology_version": str(settings.methodology_version),
+            "price_semantics": price_semantics,
             "universe_content_sha256": checkpoint_identity[
                 "universe_content_sha256"
             ],
@@ -768,10 +789,7 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             security_universe=universe,
             target_session=target,
             security_master=generation,
-            price_semantics=build_price_semantics_contract(
-                source=FMP_CANONICAL_SOURCE,
-                history_mode="FULL_REBUILD",
-            ),
+            price_semantics=price_semantics,
             min_target_coverage=float(settings.min_target_coverage),
             external_checks=[presence_check, alias_check, *quarantine_checks],
             run_id=run_id,

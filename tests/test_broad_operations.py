@@ -12,6 +12,7 @@ import pytest
 from scripts.check_broad_resources import check_resources
 from scripts.check_broad_shadow_observation import summarize_ledger
 from scripts.backfill_us_equity_coverage import (
+    _authenticated_manifest_or_none,
     _auto_resume_run_dir,
     _prepare_resumed_checkpoint,
 )
@@ -705,6 +706,33 @@ def test_coverage_auto_resume_requires_one_exact_running_checkpoint(tmp_path):
     }), encoding="utf-8")
     with pytest.raises(RuntimeError, match="multiple exact coverage"):
         _auto_resume_run_dir(tmp_path, expected=expected)
+
+
+def test_coverage_same_target_rebuilds_only_for_legacy_price_semantics():
+    class Reader:
+        def __init__(self, error: str | None):
+            self.error = error
+
+        def verify_version(self, _published, *, require_price_semantics):
+            assert require_price_semantics is True
+            if self.error:
+                raise DataFoundationError(self.error)
+            return {"schema_version": 4, "price_semantics": {"schema_version": 1}}
+
+    manifest = _authenticated_manifest_or_none(Reader(None), object())
+    assert manifest["schema_version"] == 4
+
+    legacy = _authenticated_manifest_or_none(
+        Reader("version predates the authenticated price-semantics contract"),
+        object(),
+    )
+    assert legacy is None
+
+    with pytest.raises(DataFoundationError, match="checksum mismatch"):
+        _authenticated_manifest_or_none(
+            Reader("published partition checksum mismatch"),
+            object(),
+        )
 
 
 def test_coverage_resume_restores_progress_after_all_batches_are_known():
