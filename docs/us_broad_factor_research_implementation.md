@@ -1,7 +1,7 @@
 # 全美宽基因子研究实施记录
 
-更新日期：2026-08-16  
-当前状态：2026-08-16 已按项目负责人批准的 `PROSPECTIVE_ONLY` 合同发布新版 Security Master 和隔离坏条后的正式 coverage；PIT 全量构建正在进行，八因子与首日影子待上游完成。旧检查点只保留审计，日常 timer 与网页默认开关继续关闭，五日观察仍为 0/5
+更新日期：2026-08-24
+当前状态：首次正式链与人工验收已通过，`quant-us-equity-coverage.timer` 已启用。2026-08-20 和 2026-08-21 两个连续 XNYS 交易日已通过精确影子核验，当前进度 2/5。`web_default_enabled=false` 继续保持，正式宽基置信研究仍只被 PIT 历史行业分类门槛阻断。
 
 本文件记录 [`us_broad_factor_research_requirements.md`](us_broad_factor_research_requirements.md)
 的实际落地和上线步骤。需求口径以需求文档为准。
@@ -11,16 +11,14 @@
 | 阶段 | 代码状态 | 数据/生产状态 |
 |---|---|---|
 | Phase 0 供应商与容量 | 完成 | FMP 能力审计和 SG 合成容量实测完成 |
-| Phase 1 Security Master | 已重新发布 | 五表幂等通过；新版正式 generation 绑定 62 条历史研究政策台账 |
-| Phase 2 Coverage 与 PIT | 代码完成、生产执行中 | 正式 coverage 已发布；PIT 全量构建正在执行，尚未通过最终质量门禁 |
-| Phase 3 宽基因子数据 | 完成 | 八因子月分片、断点和增量复用已实现；尚无正式 generation |
+| Phase 1 Security Master | 已重新发布 | `PROSPECTIVE_ONLY` 台账、身份唯一性和质量门禁通过 |
+| Phase 2 Coverage 与 PIT | 已正式发布 | 2026-08-21 coverage 与 PIT 版本严格绑定，全历史行情覆盖门禁通过 |
+| Phase 3 宽基因子数据 | 已正式发布 | 8 因子、640 个月分片及 raw/clean/rank/percentile 哈希验证通过 |
 | Phase 4 Web/API | 完成 | 全局证券搜索和宽基 adapter 已接入；默认切换开关保持关闭 |
 | Phase 5 正式宽基研究 | 门禁完成、研究暂缓 | 当前行业为 latest-known，不满足严格 PIT，readiness 必须返回 `BLOCKED` |
-| Phase 6 SG 影子 | 首次链运行中 | 日常 timer 保持关闭，完成首次发布与人工验收后才开始 0/5 计数 |
+| Phase 6 SG 影子 | 观察中 | 2026-08-20、2026-08-21 连续通过，当前 2/5；timer 已启用，网页默认开关仍关闭 |
 
-因此当前已经完成首次正式 coverage 发布，正在构建其严格绑定的 PIT 宽基池，尚未进入首日验收和五日影子。不能宣称全美宽基数据
-已经上线，也不能发布宽基 IC、ICIR 或置信结论。现有 SP500、NASDAQ100、MAG7、Watchlist、
-回测、模拟盘和动量链路没有被本次宽基处置改写。
+因此当前可以宣称“全美宽基基础数据链已进入生产影子观察”，但在 5/5 前不得打开网页默认开关，也不得发布宽基 IC、ICIR 或置信结论。现有 SP500、NASDAQ100、MAG7、Watchlist、回测、模拟盘和动量链路没有被本次宽基处置改写。
 
 ## 2. 已实现的数据链
 
@@ -662,8 +660,9 @@ partition_count        = 640
 
 readiness 当前只保留已知的 `PIT_CLASSIFICATION_POLICY` 和 `PIT_INDUSTRY_COVERAGE`，不含基础设施
 或版本 blocker。2026-08-20 已记为首个通过的 shadow，进度 1/5、剩余 4 个不同且连续的交易日；
-`web_default_enabled=false`。持久 `quant-us-equity-coverage.timer` 因 1/5 保护边界仍为 disabled，
-未经项目负责人再次明确确认不得绕过；后续每日观察可以由既有 SG 自动跟进任务受控执行。
+`web_default_enabled=false`。当时持久 `quant-us-equity-coverage.timer` 仍为 disabled。事后复盘确认，
+把 5/5 门槛用于阻止日常 timer 是错误的控制状态：5/5 只约束网页默认开关；首日完整链和人工验收
+通过后，日常 timer 必须立即启用，否则后续四个交易日根本不会产生。
 
 本次部署与发布备份：
 
@@ -671,3 +670,69 @@ readiness 当前只保留已知的 `PIT_CLASSIFICATION_POLICY` 和 `PIT_INDUSTRY
 /home/projects/quant-backups/xnys-calendar-contract-20260821T1450CST
 /home/projects/quant-backups/xnys-calendar-publication-20260821T1452CST
 ```
+
+## 17. 2026-08-24 第二交易日影子与资源事件
+
+首日完整链和人工验收通过后，正式启用
+`quant-us-equity-coverage.timer`；时间表为 Tue-Sat 11:30 SGT，
+`Persistent=true`。由于该 timer 以前从未启用，systemd 没有旧的漏跑时间戳，
+本次在非盘中窗口一次性启动相同的受限 service 补跑 2026-08-21，此后交由 timer。
+
+2026-08-21 完整生产绑定为：
+
+```text
+security_master_generation = b02c753c82674e8daee356871368efe6
+security_master_manifest   = 05dbdd87cf3a26212f4642871e2d215b566e8d251db6a36327d7e32225d08476
+coverage_version           = a5e598dd50fa454d88b9d0764924346c
+coverage_manifest          = b21448fbbc0273000b0f1b6aa90c32f98a58f5a33c8776fd9ac5b23d63035a58
+universe_version           = 8312749ec0164208b2dd630588acd068
+membership_sha             = 25f609e2a50504bcf46a7c9ad0b273ab31a733f48444024c60fa86a5cd7af614
+eligibility_sha            = 8c518751de665ed550d4b6e5cfc849e7b19ea5d010cd4d2b267040656e8bc3ee
+factor_generation          = 2ff7721bcd814b66abd71248454d1583
+factor_manifest            = e6f876ad3705064df66aae03b461c8f0faf5f80bcd2e435fb9517e15dc6a473a
+factor_publication_id      = 11923d7f-853e-4ca6-b6cd-05f2400126ff
+```
+
+daily pipeline 历时 495.26 秒，报告峰值 665.051 MB；systemd 记录该 service 峰值
+701.8 MB、swap 0。FMP EOD bulk 返回 23,905 条源记录，其中 1 条没有 symbol，
+已按 provider invalid identity 隔离，没有进入正式 coverage。PIT 全历史日行情覆盖
+门禁通过，当前成员 2,778。
+
+由于 Security Master 正式版本变化，因子输入指纹要求 640 个月分片重算。因子
+service 总 CPU 时间 1 小时 8 分，systemd 峰值 706.2 MB、swap 0；8 因子、640 分片
+和最终 publication 均通过。readiness 只保留预期的
+`PIT_CLASSIFICATION_POLICY`/`PIT_INDUSTRY_COVERAGE`，shadow 将 2026-08-21 记为 PASS。
+现在连续通过日为 2026-08-20、2026-08-21，进度 2/5，剩余 3 日；
+`web_default_enabled=false`。
+
+完整链落盘后执行 HTTP 页面验收时，SG 开始无法及时响应 SSH banner、主站和
+独立运维站。重启后读取上一启动周期 kernel journal，已经确认根因是全局 OOM，而不是
+Parquet 写回或磁盘 I/O：2026-08-24 12:09:51 CST，`quant-web.service` 中的 Python 进程
+达到约 1.66 GB anonymous RSS，在 1.96 GB、无 swap 的主机上触发 OOM killer；当时
+`dirty=0`、`writeback=0`，没有 hung task 或块设备错误。
+
+触发请求是宽基单股历史 API。旧实现先对所选因子的全部 80 个月分片、约 928 万行执行按日
+窗口排名，最后才筛选 MDB/AEVA；DuckDB 无查询内存上限，主 Web 也没有 cgroup 内存上限，
+因此一条请求占满整机。修复后单股历史逐月计算同一套横截面排名，DuckDB 查询上限为 192 MB；
+主 Web 增加 `MemoryHigh=420M`、`MemoryMax=600M`、`MemorySwapMax=0` 和
+`OOMPolicy=stop`。即使以后再出现异常查询，也应只让 Web 被 systemd 重启，不能阻断 SSH、
+运维站和定时任务。
+
+影子观察停在 1/5 的根因也已通过 systemd 时间线确认：timer 启用软链接直到
+2026-08-24 09:32:10 CST 才创建，此前没有 timer journal。首次脚本明确不会自动启用日常 timer，
+而当时 `configs/operations.yaml` 又设置 `enabled_expected=false`，使 watchdog 主动忽略 timer
+disabled/inactive 告警；文档同时混淆“5/5 后打开网页默认开关”和“首日后启用每日生产”两个门槛。
+现已将运维期望改为启用，后续 timer 关闭或 inactive 会直接产生 systemd 运维告警。
+
+生产部署后的回归结果：SG 完整测试 `527 passed`；MDB 全历史 `MOM_6M` 返回 1668 行，
+耗时 14.26 秒，AEVA 返回 1630 行，耗时 14.37 秒。重复请求后主 Web 的 cgroup 峰值固定在
+440,950,784 bytes（约 420.5 MiB），`NRestarts=0`，没有逐次增长。MDB 和 AEVA 最新历史行的
+排名/百分位分别与 2026-08-21 日期截面逐值一致，证明分片执行没有改变横截面口径。修复备份：
+
+```text
+/home/projects/quant-backups/web-oom-shadow-root-cause-20260824T123159CST
+```
+
+当前影子台账仍为 2026-08-20/21 两日通过、2/5、剩余 3 日；`--require-ready` 退出码 2 是正确的
+“仍在观察”。下一次 `quant-us-equity-coverage.timer` 计划于 2026-08-25 11:31 SGT 左右运行，
+`web_default_enabled=false` 未改变。

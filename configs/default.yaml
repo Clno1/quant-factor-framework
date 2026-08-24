@@ -143,6 +143,8 @@ data:
     minimum_latest_clean_coverage: 0.95
     maximum_zero_std_cross_section_ratio: 0.02
     checkpoint_dir: "data/lake/staging/broad_factor_data"
+    # Web 查询按月读取分片；DuckDB 超过此边界应失败或落盘，不能挤占整机内存。
+    query_memory_limit_mb: 192
 
   # 正式宽基 IC/ICIR、置信评估和成本回测的发布门槛。当前 FMP profile
   # 只有最新行业快照，因此会被 readiness 检查明确阻断；不能用降低阈值

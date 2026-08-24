@@ -359,6 +359,27 @@ def test_factor_data_publication_binds_all_parents_and_rejects_tampering():
             universe_store=universe_store,
         )
         generation_id = store.new_generation_id()
+        early_partition = store.write_partition(
+            pd.DataFrame([
+                {
+                    "date": "2020-01-31",
+                    "security_id": security_id,
+                    "ticker": ticker,
+                    "factor_id": "MOM_1M",
+                    "raw_value": raw,
+                    "clean_value": clean,
+                    "pit_member": True,
+                    "status": "VALID",
+                }
+                for security_id, ticker, raw, clean in (
+                    ("sec_aaa", "AAA", 0.1, -0.5),
+                    ("sec_bbb", "BBB", 0.2, 0.5),
+                )
+            ]),
+            generation_id=generation_id,
+            factor_id="MOM_1M",
+            target_session="2020-03-31",
+        )
         partition = store.write_partition(
             pd.DataFrame([
                 {
@@ -408,7 +429,7 @@ def test_factor_data_publication_binds_all_parents_and_rejects_tampering():
             universe_version=universe_version,
             security_master=security,
             factor_partitions={
-                "MOM_1M": [partition],
+                "MOM_1M": [early_partition, partition],
                 "VOL_20D": [negative_partition],
             },
             factor_metadata={
@@ -434,7 +455,7 @@ def test_factor_data_publication_binds_all_parents_and_rejects_tampering():
         )
         assert store.load_publication() == pointer
         entries = store.partition_entries(pointer, "MOM_1M")
-        assert len(entries) == 1
+        assert len(entries) == 2
 
         security_frames = {
             "master": pd.DataFrame([
@@ -466,7 +487,11 @@ def test_factor_data_publication_binds_all_parents_and_rejects_tampering():
         assert snapshot.rows[0]["factor_percentile"] == 100.0
         history = backend.history(factor_id="MOM_1M", ticker="AAA")
         assert history.security_id == "sec_aaa"
-        assert history.rows[0]["factor_rank"] == 1
+        assert [row["date"] for row in history.rows] == [
+            "2020-01-31",
+            "2020-03-31",
+        ]
+        assert [row["factor_rank"] for row in history.rows] == [2, 1]
         metadata = backend.metadata(selected_factor="MOM_1M")
         assert metadata["universe"]["factor_data_status"] == "PUBLISHED"
         assert metadata["universe"]["web_default_enabled"] is False
@@ -494,7 +519,7 @@ def test_factor_data_publication_binds_all_parents_and_rejects_tampering():
         assert negative.rows[0]["factor_rank"] == 1
         assert negative.rows[0]["factor_percentile"] == 100.0
 
-        partition_path = Path(entries[0].path)
+        partition_path = Path(entries[-1].path)
         partition_path.write_bytes(partition_path.read_bytes() + b"tampered")
         with pytest.raises(DataFoundationError, match="partition hash"):
             store.load_publication()

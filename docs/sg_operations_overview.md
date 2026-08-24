@@ -1,6 +1,6 @@
 # SG 生产运维总览
 
-更新日期：2026-08-16
+更新日期：2026-08-24
 
 ## 1. 当前部署状态
 
@@ -8,7 +8,7 @@
 |---|---|
 | 本地 `/Users/huozhihong/Documents/Quant` | 全美宽基、可恢复首次链与独立运维站代码完成，待提交共享仓库 |
 | SG `/home/projects/quant` | 宽基代码和独立运维站已部署；主 Web、双核心研究池、既有调度与运维采集均已验收 |
-| 全美宽基 v1 | PROSPECTIVE_ONLY Security Master 与正式 coverage 已发布；PIT 全量构建运行中，因子待上游完成，五日影子为 0/5 |
+| 全美宽基 v1 | Security Master、coverage、PIT 和八因子已连续通过 2026-08-20/21 影子验收，当前 2/5；日常 timer 已启用，网页默认开关仍关闭 |
 
 SG 发布使用精确白名单 rsync，不从未推送的本地 `main` 做远端 `git pull`。当前部署标记
 `/home/projects/quant/.deploy-commit` 为 `3a52611`，服务器仓库 HEAD 为 `026ae89fad53`；
@@ -69,7 +69,7 @@ flowchart TD
 | `quant-premarket-digest.timer` | enabled | 分别发送 momentum 与 sector rotation 盘前摘要 |
 | `quant-momentum-alerts.timer` | enabled | 10:00–15:59 ET 小时摘要 |
 | `quant-intraday-momentum-monitor.timer` | enabled | 分钟 shadow；五日验收后人工武装推送 |
-| `quant-us-equity-coverage.timer` | **已安装、未启用** | 11:30 串行发布 Security Master、全美 coverage、PIT 宽基和八因子数据；首次完整链通过后才启用 |
+| `quant-us-equity-coverage.timer` | **enabled + active** | Tue-Sat 11:30 SGT 串行发布 Security Master、全美 coverage、PIT 宽基和八因子数据 |
 | `quant-broad-factor-data.service` | 由上游 `OnSuccess` 触发 | 宽基八因子月分片增量发布 |
 | `quant-broad-research-readiness.service` | 由 factor `OnSuccess` 触发 | 检查正式宽基研究门槛；当前预期 `BLOCKED` |
 | `quant-broad-shadow-observation.service` | 由 factor `OnSuccess` 触发 | 完整哈希、真实排名查询和五日台账 |
@@ -513,8 +513,9 @@ MDB 与 AEVA 查询、主业务页面、运维 API、watchdog、逐分片哈希�
 当前生产开关：
 
 - `data.broad_factor_data.web_default_enabled=false`；
-- `quant-us-equity-coverage.timer=disabled/inactive`，1/5 时未绕过持久任务保护；
-- 既有 SG 自动跟进任务继续按交易日受控执行资源检查、daily pipeline 和 shadow；
+- `quant-us-equity-coverage.timer` 当时为 `disabled/inactive`；事后确认这是控制面缺陷，不是正确的
+  1/5 保护：没有每日 timer 就无法形成后续观察日；
+- 5/5 门槛只保护 `web_default_enabled`，首日完整链和人工验收通过后必须启用每日 timer；
 - 达到 5/5 前不得打开网页默认开关，失败日不得计数；
 - readiness 的 `PIT_CLASSIFICATION_POLICY`、`PIT_INDUSTRY_COVERAGE` 是已知研究阻断，基础行情、
   PIT、因子数据和查询能力已经通过首日生产验收。
@@ -525,3 +526,33 @@ MDB 与 AEVA 查询、主业务页面、运维 API、watchdog、逐分片哈希�
 /home/projects/quant-backups/xnys-calendar-contract-20260821T1450CST
 /home/projects/quant-backups/xnys-calendar-publication-20260821T1452CST
 ```
+
+## 15. 2026-08-24 宽基 timer 启用、2/5 与 SG 资源事件
+
+`quant-us-equity-coverage.timer` 已按首日验收门槛正式设为 `enabled/active`，下次
+触发时间为 2026-08-25 11:30 SGT。一次性补跑 2026-08-21 后，daily pipeline、PIT、
+8 因子、readiness 和 shadow 都通过预期合同；影子日期为 2026-08-20/21，当前
+2/5，剩余 3 日。正式版本为 coverage `a5e598dd50fa454d88b9d0764924346c`、PIT
+`8312749ec0164208b2dd630588acd068`、factor `2ff7721bcd814b66abd71248454d1583`、Security Master
+`b02c753c82674e8daee356871368efe6`。`web_default_enabled=false` 未改动。
+
+当日 daily service 峰值 701.8 MB、factor service 峰值 706.2 MB，均为 swap 0，未超过
+900 MB 硬上限。真正的失联发生在后续 MDB 单股历史 HTTP 验收：旧查询对约 928 万条因子观测
+完成全历史窗口排名后才筛选一只股票，`quant-web` 最终达到约 1.66 GB anonymous RSS。
+2026-08-24 12:09:51 CST kernel 触发全局 OOM 并杀死该 Python 进程；当时无 swap，且
+`dirty=0`、`writeback=0`，没有 I/O 故障证据。11:27 至 OOM 发生前 watchdog 也无法按分钟获得
+调度，解释了为什么主站、运维站和 SSH 同时无响应。
+
+修复采用三层边界：单股历史按月分片计算同一排名公式；DuckDB 每个查询限制 192 MB；主 Web
+cgroup 设置 `MemoryHigh=420M`、`MemoryMax=600M`、`MemorySwapMax=0`、`OOMPolicy=stop`。
+此外，运维 registry 已将宽基每日生产标为 `enabled_expected=true`，timer 关闭或 inactive 将触发
+告警。timer 启用软链接的实际创建时间为 2026-08-24 09:32:10 CST，证明此前 1/5 停滞是“未被
+调度且未告警”，不是数据链运行失败。
+
+部署备份为
+`/home/projects/quant-backups/web-oom-shadow-root-cause-20260824T123159CST`。
+`systemd-analyze verify` 对 Quant unit 无错误；SG 完整回归 `527 passed`。真实 MDB/AEVA
+`MOM_6M` 全历史请求分别耗时 14.26/14.37 秒，重复请求后的 Web 峰值约 420.5 MiB、无重启；
+两只股票的最新历史排名和同日日期截面排名完全一致。重启后的 kernel journal 无新 OOM。
+宽基 timer 为 `enabled/active`，下次计划在 2026-08-25 11:31 SGT 左右运行；影子台账保持
+2/5、剩余 3 日，网页默认开关继续关闭。

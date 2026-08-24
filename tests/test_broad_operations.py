@@ -75,10 +75,10 @@ def test_initial_rollout_stage_inherits_progress_stderr(capfd):
     assert stage["stderr_tail"] is None
 
 
-def test_operations_registry_keeps_daily_refresh_on_and_broad_rollout_gated():
+def test_operations_registry_expects_daily_refresh_and_broad_observation_timer():
     registry = OperationsRegistry("configs/operations.yaml")
     assert registry.get("us_daily_refresh").enabled_expected is True
-    assert registry.get("broad_us_pipeline").enabled_expected is False
+    assert registry.get("broad_us_pipeline").enabled_expected is True
 
 
 def test_daily_pipeline_stops_after_first_failed_stage(monkeypatch, tmp_path):

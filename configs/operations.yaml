@@ -119,7 +119,7 @@ jobs:
     adapter: broad_pipeline
     service_unit: quant-us-equity-coverage.service
     timer_unit: quant-us-equity-coverage.timer
-    enabled_expected: false
+    enabled_expected: true
     order: 60
     schedule:
       timezone: Asia/Singapore
@@ -127,7 +127,7 @@ jobs:
       time: "11:30"
       deadline_minutes: 600
       target_policy: latest_publishable_xnys
-    description: 首次链由独立可恢复服务完成；验收后再启用本 timer，串行更新主表、coverage、PIT和八因子。
+    description: 首次链与首日人工验收已完成；本 timer 必须保持启用，串行更新主表、coverage、PIT和八因子并累计五日影子。
 
   - job_id: data_requests
     display_name: 自定义股票池缺数队列

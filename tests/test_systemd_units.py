@@ -168,6 +168,14 @@ class SystemdUnitTests(unittest.TestCase):
         self.assertIn("MemoryMax=260M", watchdog)
         self.assertEqual(_setting(SYSTEMD_DIR / "quant-operations-watchdog.timer", "OnUnitInactiveSec"), "1min")
 
+    def test_main_web_has_a_host_protecting_memory_boundary(self):
+        web = (SYSTEMD_DIR / "quant-web-root.service").read_text(encoding="utf-8")
+
+        self.assertIn("MemoryHigh=420M", web)
+        self.assertIn("MemoryMax=600M", web)
+        self.assertIn("MemorySwapMax=0", web)
+        self.assertIn("OOMPolicy=stop", web)
+
 
 if __name__ == "__main__":
     unittest.main()

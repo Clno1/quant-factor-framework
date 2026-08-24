@@ -178,9 +178,10 @@ ssh -L 18825:127.0.0.1:18825 root@43.156.89.232
 然后打开 `http://127.0.0.1:18825/`。反向代理应给主业务站和运维站不同域名或至少不同上游，
 两套认证仍须保持隔离。
 
-针对当前 2 GB SG，Web 的 `MemoryHigh/MemoryMax` 为 `140M/180M`，watchdog 为
-`180M/260M`。watchdog 是短时 oneshot；Web 只读 SQLite 快照，不持有 DuckDB 连接。若触发内存
-上限，systemd 会留下明确失败证据，不会继续挤占盘中动量进程。
+针对当前 2 GB SG，独立运维 Web 的 `MemoryHigh/MemoryMax` 为 `140M/180M`，watchdog 为
+`180M/260M`；主业务 Web 为 `420M/600M`。watchdog 是短时 oneshot；运维 Web 只读 SQLite
+快照，不持有 DuckDB 连接。若任一 Web 触发内存上限，systemd 会留下明确失败证据并重启对应
+服务，不会继续挤占盘中动量进程或整台主机。
 
 ## 6. 告警边界
 
@@ -379,3 +380,30 @@ factor generation `844e6a7a8bd642a0a0466bfb137529cf`；首日 2026-08-20 已通�
 运维站和主业务站本机验收均返回 HTTP 200，MDB 搜索与历史 API 可读取最新因子数据。持久宽基
 timer 仍为 disabled，网页默认开关仍为 false；运维站应明确显示这是上线观察门槛，而不能把它
 误报为数据缺失或任务卡死。
+
+## 15. 2026-08-24 2/5 证据与服务器无响应事件
+
+2026-08-21 新观察已通过，运维快照的正确业务状态应为：Security Master、coverage、
+PIT 和八因子成功，五交易日影子为“观察中 2/5”，readiness 只显示
+`PIT_CLASSIFICATION_POLICY`/`PIT_INDUSTRY_COVERAGE`，网页默认开关保持关闭。
+
+因子服务落盘后，MDB 单股历史验收请求未返回，随后 SSH、主站和运维站均出现建立 TCP 后
+长时间无应用响应。上一启动周期 kernel journal 已给出确定证据：2026-08-24 12:09:51 CST
+发生全局 OOM，OOM killer 杀死 `quant-web.service` 内约 1.66 GB anonymous RSS 的 Python；
+主机只有约 1.96 GB RAM 且无 swap。该时刻 `dirty=0`、`writeback=0`，没有 hung task 或块设备
+错误，因此磁盘写回不是根因。
+
+旧单股历史查询对一个因子的全部历史分片执行窗口排名，再在最外层按 `security_id` 筛选，生产
+数据规模约 928 万行。修复后逐月执行同一排名公式，并加入 DuckDB 192 MB 查询上限和主 Web
+`420M/600M` cgroup 软硬边界。硬边界的目的不是让大查询成功，而是发生未知异常时优先重启
+Web，保住 SSH、运维站和生产 timer。
+
+影子观察 1/5 的可观测性缺口也已确认：`broad_us_pipeline.enabled_expected=false` 导致 watchdog
+按设计跳过 timer inactive/disabled 检查；首次 rollout 又从不自动启用日常 timer。现已将运维
+期望改为 true。正确状态机是“首日完整链和人工验收通过 -> 启用每日 timer -> 连续累计 5 日 ->
+打开网页默认开关”，不能把最后一步的门槛反向用于阻止第二步。
+
+部署后 watchdog 已重新采集：宽基快照为 `RUNNING/观察中`，systemd 证据中的 timer 为
+`enabled/active`，没有宽基 timer 告警。真实 MDB、AEVA、重复 MDB 与主页面请求后，主 Web
+峰值稳定在约 420.5 MiB、`NRestarts=0`；SG 完整回归 `527 passed`。当前唯一开放 incident 是
+`data_requests` 的 `JOB_DEGRADED`，与本次 OOM 和宽基影子停滞无关，应作为独立缺数队列问题处理。

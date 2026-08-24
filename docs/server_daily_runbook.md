@@ -39,7 +39,7 @@ systemctl list-timers --all 'quant-*'
 | Tue-Sat 08:45 | `quant-factor-research.timer` | 发布 SP500/NASDAQ100 因子研究、MAG7 参考结果和跨池结论 |
 | Tue-Sat 09:15 | `quant-group-analytics-eod.timer` | 读取正式 SP500 version，发布板块研究 |
 | Tue-Sat 10:30 | `quant-paper-trading.timer` | 运行 active 模拟盘账户 |
-| Tue-Sat 11:30 | `quant-us-equity-coverage.timer` | **已安装、暂未启用**：Security Master -> 全美 coverage -> PIT 宽基 -> 八因子 -> 双检查 |
+| Tue-Sat 11:30 | `quant-us-equity-coverage.timer` | **必须启用**：Security Master -> 全美 coverage -> PIT 宽基 -> 八因子 -> readiness -> 影子核验 |
 | 每 5 分钟 | `quant-data-requests.timer` | 处理 Watchlist 缺数请求 |
 | Mon-Fri 09:20 ET | `quant-premarket-digest.timer` | 分别发送 momentum 与 sector rotation 盘前摘要 |
 | 每小时 :35 SGT | `quant-momentum-alerts.timer` | worker 内部只保留 10:00–15:59 ET |
@@ -55,8 +55,9 @@ systemctl list-timers --all 'quant-*'
 
 NASDAQ100 改造已于 2026-08-11 部署。NASDAQ100 PIT 任一门禁失败时，08:15 service 可以继续
 发布彼此独立的 SP500/MAG7，但 unit 最终应为失败，NASDAQ100 不得前移；08:45 仍需发布可审计的
-`INSUFFICIENT` 跨池结论，不能沿用昨天的绿色状态。全美宽基 unit 已于 2026-08-12 安装并通过
-`systemd-analyze verify`，但首次正式数据链未完成，timer 仍应为 `disabled`。
+`INSUFFICIENT` 跨池结论，不能沿用昨天的绿色状态。全美宽基首次链和首日人工验收已完成，
+日常 timer 从 2026-08-24 起必须保持 `enabled/active`；连续 5 日门槛只约束网页默认开关，
+不允许再用它关闭产生每日观察数据的 timer。
 
 ## 3. 查看最近结果和错误
 
@@ -243,12 +244,15 @@ systemctl enable --now \
   quant-intraday-momentum-monitor.timer
 ```
 
-上面的既有 timer 列表不自动包含全美宽基。只有首次正式回填、手工完整链和
-`systemd-analyze verify` 都成功后，才单独执行：
+上面的既有 timer 列表不自动包含全美宽基。首次正式回填、手工完整链和
+`systemd-analyze verify` 已成功，生产必须另行保持：
 
 ```bash
 systemctl enable --now quant-us-equity-coverage.timer
 ```
+
+运维 registry 将该任务设置为 `enabled_expected=true`。如果 timer 变为 disabled 或 inactive，
+watchdog 必须产生告警；`Persistent=true` 不能补偿一个从未启用过、没有历史时间戳的 timer。
 
 ## 7. 不能直接做的事
 

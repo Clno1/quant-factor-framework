@@ -594,6 +594,15 @@ class BroadFactorObservationBackend:
     def _connect() -> duckdb.DuckDBPyConnection:
         connection = duckdb.connect()
         connection.execute("SET threads = 1")
+        memory_limit_mb = int(
+            getattr(
+                CONFIG.data.broad_factor_data,
+                "query_memory_limit_mb",
+                192,
+            )
+        )
+        connection.execute(f"SET memory_limit = '{memory_limit_mb}MB'")
+        connection.execute("SET preserve_insertion_order = false")
         return connection
 
     @staticmethod
@@ -990,28 +999,39 @@ class BroadFactorObservationBackend:
         security_id = self._resolve_security(
             frames, ticker, start=request_start, end=request_end
         )
-        _, paths = self._entries(
+        entries, paths = self._entries(
             publication, factor_id, start=request_start, end=request_end
         )
         cte = self._ranked_cte(contract.direction)
-        connection = self._connect()
-        try:
-            frame = connection.execute(
-                cte
-                + """
-                    SELECT * FROM ranked
-                    WHERE security_id = ?
-                    ORDER BY date
-                """,
-                [
-                    [str(path) for path in paths],
-                    pd.Timestamp(request_start).date(),
-                    pd.Timestamp(request_end).date(),
-                    security_id,
-                ],
-            ).df()
-        finally:
-            connection.close()
+        history_frames: list[pd.DataFrame] = []
+        for entry, path in zip(entries, paths, strict=True):
+            partition_start = max(request_start, entry.date_start)
+            partition_end = min(request_end, entry.date_end)
+            connection = self._connect()
+            try:
+                partition_frame = connection.execute(
+                    cte
+                    + """
+                        SELECT * FROM ranked
+                        WHERE security_id = ?
+                        ORDER BY date
+                    """,
+                    [
+                        [str(path)],
+                        pd.Timestamp(partition_start).date(),
+                        pd.Timestamp(partition_end).date(),
+                        security_id,
+                    ],
+                ).df()
+            finally:
+                connection.close()
+            if not partition_frame.empty:
+                history_frames.append(partition_frame)
+        frame = (
+            pd.concat(history_frames, ignore_index=True).sort_values("date")
+            if history_frames
+            else pd.DataFrame()
+        )
         if frame.empty:
             raise FactorObservationError(
                 "TICKER_NOT_IN_GENERATION",
