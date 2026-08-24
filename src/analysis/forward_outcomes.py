@@ -48,9 +48,19 @@ def _events(membership_events: pd.DataFrame | None) -> pd.DataFrame:
     events["removed_ticker"] = (
         events["removed_ticker"].fillna("").astype(str).str.strip().str.upper()
     )
+    events["added_ticker"] = (
+        events["added_ticker"].fillna("").astype(str).str.strip().str.upper()
+        if "added_ticker" in events.columns
+        else ""
+    )
     events["reason"] = events["reason"].fillna("").astype(str).str.strip()
-    if events["effective_date"].isna().any() or events["removed_ticker"].eq("").any():
-        raise ValueError("Membership outcome events contain invalid dates or tickers")
+    if events["effective_date"].isna().any():
+        raise ValueError("Membership outcome events contain invalid dates")
+    if (events["removed_ticker"].eq("") & events["added_ticker"].eq("")).any():
+        raise ValueError("Membership outcome events contain invalid identities")
+    # Published ledgers also contain legitimate add-only events.  They affect PIT
+    # membership but cannot settle a disappearing security's forward outcome.
+    events = events.loc[events["removed_ticker"].ne("")].copy()
     return events.sort_values(["effective_date", "removed_ticker"]).reset_index(drop=True)
 
 

@@ -174,6 +174,12 @@ def test_forward_outcomes_audit_reviewed_events_unknowns_and_right_edge() -> Non
             "removed_ticker": "ACQ",
             "reason": "Acquired by Buyer Inc.",
         },
+        {
+            "effective_date": dates[1],
+            "added_ticker": "SPINCO",
+            "removed_ticker": np.nan,
+            "reason": "Spin-off addition",
+        },
     ])
 
     outcome = build_forward_outcomes(
@@ -198,6 +204,29 @@ def test_forward_outcomes_audit_reviewed_events_unknowns_and_right_edge() -> Non
     assert outcome.summary["resolved_reviewed_events"] == 2
     assert outcome.summary["unresolved_missing_outcomes"] == 1
     assert outcome.summary["right_edge_not_observable"] == 1
+
+
+def test_forward_outcomes_reject_event_without_added_or_removed_identity() -> None:
+    dates = pd.bdate_range("2026-01-05", periods=3)
+    frame = pd.DataFrame({"AAA": [0.0, 0.01, 0.02]}, index=dates)
+    eligible = pd.DataFrame({"AAA": [True, False, False]}, index=dates)
+    events = pd.DataFrame([
+        {
+            "effective_date": dates[1],
+            "added_ticker": np.nan,
+            "removed_ticker": np.nan,
+            "reason": "Malformed event",
+        }
+    ])
+
+    with pytest.raises(ValueError, match="invalid identities"):
+        build_forward_outcomes(
+            frame,
+            total_return_close_df=(1.0 + frame).cumprod(),
+            eligible_mask=eligible,
+            membership_events=events,
+            periods=1,
+        )
 
 
 def test_latest_known_industry_is_skipped_and_audited(monkeypatch) -> None:
