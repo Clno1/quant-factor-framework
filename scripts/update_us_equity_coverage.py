@@ -43,6 +43,7 @@ from src.data.broad_coverage import (  # noqa: E402
     split_coverage_bar_quality,
 )
 from src.data.fmp import get_canonical_historical_ohlcv, get_eod_bulk  # noqa: E402
+from src.data.price_semantics import build_price_semantics_contract  # noqa: E402
 from src.data.foundation import (  # noqa: E402
     DataFoundationError,
     MarketDataCatalog,
@@ -465,7 +466,14 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
     )
     catalog = MarketDataCatalog(CONFIG.abs_path(str(CONFIG.data.foundation.catalog_path)))
     market_reader = MarketDataReader(catalog=catalog)
-    parent = market_reader.require_latest(US_EQUITY_COVERAGE)
+    parent = market_reader.require_latest(
+        US_EQUITY_COVERAGE,
+        require_price_semantics=True,
+    )
+    parent_manifest = market_reader.verify_version(
+        parent,
+        require_price_semantics=True,
+    )
     parent_target = pd.Timestamp(parent.target_session).normalize()
     if parent_target > target:
         raise DataFoundationError("target session predates the published coverage version")
@@ -486,7 +494,6 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
             "target session exceeds the published Security Master generation"
         )
     if parent_target == target:
-        parent_manifest = market_reader.verify_version(parent)
         if (
             parent_manifest.get("security_master_generation_id")
             != security_generation.generation_id
@@ -531,7 +538,6 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
         / f"run={run_id}"
     )
     run_dir.mkdir(parents=True)
-    parent_manifest = market_reader.verify_version(parent)
     parent_paths, _none_replaced, _none_rebuilt = _parent_partition_paths(
         parent,
         affected_months=set(),
@@ -876,6 +882,14 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
             security_universe=security_universe,
             target_session=target,
             security_master=security_generation,
+            price_semantics=build_price_semantics_contract(
+                source=(
+                    "FMP_FULL_PLUS_DIVIDEND_ADJUSTED_AND_EOD_BULK_"
+                    "WITH_ADJUSTED_CLOSE"
+                ),
+                history_mode="INCREMENTAL_FROM_AUTHENTICATED_PARENT",
+            ),
+            price_semantics_parent_version_id=parent.version_id,
             min_target_coverage=float(settings.min_target_coverage),
             external_checks=[presence_check, identity_delta_check, *quarantine_checks],
             run_id=run_id,

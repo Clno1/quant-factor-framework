@@ -20,7 +20,15 @@ from src.data.broad_coverage import (
     split_coverage_bar_quality,
 )
 from src.data.foundation import DataFoundationError, MarketDataCatalog, MarketDataReader
+from src.data.price_semantics import build_price_semantics_contract
 from src.data.security_master_store import SecurityMasterGeneration
+
+
+def _price_semantics() -> dict:
+    return build_price_semantics_contract(
+        source="TEST_CANONICAL_FIXTURE",
+        history_mode="FULL_REBUILD",
+    )
 
 
 def _security_generation() -> SecurityMasterGeneration:
@@ -413,6 +421,7 @@ def test_provider_off_session_bars_are_quarantined_and_cannot_publish():
                 security_universe=_universe(),
                 target_session="2020-03-31",
                 security_master=_security_generation(),
+                price_semantics=_price_semantics(),
                 min_target_coverage=1.0,
             )
 
@@ -444,6 +453,7 @@ def test_published_quarantine_is_authenticated_by_the_manifest():
             security_universe=_universe(),
             target_session="2020-03-31",
             security_master=_security_generation(),
+            price_semantics=_price_semantics(),
             min_target_coverage=1.0,
             bar_quarantine_path=quarantine_path,
             quality_lineage={"policy": "PROVIDER_BAD_BAR_QUARANTINE_V1"},
@@ -478,6 +488,7 @@ def test_partitioned_coverage_is_readable_and_child_hashes_are_enforced():
             security_universe=_universe(),
             target_session="2020-03-31",
             security_master=_security_generation(),
+            price_semantics=_price_semantics(),
             min_target_coverage=1.0,
         )
         reader = MarketDataReader(catalog=catalog)
@@ -546,6 +557,7 @@ def test_published_coverage_compacts_candidate_batches_into_month_partitions():
             security_universe=_universe(),
             target_session="2020-03-30",
             security_master=_security_generation(),
+            price_semantics=_price_semantics(),
             min_target_coverage=1.0,
         )
 
@@ -613,6 +625,7 @@ def test_bounded_reader_hashes_selected_month_without_rescanning_other_months():
             security_universe=_universe(),
             target_session="2020-03-30",
             security_master=_security_generation(),
+            price_semantics=_price_semantics(),
             min_target_coverage=1.0,
         )
         reader = MarketDataReader(catalog=catalog)

@@ -232,6 +232,71 @@ def _confidence_detail(conf: dict | None, checks_df: pd.DataFrame | None) -> dic
     }
 
 
+def _json_records(frame: pd.DataFrame) -> list[dict[str, Any]]:
+    if frame is None or frame.empty:
+        return []
+    return json.loads(frame.to_json(orient="records", date_format="iso"))
+
+
+def _ic_outcome_detail(
+    ic_summary: dict[str, Any],
+    audit: pd.DataFrame | None,
+) -> dict[str, Any]:
+    summary = ic_summary.get("forward_outcomes") or {}
+    frame = audit if audit is not None else pd.DataFrame()
+    cross_sections = (
+        frame.loc[frame.get("record_type").eq("IC_CROSS_SECTION")]
+        if not frame.empty and "record_type" in frame.columns
+        else pd.DataFrame()
+    )
+    selectively_censored = (
+        int(cross_sections.get("status", pd.Series(dtype=str)).eq("selectively_censored").sum())
+        if not cross_sections.empty
+        else int(ic_summary.get("censored_dates") or 0)
+    )
+    security = (
+        frame.loc[frame.get("record_type").eq("SECURITY_OUTCOME")].copy()
+        if not frame.empty and "record_type" in frame.columns
+        else pd.DataFrame()
+    )
+    exceptional = (
+        security.loc[
+            security.get("status", pd.Series(index=security.index, dtype=str)).isin(
+                {
+                    "RESOLVED_REVIEWED_EVENT",
+                    "UNRESOLVED_MISSING_OUTCOME",
+                    "UNRESOLVED_EVENT_SETTLEMENT",
+                }
+            )
+        ]
+        if not security.empty
+        else pd.DataFrame()
+    )
+    display_rows: list[dict[str, Any]] = []
+    for row in _json_records(exceptional.tail(50)):
+        display_rows.append(
+            {
+                "decision_date": str(row.get("decision_date") or "")[:10],
+                "horizon_date": str(row.get("horizon_date") or "")[:10] or "—",
+                "ticker": row.get("ticker") or "—",
+                "status": row.get("status") or "—",
+                "settlement_method": row.get("settlement_method") or "—",
+                "outcome": _format_pct(row.get("outcome")),
+                "event_reason": row.get("event_reason") or "—",
+            }
+        )
+    return {
+        "available": bool(summary),
+        "ordinary_complete": int(summary.get("ordinary_complete") or 0),
+        "resolved_events": int(summary.get("resolved_reviewed_events") or 0),
+        "right_edge": int(summary.get("right_edge_not_observable") or 0),
+        "unresolved": int(summary.get("unresolved_missing_outcomes") or 0),
+        "selectively_censored_dates": selectively_censored,
+        "hac_lags": int(ic_summary.get("HAC_lags") or 0),
+        "rows": display_rows,
+    }
+
+
 def _resolve_universe(requested: str | None) -> str:
     """规范化 universe 参数：未指定则取注册表中的 PRIMARY。"""
     if requested:
@@ -419,6 +484,10 @@ def factor_detail(
             data.get("confidence"),
             data.get("confidence_checks"),
         ),
+        "outcome_audit": _ic_outcome_detail(
+            data["ic_summary"],
+            data.get("ic_outcome_audit"),
+        ),
         "factor_quality": _factor_quality_summary(factor_values),
         "ic_fig_json": fig_to_json(ic_fig),
         "ic_dist_fig_json": fig_to_json(ic_dist_fig),
@@ -582,6 +651,48 @@ def api_factor_confidence(name: str, universe: str | None = Query(None)):
         "checks": checks.to_dict(orient="records") if checks is not None and not checks.empty else [],
     }
     return JSONResponse(_sanitize(payload))
+
+
+@router.get("/api/factor/{name}/outcomes")
+def api_factor_outcomes(
+    name: str,
+    universe: str | None = Query(None),
+    status: str | None = Query(None),
+    limit: int = Query(500, ge=1, le=5000),
+):
+    universe = _resolve_universe(universe)
+    data = load_factor(name, universe=universe)
+    if not data:
+        raise HTTPException(status_code=404, detail="Factor not found")
+    audit = data.get("ic_outcome_audit")
+    frame = audit.copy() if isinstance(audit, pd.DataFrame) else pd.DataFrame()
+    if status and not frame.empty:
+        if "status" not in frame.columns:
+            frame = frame.iloc[0:0]
+        else:
+            frame = frame.loc[
+                frame["status"].fillna("").astype(str).str.upper().eq(status.upper())
+            ]
+    total = len(frame)
+    records = _json_records(frame.head(limit))
+    return JSONResponse(
+        _sanitize(
+            {
+                "universe": universe,
+                "name": name,
+                "summary": data["ic_summary"].get("forward_outcomes") or {},
+                "censoring": {
+                    "dates": data["ic_summary"].get("censored_dates", 0),
+                    "observations": data["ic_summary"].get(
+                        "censored_observations", 0
+                    ),
+                },
+                "total": total,
+                "limit": limit,
+                "records": records,
+            }
+        )
+    )
 
 
 __all__ = ["router"]

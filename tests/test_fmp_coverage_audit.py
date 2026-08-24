@@ -143,6 +143,19 @@ class FmpDirectoryNormalizationTests(unittest.TestCase):
         self.assertEqual(frame.loc[0, "date"], pd.Timestamp("2026-08-11"))
         self.assertEqual(frame.attrs["invalid_ticker_rows"], 1)
 
+    @patch("src.data.fmp._request")
+    def test_eod_bulk_rejects_missing_adjusted_close(self, request_mock):
+        response = Mock()
+        response.headers = {"content-type": "text/csv"}
+        response.text = (
+            "date,symbol,open,high,low,close,volume\n"
+            "2026-08-11,AAPL,100,101,99,100.5,1000\n"
+        )
+        request_mock.return_value = response
+
+        with self.assertRaisesRegex(RuntimeError, "dividend-adjusted close"):
+            get_eod_bulk("2026-08-11")
+
     @patch("src.data.fmp._get")
     def test_stock_list_is_a_normalized_directory(self, get_mock):
         get_mock.return_value = [

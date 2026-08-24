@@ -6,7 +6,7 @@ from src.backtest.metrics import (
     sharpe_ratio,
     max_drawdown,
 )
-from src.backtest.quintile import QuintileResult
+from src.backtest.quintile import QuintileResult, quintile_backtest as legacy_quintile_backtest
 from src.backtest.double_sort import DoubleSortResult, double_sort_backtest
 from src.backtest.composer import (
     CompositionResult,
@@ -17,21 +17,14 @@ from src.backtest.adhoc import (
     AdhocResult,
     adhoc_compose,
 )
-from src.backtest.integrity import (
-    install_backtest_integrity_adapter,
-    quintile_backtest_integrity,
-)
 from src.backtest.quintile_v2 import quintile_backtest_v2
 
-# Package-level research entry points and the async runner use the strict
-# semantic adapter. Low-level legacy quintile remains importable from
-# src.backtest.quintile for compatibility tests during migration.
-quintile_backtest = quintile_backtest_integrity
-install_backtest_integrity_adapter()
+# Legacy/synthetic callers must opt into the explicit legacy name. The ambiguous
+# package-level ``quintile_backtest`` entry point is intentionally gone.
 
 __all__ = [
     "QuintileResult",
-    "quintile_backtest",
+    "legacy_quintile_backtest",
     "quintile_backtest_v2",
     "DoubleSortResult",
     "double_sort_backtest",

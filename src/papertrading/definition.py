@@ -24,6 +24,8 @@ class PaperTradingValidationError(ValueError):
 STATUS_ACTIVE = "active"
 STATUS_PAUSED = "paused"
 ACCOUNT_STATUSES = (STATUS_ACTIVE, STATUS_PAUSED)
+PAPER_ACCOUNT_SCHEMA_VERSION = 3
+PAPER_ACCOUNTING_METHODOLOGY = "execution_close_plus_dividend_cash_ledger_v1"
 
 ORDER_PENDING = "pending"
 ORDER_FILLED = "filled"
@@ -175,7 +177,8 @@ def create_account_payload(
         "diagnostics": None,
         "data_contract": None,
         "data_request_id": None,
-        "schema_version": 2,
+        "schema_version": PAPER_ACCOUNT_SCHEMA_VERSION,
+        "accounting_methodology": PAPER_ACCOUNTING_METHODOLOGY,
     }
 
 

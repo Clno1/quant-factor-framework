@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 import pandas as pd
+import pytest
 
 from src.data.foundation import (
     DataFoundationError,
@@ -15,6 +16,8 @@ from src.data.foundation import (
     MarketDataReader,
     MarketDataWriter,
     _filter_non_xnys_bars,
+    _rebase_parent_to_fetched_scale,
+    _single_metadata_policy,
     validate_pit_bar_coverage,
 )
 from src.data.access import (
@@ -93,6 +96,95 @@ def test_pit_bar_coverage_replays_compact_removal_events():
     assert daily.observed["active"] == 1
 
 
+def test_metadata_temporal_policy_is_preserved_for_audit():
+    metadata = pd.DataFrame({
+        "classification_policy": [
+            "LATEST_KNOWN_BACKFILL_NOT_PIT",
+            "LATEST_KNOWN_BACKFILL_NOT_PIT",
+        ]
+    })
+    assert _single_metadata_policy(
+        metadata,
+        "classification_policy",
+    ) == "LATEST_KNOWN_BACKFILL_NOT_PIT"
+
+
+def test_incremental_rebase_prevents_false_adjustment_boundary_return():
+    previous = pd.DataFrame({
+        "date": pd.to_datetime(["2026-01-02", "2026-01-05", "2026-01-06"]),
+        "ticker": "AAA",
+        "open": [100.0, 101.0, 102.0],
+        "high": [101.0, 102.0, 103.0],
+        "low": [99.0, 100.0, 101.0],
+        "close": [100.0, 101.0, 102.0],
+        "adj_close": [90.0, 91.0, 92.0],
+        "volume": [1_000.0, 1_100.0, 1_200.0],
+    })
+    fetched = pd.DataFrame({
+        "date": pd.to_datetime(["2026-01-06", "2026-01-07"]),
+        "ticker": "AAA",
+        "open": [102.0, 103.0],
+        "high": [103.0, 104.0],
+        "low": [101.0, 102.0],
+        "close": [102.0, 103.0],
+        # A newly known dividend revised all pre-event adjusted closes by 10%.
+        "adj_close": [82.8, 83.7],
+        "volume": [1_200.0, 1_300.0],
+    })
+
+    rebased, audit = _rebase_parent_to_fetched_scale(previous, fetched)
+    combined = (
+        pd.concat([rebased, fetched], ignore_index=True)
+        .drop_duplicates(["date", "ticker"], keep="last")
+        .sort_values("date")
+    )
+
+    assert audit[0]["anchor_date"] == "2026-01-06"
+    assert audit[0]["scales"]["adj_close"] == pytest.approx(0.9)
+    assert rebased.loc[0, "close"] == pytest.approx(100.0)
+    assert rebased.loc[0, "adj_close"] == pytest.approx(81.0)
+    boundary_return = combined.set_index("date")["adj_close"].pct_change().loc[
+        pd.Timestamp("2026-01-06")
+    ]
+    assert boundary_return == pytest.approx(92.0 / 91.0 - 1.0)
+
+
+def test_incremental_rebase_requires_an_overlap_anchor():
+    previous = pd.DataFrame({
+        "date": pd.to_datetime(["2026-01-02"]),
+        "ticker": ["AAA"],
+        "open": [100.0],
+        "high": [101.0],
+        "low": [99.0],
+        "close": [100.0],
+        "adj_close": [100.0],
+        "volume": [1_000.0],
+    })
+    fetched = previous.assign(date=pd.Timestamp("2026-01-05"))
+
+    with pytest.raises(DataFoundationError, match="no overlap anchor"):
+        _rebase_parent_to_fetched_scale(previous, fetched)
+
+
+def test_incremental_rebase_rejects_nonuniform_overlap_revision():
+    previous = pd.DataFrame({
+        "date": pd.to_datetime(["2026-01-02", "2026-01-05", "2026-01-06"]),
+        "ticker": "AAA",
+        "open": [100.0, 101.0, 102.0],
+        "high": [101.0, 102.0, 103.0],
+        "low": [99.0, 100.0, 101.0],
+        "close": [100.0, 101.0, 102.0],
+        "adj_close": [100.0, 101.0, 102.0],
+        "volume": [1_000.0, 1_100.0, 1_200.0],
+    })
+    fetched = previous.loc[previous["date"].ge("2026-01-05")].copy()
+    fetched.loc[fetched["date"].eq("2026-01-05"), "adj_close"] *= 0.90
+    fetched.loc[fetched["date"].eq("2026-01-06"), "adj_close"] *= 0.80
+
+    with pytest.raises(DataFoundationError, match="non-uniform adj_close revision"):
+        _rebase_parent_to_fetched_scale(previous, fetched)
+
+
 class DataFoundationTests(unittest.TestCase):
     def _components(self, root: Path, fetcher):
         catalog = MarketDataCatalog(root / "catalog.duckdb")
@@ -100,6 +192,7 @@ class DataFoundationTests(unittest.TestCase):
             catalog=catalog,
             lake_dir=root / "lake",
             fetcher=fetcher,
+            fetcher_semantics_source="TEST_CANONICAL_FIXTURE",
         )
         reader = MarketDataReader(catalog=catalog)
         return catalog, writer, reader
@@ -793,8 +886,13 @@ class DataFoundationTests(unittest.TestCase):
             )
             self.assertEqual(
                 set(reader.load_wide_tables("SP500")["close"].columns),
-                {"AAA", "BBB", "CCC"},
+                {"AAA", "BBB", "CCC", "SPY"},
             )
+            manifest = reader.verify_version(
+                result.version,
+                require_price_semantics=True,
+            )
+            self.assertEqual(manifest["support_tickers"], ["SPY"])
 
     def test_pit_event_ledger_is_frozen_and_authenticated(self):
         membership = pd.DataFrame(

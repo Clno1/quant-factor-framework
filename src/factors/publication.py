@@ -9,12 +9,15 @@ from uuid import uuid4
 
 from src.config import CONFIG, PROJECT_ROOT
 from src.data.foundation import DatasetVersion, MarketDataReader
+from src.data.price_semantics import validate_price_semantics_contract
 from src.factors.artifacts import factor_bundle_manifest_path
 from src.utils.identifiers import safe_path_component
 from src.utils.io import atomic_save_json, load_json
 
 
-RESEARCH_PUBLICATION_SCHEMA_VERSION = 2
+RESEARCH_PUBLICATION_SCHEMA_VERSION = 3
+RESEARCH_METHODOLOGY_VERSION = "factor_research_v3_price_hac_censor_aware"
+CONFIDENCE_METHODOLOGY_VERSION = "factor_confidence_v2_hac_censor_aware"
 RESEARCH_PUBLICATION_FILE = "research_publication.json"
 
 
@@ -68,7 +71,7 @@ def _confidence_binding(universe: str, factor_id: str) -> dict[str, Any]:
         not isinstance(report, dict)
         or report.get("factor") != factor_id
         or report.get("verdict") not in {"PASS", "WATCH", "FAIL"}
-        or not report.get("methodology_version")
+        or report.get("methodology_version") != CONFIDENCE_METHODOLOGY_VERSION
     ):
         raise ResearchPublicationError(
             f"Confidence report is invalid for {universe}/{factor_id}"
@@ -92,6 +95,10 @@ def _sha256(path: Path) -> str:
 
 def dataset_version_provenance(version: DatasetVersion) -> dict[str, Any]:
     """Return the immutable market-data identity embedded in factor artifacts."""
+    manifest = MarketDataReader().verify_version(
+        version,
+        require_price_semantics=True,
+    )
     return {
         "backend": "duckdb",
         "version_id": version.version_id,
@@ -104,6 +111,9 @@ def dataset_version_provenance(version: DatasetVersion) -> dict[str, Any]:
         "manifest_sha256": version.manifest_checksum_sha256,
         "row_count": int(version.row_count),
         "ticker_count": int(version.ticker_count),
+        "price_semantics": validate_price_semantics_contract(
+            manifest.get("price_semantics")
+        ),
     }
 
 
@@ -138,6 +148,7 @@ def _load_factor_manifest(
         "universe_sha256",
         "membership_sha256",
         "manifest_sha256",
+        "price_semantics",
     ):
         if data.get(field) != expected_data.get(field):
             raise ResearchPublicationError(
@@ -193,6 +204,7 @@ def publish_factor_research(
         "published_at": datetime.now(timezone.utc).isoformat(),
         "universe": universe,
         "confidence_required": confidence_required,
+        "methodology_version": RESEARCH_METHODOLOGY_VERSION,
         "data_foundation": expected_data,
         "factors": factor_payload,
     }
@@ -224,6 +236,7 @@ def validate_factor_research_publication(
         != RESEARCH_PUBLICATION_SCHEMA_VERSION
         or publication.get("status") != "PUBLISHED"
         or publication.get("universe") != universe
+        or publication.get("methodology_version") != RESEARCH_METHODOLOGY_VERSION
     ):
         raise ResearchPublicationError(
             f"Research publication is invalid for {universe}"
@@ -251,6 +264,7 @@ def validate_factor_research_publication(
         "universe_sha256",
         "membership_sha256",
         "manifest_sha256",
+        "price_semantics",
     ):
         if observed_data.get(field) != expected_data.get(field):
             raise ResearchPublicationError(
@@ -315,7 +329,9 @@ def validate_factor_research_publication(
 
 
 __all__ = [
+    "CONFIDENCE_METHODOLOGY_VERSION",
     "RESEARCH_PUBLICATION_FILE",
+    "RESEARCH_METHODOLOGY_VERSION",
     "RESEARCH_PUBLICATION_SCHEMA_VERSION",
     "ResearchPublicationError",
     "dataset_version_provenance",

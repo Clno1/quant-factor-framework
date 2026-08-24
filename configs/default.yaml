@@ -370,7 +370,7 @@ preprocessing:
   winsorize_method: "mad"          # mad / 3sigma
   winsorize_n: 3                   # MAD 倍数
   standardize: true                # 是否做 Z-score 标准化
-  neutralize_industry: true        # 默认开启行业中性化，剥离 sector 暴露后再做最终 Z-score
+  neutralize_industry: false       # 暂停：现有行业快照不是 PIT；接入有效期行业历史后才能开启
   neutralize_mcap: false           # 需要真实 PIT 市值序列；当前发布版本尚未提供，不能用当前市值制造未来信息
   neutralize_min_obs: 30
 

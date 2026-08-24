@@ -7,8 +7,8 @@ import numpy as np
 import pandas as pd
 
 from src.backtest.metrics import performance_summary
+from src.backtest.membership_exit_v2 import apply_membership_exit_policy_v2
 from src.backtest.quintile import (
-    _apply_membership_exit_policy,
     _resolve_execution,
     build_tradable_mask,
 )
@@ -131,6 +131,10 @@ def double_sort_backtest(
     rebalance_mode: str | None = None,
     open_df: pd.DataFrame | None = None,
     price_df: pd.DataFrame | None = None,
+    execution_open_df: pd.DataFrame | None = None,
+    execution_close_df: pd.DataFrame | None = None,
+    total_return_open_df: pd.DataFrame | None = None,
+    total_return_close_df: pd.DataFrame | None = None,
     volume_df: pd.DataFrame | None = None,
     tradable_mask: pd.DataFrame | None = None,
     membership_mask: pd.DataFrame | None = None,
@@ -152,9 +156,33 @@ def double_sort_backtest(
             "factor_direction must be fixed ex ante as +1 or -1"
         )
 
-    if exec_cfg["timing"] == "next_open":
+    explicit_semantics = all(
+        value is not None and not value.empty
+        for value in (
+            execution_open_df,
+            execution_close_df,
+            total_return_open_df,
+            total_return_close_df,
+        )
+    )
+    if explicit_semantics:
+        execution_open = execution_open_df
+        execution_close = execution_close_df
+        total_return_open = total_return_open_df
+        total_return_close = total_return_close_df
+        held_returns = total_return_open.pct_change(fill_method=None).shift(-1)
+    else:
         if open_df is None or open_df.empty:
-            raise ValueError("double_sort_backtest requires open_df for next_open.")
+            raise ValueError(
+                "double_sort_backtest requires explicit execution/total-return "
+                "matrices for formal next-open research"
+            )
+        # Legacy synthetic callers retain their historical behavior. Formal
+        # run_mvp always supplies the four explicit matrices above.
+        execution_open = open_df
+        execution_close = price_df
+        total_return_open = open_df
+        total_return_close = price_df
         held_returns = open_df.pct_change(fill_method=None).shift(-1)
 
     common_dates = factor_df.index.intersection(control_df.index).intersection(
@@ -172,8 +200,8 @@ def double_sort_backtest(
             index=common_dates,
             columns=common_cols,
             returns_df=returns_df,
-            price_df=price_df,
-            open_df=open_df,
+            price_df=execution_close,
+            open_df=execution_open,
             volume_df=volume_df,
             timing=exec_cfg["timing"],
         )
@@ -194,14 +222,16 @@ def double_sort_backtest(
     control_held = control_assign.shift(1)
     factor_held = factor_assign.shift(1)
     held_cell = control_held * 100.0 + factor_held
-    r, _ = _apply_membership_exit_policy(
+    r, _ = apply_membership_exit_policy_v2(
         r,
         held_cell,
         membership_mask=membership_mask,
         membership_events=membership_events,
         rebalance_dates=rebal_dates,
-        open_df=open_df,
-        close_df=price_df,
+        execution_open_df=execution_open,
+        execution_close_df=execution_close,
+        total_return_open_df=total_return_open,
+        total_return_close_df=total_return_close,
         policy=exec_cfg["membership_exit_policy"],
     )
 
@@ -253,6 +283,11 @@ def double_sort_backtest(
             "rebalance_days": rebalance_days,
             "rebalance_mode": rebalance_mode,
             "execution": exec_cfg,
+            "price_semantics": (
+                "EXPLICIT_EXECUTION_AND_TOTAL_RETURN_V1"
+                if explicit_semantics
+                else "LEGACY_SYNTHETIC"
+            ),
         },
     )
 

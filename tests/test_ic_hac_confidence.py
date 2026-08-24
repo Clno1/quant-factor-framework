@@ -8,10 +8,14 @@ from src.analysis.confidence_hac import confidence_ic_stats_hac
 
 
 def test_confidence_module_is_routed_to_hac_estimator() -> None:
-    # Importing the src.analysis package installs the formal inference adapter.
-    import src.analysis  # noqa: F401
-
-    assert confidence_module._ic_stats is confidence_ic_stats_hac
+    ic = pd.Series(
+        np.linspace(-0.02, 0.03, 100),
+        index=pd.bdate_range("2024-01-02", periods=100),
+    )
+    ic.attrs["forward_periods"] = 5
+    direct = confidence_module._ic_stats(ic, direction_sign=1)
+    expected = confidence_ic_stats_hac(ic, direction_sign=1)
+    assert direct == expected
 
 
 def test_confidence_hac_uses_forward_horizon_minus_one_lags() -> None:

@@ -5,6 +5,7 @@ from datetime import date, datetime, timezone
 import pytest
 
 from src.data.foundation import DatasetVersion
+from src.data.price_semantics import build_price_semantics_contract
 import src.factors.publication as publication
 from src.utils.io import atomic_save_json
 
@@ -29,6 +30,8 @@ def _version(version_id: str = "v1") -> DatasetVersion:
         membership_checksum_sha256="membership-sha",
         manifest_path="manifest.json",
         checksum_sha256="bars-sha",
+        universe_checksum_sha256="universe-sha",
+        manifest_checksum_sha256="manifest-sha",
     )
 
 
@@ -40,6 +43,16 @@ def _redirect(monkeypatch, tmp_path):
         lambda factor_id, universe: (
             tmp_path / universe / "factors" / factor_id / "manifest.json"
         ),
+    )
+    monkeypatch.setattr(
+        publication.MarketDataReader,
+        "verify_version",
+        lambda self, version, **kwargs: {
+            "price_semantics": build_price_semantics_contract(
+                source="TEST_CANONICAL_FIXTURE",
+                history_mode="FULL_REBUILD",
+            )
+        },
     )
 
 
@@ -65,7 +78,7 @@ def _write_confidence(tmp_path, *, verdict="PASS"):
         {
             "factor": "MOM",
             "verdict": verdict,
-            "methodology_version": "test-v1",
+            "methodology_version": publication.CONFIDENCE_METHODOLOGY_VERSION,
             "generated_at": "2026-07-31T23:00:00Z",
             "summary": {},
         },

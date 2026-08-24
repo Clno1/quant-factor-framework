@@ -31,7 +31,7 @@ class _MemoryReader:
         }
         self.calls: list[tuple[str, tuple[str, ...], str]] = []
 
-    def require_latest(self, universe: str):
+    def require_latest(self, universe: str, **kwargs):
         return self.versions[universe]
 
     def load_bars(self, universe: str, *, tickers, version):

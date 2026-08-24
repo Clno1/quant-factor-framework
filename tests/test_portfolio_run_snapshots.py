@@ -113,7 +113,7 @@ def test_paper_creation_deep_freezes_complete_inputs(monkeypatch, tmp_path):
     restored = paper_store.load_account(account["id"])
 
     assert restored is not None
-    assert restored["schema_version"] == 2
+    assert restored["schema_version"] == 3
     assert restored["research_evidence_snapshot"]["components"][0][
         "verdict"
     ] == "ROBUST"

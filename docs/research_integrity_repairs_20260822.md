@@ -21,6 +21,13 @@ A next-open portfolio therefore enters/exits using executable prices while its
 holding PnL is measured with total-return opens. This preserves dividends without
 pretending a dividend-adjusted price was executable.
 
+Every new market-data manifest carries an authenticated `price_semantics`
+contract. A legacy manifest cannot be upgraded merely because it has a column
+named `adj_close`: named universes require `--full-rebuild`, and broad coverage
+requires a new full backfill. Incremental publication is accepted only from an
+already authenticated parent. The overlap window must imply one consistent
+scale per OHLCV field; otherwise publication fails and requests a full rebuild.
+
 ## 2. Historical neutralization
 
 `LATEST_KNOWN_BACKFILL_NOT_PIT` sector metadata is not a valid historical
@@ -32,8 +39,10 @@ classification exists, industry neutralization is skipped and the audit records:
 - the observed temporal policy
 - an explicit non-PIT skip reason
 
-Research continues without contaminated industry residualization. Once a true
-date x ticker PIT classification matrix is published with
+The production default is therefore `neutralize_industry: false`. If a formal
+research run explicitly requests industry neutralization but no PIT matrix is
+actually applied, publication fails instead of silently publishing a different
+model. Once a true date x ticker PIT classification matrix is published with
 `classification_policy=PIT_EFFECTIVE_DATED`, the neutralizer can use it.
 
 Market-cap neutralization is fail-closed. If requested, it requires a PIT date x
@@ -43,9 +52,11 @@ raises `NeutralizationDataError`.
 ## 3. Benchmark contract
 
 Named research universes use the registry benchmark (`SP500 -> SPY`,
-`NASDAQ100 -> QQQ`, etc.). The loader first looks inside the primary immutable
-dataset version; if absent, it resolves the ticker from the immutable
-`US_EQUITY_COVERAGE` publication.
+`NASDAQ100 -> QQQ`, etc.). New named-universe versions include the registered
+ETF as a non-member support ticker, so strategy bars, benchmark bars and target
+session are normally bound to one immutable version. The exact-session
+`US_EQUITY_COVERAGE` publication is a fail-closed fallback, never a stale-date
+substitute.
 
 Formal price-semantics-aware backtests require an explicit benchmark return
 series. They no longer silently replace SPY/QQQ with an equal-weight universe.
@@ -83,10 +94,14 @@ selectively missing is no longer recomputed after `dropna()` on survivors.
 Instead the date is invalidated by default (or raises under `censor_policy=fail`)
 and diagnostics retain censored dates, counts and ticker samples.
 
-`compute_ic(..., resolved_forward_returns=...)` accepts an audited forward-outcome
-matrix when acquisition, bankruptcy, delisting or other terminal settlements are
-resolved explicitly. A reviewed -100% outcome remains a valid -100% outcome;
-forward compounding no longer turns it into a log-space infinity.
+The formal pipeline now builds and persists that audited forward-outcome matrix.
+Ordinary observations compound total returns; reviewed bankruptcy/receivership
+events settle at -100%; reviewed acquisitions use the last tradable total-return
+close. Unknown gaps remain unresolved. Right-edge horizons, event resolutions,
+unresolved securities and invalidated IC cross-sections are stored in
+`ic_outcome_audit.parquet` and shown on the factor detail page. A reviewed -100%
+outcome remains a valid -100% outcome; compounding never turns it into a
+log-space infinity.
 
 ## 7. Event-level breakout / cup-handle backtest
 
@@ -102,6 +117,9 @@ historical events:
 7. round-trip cost drag is explicit;
 8. unavailable entry/exit horizons are marked censored, never dropped silently;
 9. outputs include overall, year and optional market-regime summaries.
+10. scanner state and cooldown are initialized before the requested study start;
+11. the loader extends beyond the last signal date far enough to observe the
+    configured forward horizons.
 
 Example:
 
@@ -116,6 +134,26 @@ python scripts/run_breakout_event_backtest.py \
 
 The CLI writes `events.csv`, `summary.json`, and group summaries under
 `outputs/breakouts/historical_event_backtest/` by default.
+
+## 8. Paper-account price accounting
+
+Paper positions are marked with executable close, not adjusted close. Economic
+cash distributions inferred from the bound execution/total-return series are
+written once to an append-only `cash_events` ledger and included when cash and
+positions are reconstructed. Deterministic event ids make retries idempotent,
+and a changed historical distribution fails instead of rewriting an old ledger.
+
+This is an ex-date economic accrual, not proof of a broker payment date. A future
+broker-grade implementation still needs an explicit versioned corporate-action
+feed for payment dates, withholding tax, stock dividends, splits and other
+non-cash actions.
+
+## Migration
+
+The schema and methodology changes deliberately invalidate old market-data,
+factor-publication and paper-account contracts. Follow
+[`research_integrity_migration_20260824.md`](research_integrity_migration_20260824.md)
+before deploying this code to production.
 
 ## Validation
 

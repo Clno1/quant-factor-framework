@@ -132,7 +132,10 @@ def collect_current_observation() -> dict[str, Any]:
         CONFIG.abs_path(str(CONFIG.data.foundation.catalog_path))
     )
     market_reader = MarketDataReader(catalog=catalog)
-    coverage = market_reader.require_latest(US_EQUITY_COVERAGE)
+    coverage = market_reader.require_latest(
+        US_EQUITY_COVERAGE,
+        require_price_semantics=True,
+    )
     coverage_index = _coverage_index(coverage)
 
     security_settings = CONFIG.data.security_master

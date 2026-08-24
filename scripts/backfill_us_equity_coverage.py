@@ -36,6 +36,10 @@ from src.data.broad_coverage import (  # noqa: E402
     split_coverage_bar_quality,
 )
 from src.data.fmp import get_canonical_historical_ohlcv  # noqa: E402
+from src.data.price_semantics import (  # noqa: E402
+    FMP_CANONICAL_SOURCE,
+    build_price_semantics_contract,
+)
 from src.data.foundation import (  # noqa: E402
     MarketDataCatalog,
     MarketDataReader,
@@ -406,7 +410,10 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         and published is not None
         and published.target_session == target.date()
     ):
-        manifest = MarketDataReader(catalog=catalog).verify_version(published)
+        manifest = MarketDataReader(catalog=catalog).verify_version(
+            published,
+            require_price_semantics=True,
+        )
         if (
             manifest.get("security_master_generation_id")
             == generation.generation_id
@@ -761,6 +768,10 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             security_universe=universe,
             target_session=target,
             security_master=generation,
+            price_semantics=build_price_semantics_contract(
+                source=FMP_CANONICAL_SOURCE,
+                history_mode="FULL_REBUILD",
+            ),
             min_target_coverage=float(settings.min_target_coverage),
             external_checks=[presence_check, alias_check, *quarantine_checks],
             run_id=run_id,

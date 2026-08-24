@@ -42,6 +42,13 @@ from src.data.pit import (
     load_point_in_time_membership,
     point_in_time_required,
 )
+from src.data.price_semantics import (
+    FMP_CANONICAL_SOURCE,
+    PriceSemantics,
+    PriceSemanticsError,
+    build_price_semantics_contract,
+    validate_price_semantics_contract,
+)
 from src.data.universe import get_universe
 from src.utils.date_utils import parse_date_str
 from src.utils.file_lock import file_lock
@@ -883,6 +890,143 @@ def _normalize_download(
     )
 
 
+def _single_metadata_policy(metadata: pd.DataFrame, column: str) -> str | None:
+    if column not in metadata.columns:
+        return None
+    values = sorted(
+        set(metadata[column].dropna().astype(str).str.strip().str.upper()) - {""}
+    )
+    if len(values) == 1:
+        return values[0]
+    return "MIXED" if values else None
+
+
+def _rebase_parent_to_fetched_scale(
+    previous: pd.DataFrame,
+    fetched: pd.DataFrame,
+) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
+    """Put the immutable parent history on the provider's current price scale.
+
+    Dividend-adjusted vendors commonly revise every pre-ex-date adjusted close
+    when a new distribution occurs. Split-adjusted OHLC may likewise be revised
+    after a split. Replacing only a short overlap would therefore create a false
+    return at the overlap boundary. For each existing ticker we authenticate an
+    overlap anchor, scale only the older parent rows to that anchor, and let the
+    freshly downloaded overlap win during de-duplication.
+
+    A missing overlap is a hard error: without an anchor the two histories cannot
+    be proven to use compatible units.
+    """
+    if previous.empty or fetched.empty:
+        return previous.copy(), []
+    parent = previous.copy()
+    parent["date"] = pd.to_datetime(parent["date"]).dt.normalize()
+    fresh = fetched.copy()
+    fresh["date"] = pd.to_datetime(fresh["date"]).dt.normalize()
+    audit: list[dict[str, Any]] = []
+
+    parent_tickers = set(parent["ticker"].astype(str))
+    for ticker, fresh_rows in fresh.groupby("ticker", sort=False):
+        ticker = str(ticker)
+        if ticker not in parent_tickers:
+            continue
+        parent_rows = parent.loc[parent["ticker"].astype(str).eq(ticker)]
+        overlap = sorted(
+            set(parent_rows["date"]).intersection(set(fresh_rows["date"]))
+        )
+        if not overlap:
+            raise DataFoundationError(
+                f"{ticker}: incremental canonical history has no overlap anchor; "
+                "run a full rebuild instead of concatenating incompatible scales"
+            )
+        anchor = pd.Timestamp(overlap[0]).normalize()
+        old_overlap = (
+            parent_rows.drop_duplicates("date", keep="last")
+            .set_index("date")
+            .reindex(overlap)
+        )
+        new_overlap = (
+            fresh_rows.drop_duplicates("date", keep="last")
+            .set_index("date")
+            .reindex(overlap)
+        )
+        older = parent["ticker"].astype(str).eq(ticker) & parent["date"].lt(anchor)
+        scales: dict[str, float] = {}
+        max_relative_deviation: dict[str, float] = {}
+        for field in ("open", "high", "low", "close", "adj_close", "volume"):
+            old_values = pd.to_numeric(old_overlap[field], errors="coerce")
+            new_values = pd.to_numeric(new_overlap[field], errors="coerce")
+            if (
+                old_values.isna().any()
+                or new_values.isna().any()
+                or not np.isfinite(old_values.to_numpy()).all()
+                or not np.isfinite(new_values.to_numpy()).all()
+            ):
+                raise DataFoundationError(
+                    f"{ticker}: non-finite overlap values for {field} in "
+                    f"{anchor.date()}..{pd.Timestamp(overlap[-1]).date()}"
+                )
+            if field != "volume" and (
+                old_values.le(0).any() or new_values.le(0).any()
+            ):
+                raise DataFoundationError(
+                    f"{ticker}: non-positive overlap values for {field}"
+                )
+            if field == "volume" and (
+                old_values.lt(0).any() or new_values.lt(0).any()
+            ):
+                raise DataFoundationError(
+                    f"{ticker}: negative overlap volume"
+                )
+            if field == "volume":
+                mismatched_zero = old_values.eq(0) ^ new_values.eq(0)
+                if mismatched_zero.any():
+                    raise DataFoundationError(
+                        f"{ticker}: inconsistent zero-volume overlap prevents "
+                        "authenticated incremental rebasing; run a full rebuild"
+                    )
+                usable = old_values.gt(0) & new_values.gt(0)
+            else:
+                usable = pd.Series(True, index=old_values.index)
+            ratios = new_values.loc[usable] / old_values.loc[usable]
+            if ratios.empty:
+                scale = 1.0
+            else:
+                scale = float(ratios.median())
+            if not np.isfinite(scale) or scale <= 0:
+                raise DataFoundationError(
+                    f"{ticker}: invalid {field} scale in overlap window"
+                )
+            deviation = (
+                float((ratios / scale - 1.0).abs().max())
+                if not ratios.empty
+                else 0.0
+            )
+            if deviation > 1e-5:
+                raise DataFoundationError(
+                    f"{ticker}: non-uniform {field} revision in overlap window "
+                    f"(max_relative_deviation={deviation:.6g}); a single scale "
+                    "cannot authenticate the parent history, run a full rebuild"
+                )
+            parent.loc[older, field] = pd.to_numeric(
+                parent.loc[older, field], errors="coerce"
+            ) * scale
+            scales[field] = float(scale)
+            max_relative_deviation[field] = deviation
+        audit.append(
+            {
+                "ticker": ticker,
+                "anchor_date": anchor.date().isoformat(),
+                "overlap_end_date": pd.Timestamp(overlap[-1]).date().isoformat(),
+                "overlap_rows": len(overlap),
+                "older_rows_rebased": int(older.sum()),
+                "scales": scales,
+                "max_relative_deviation": max_relative_deviation,
+            }
+        )
+    return parent, audit
+
+
 def _filter_non_xnys_bars(
     bars: pd.DataFrame,
     *,
@@ -1344,11 +1488,22 @@ class MarketDataWriter:
         catalog: MarketDataCatalog | None = None,
         lake_dir: str | Path | None = None,
         fetcher: Fetcher | None = None,
+        fetcher_semantics_source: str | None = None,
         profile_fetcher: Callable[[str], Mapping[str, Any] | None] | None = None,
     ):
         self.catalog = catalog or MarketDataCatalog()
         self.lake_dir = Path(lake_dir) if lake_dir is not None else default_lake_dir()
         self.fetcher = fetcher
+        if fetcher is not None and not str(fetcher_semantics_source or "").strip():
+            raise ValueError(
+                "A custom market-data fetcher must declare fetcher_semantics_source; "
+                "column names alone do not prove price semantics"
+            )
+        self.fetcher_semantics_source = (
+            str(fetcher_semantics_source).strip().upper()
+            if fetcher_semantics_source is not None
+            else FMP_CANONICAL_SOURCE
+        )
         self.profile_fetcher = profile_fetcher
 
     def _fetcher(self) -> Fetcher:
@@ -1364,6 +1519,7 @@ class MarketDataWriter:
         *,
         target_session: str | date | pd.Timestamp | None = None,
         force: bool = False,
+        full_rebuild: bool = False,
         workers: int | None = None,
         universe_frame: pd.DataFrame | None = None,
         initial_start: str | date | pd.Timestamp | None = None,
@@ -1401,10 +1557,16 @@ class MarketDataWriter:
                         f"[{universe}] target {target_date} predates published "
                         f"version {latest.target_session}"
                     )
+                if latest is not None and not full_rebuild:
+                    MarketDataReader(catalog=self.catalog).verify_version(
+                        latest,
+                        require_price_semantics=True,
+                    )
                 if (
                     latest is not None
                     and latest.target_session == target_date
                     and not force
+                    and not full_rebuild
                 ):
                     self.catalog.finish_run(run_id, status="NOOP")
                     return IngestionResult(
@@ -1432,7 +1594,7 @@ class MarketDataWriter:
                     else parse_date_str(CONFIG.date_range.start)
                 ).normalize()
                 start = configured_start
-                if latest is not None and latest.min_date is not None:
+                if latest is not None and latest.min_date is not None and not full_rebuild:
                     start = min(
                         configured_start,
                         pd.Timestamp(latest.min_date).normalize(),
@@ -1528,9 +1690,18 @@ class MarketDataWriter:
                             f"the universe snapshot. missing={missing}, "
                             f"extra={extra}"
                         )
-                all_tickers = sorted(current_tickers | historical)
+                support_tickers: set[str] = set()
+                try:
+                    from src.research_universes import research_universe_registry
+
+                    benchmark = research_universe_registry().get(universe).benchmark
+                except (KeyError, ValueError):
+                    benchmark = None
+                if benchmark:
+                    support_tickers.add(str(benchmark).strip().upper())
+                all_tickers = sorted(current_tickers | historical | support_tickers)
                 previous_metadata = None
-                if latest is not None:
+                if latest is not None and not full_rebuild:
                     previous_universe_path = _resolve_path(latest.universe_path)
                     if previous_universe_path.exists():
                         previous_metadata = pd.read_parquet(previous_universe_path)
@@ -1551,7 +1722,7 @@ class MarketDataWriter:
                 )
 
                 previous = pd.DataFrame(columns=BAR_COLUMNS)
-                if latest is not None:
+                if latest is not None and not full_rebuild:
                     previous_path = _resolve_path(latest.bars_path)
                     if not previous_path.exists():
                         raise DataFoundationError(
@@ -1648,6 +1819,10 @@ class MarketDataWriter:
                     rows=fetched,
                     failures=sorted(failures),
                 )
+                previous, semantic_rebase_audit = _rebase_parent_to_fetched_scale(
+                    previous,
+                    fetched,
+                )
                 candidate = pd.concat([previous, fetched], ignore_index=True)
                 candidate["date"] = pd.to_datetime(
                     candidate["date"], errors="coerce"
@@ -1730,6 +1905,24 @@ class MarketDataWriter:
                         f"{fetched_coverage:.2%}",
                     )
                 )
+                support_covered = support_tickers & fetched_target_tickers
+                checks.append(
+                    QualityCheck(
+                        "support_ticker_target_coverage",
+                        support_covered == support_tickers,
+                        {
+                            "covered": sorted(support_covered),
+                            "required": sorted(support_tickers),
+                            "missing": sorted(support_tickers - support_covered),
+                        },
+                        {"missing": []},
+                        (
+                            "all registered benchmark support tickers are fresh"
+                            if support_covered == support_tickers
+                            else "registered benchmark support tickers are missing"
+                        ),
+                    )
+                )
                 passed = all(check.passed for check in checks)
                 coverage_check = next(
                     check
@@ -1746,7 +1939,7 @@ class MarketDataWriter:
                 version_id = uuid4().hex
                 created_at = _utc_now()
                 manifest = {
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "version_id": version_id,
                     "run_id": run_id,
                     "universe": universe,
@@ -1757,6 +1950,21 @@ class MarketDataWriter:
                     "row_count": len(candidate),
                     "ticker_count": candidate["ticker"].nunique(),
                     "current_ticker_count": len(current_tickers),
+                    "support_tickers": sorted(support_tickers),
+                    "price_semantics": build_price_semantics_contract(
+                        source=self.fetcher_semantics_source,
+                        history_mode=(
+                            "FULL_REBUILD"
+                            if full_rebuild or latest is None
+                            else "INCREMENTAL_FROM_AUTHENTICATED_PARENT"
+                        ),
+                    ),
+                    "price_semantics_parent_version_id": (
+                        latest.version_id
+                        if latest is not None and not full_rebuild
+                        else None
+                    ),
+                    "price_semantics_rebase_audit": semantic_rebase_audit,
                     "pit_membership_source": pit_path,
                     "pit_membership_source_sha256": (
                         _file_sha256(Path(pit_path))
@@ -1870,6 +2078,7 @@ class MarketDataReader:
         universe: str,
         *,
         verify_partition_children: bool = True,
+        require_price_semantics: bool = False,
     ) -> DatasetVersion:
         universe = safe_path_component(universe.upper(), label="universe")
         version = self.catalog.latest_version(universe)
@@ -1882,6 +2091,7 @@ class MarketDataReader:
         self.verify_version(
             version,
             verify_partition_children=verify_partition_children,
+            require_price_semantics=require_price_semantics,
         )
         return version
 
@@ -1891,6 +2101,7 @@ class MarketDataReader:
         version_id: str,
         *,
         verify_partition_children: bool = True,
+        require_price_semantics: bool = False,
     ) -> DatasetVersion:
         universe = safe_path_component(universe.upper(), label="universe")
         version = self.catalog.get_version(version_id, universe=universe)
@@ -1901,6 +2112,7 @@ class MarketDataReader:
         self.verify_version(
             version,
             verify_partition_children=verify_partition_children,
+            require_price_semantics=require_price_semantics,
         )
         return version
 
@@ -1909,6 +2121,7 @@ class MarketDataReader:
         version: DatasetVersion,
         *,
         verify_partition_children: bool = True,
+        require_price_semantics: bool = False,
     ) -> dict[str, Any]:
         """Authenticate a publication and, by default, every child partition.
 
@@ -1981,6 +2194,16 @@ class MarketDataReader:
                 f"[{version.universe}] manifest/catalog mismatch for "
                 f"{version.version_id}: {mismatches}"
             )
+        if require_price_semantics:
+            try:
+                validate_price_semantics_contract(manifest.get("price_semantics"))
+            except PriceSemanticsError as exc:
+                raise DataFoundationError(
+                    f"[{version.universe}] version {version.version_id} predates "
+                    "the authenticated price-semantics contract. A full immutable "
+                    "history rebuild is required; legacy adj_close values cannot be "
+                    "upgraded from their column name."
+                ) from exc
         if manifest.get("bars_storage_type") == "PARTITIONED_PARQUET_V1":
             self._load_partition_index(
                 version,
@@ -2204,7 +2427,7 @@ class MarketDataReader:
     ) -> pd.DataFrame | None:
         """Load the authenticated PIT add/remove event ledger, when published."""
         selected = self._resolve_version(universe, version)
-        manifest = self.verify_version(selected)
+        manifest = self.verify_version(selected, require_price_semantics=True)
         events_name = manifest.get("membership_events_path")
         events_sha256 = manifest.get("membership_events_sha256")
         if not events_name:
@@ -2333,7 +2556,28 @@ class MarketDataReader:
             matrix.index.name = "date"
             matrix.columns.name = "ticker"
             out[field] = matrix.sort_index().reindex(columns=order)
-        out["returns"] = out["adj_close"].pct_change(fill_method=None)
+        semantics = PriceSemantics.from_wide(out)
+        out["execution_open"] = semantics.execution_open
+        out["execution_close"] = semantics.execution_close
+        out["total_return_open"] = semantics.total_return_open
+        out["total_return_close"] = semantics.total_return_close
+        out["total_return_returns"] = semantics.total_returns
+        out["returns"] = semantics.total_returns
+        semantic_contract = validate_price_semantics_contract(
+            manifest.get("price_semantics")
+        )
+        for key in (
+            "execution_open",
+            "execution_close",
+            "total_return_open",
+            "total_return_close",
+            "total_return_returns",
+            "returns",
+        ):
+            out[key].attrs["price_semantics_contract"] = dict(semantic_contract)
+        out["adj_close"].attrs["price_semantics_contract"] = dict(
+            semantic_contract
+        )
 
         metadata = self.load_universe(
             universe,
@@ -2349,15 +2593,24 @@ class MarketDataReader:
             .rename("sector")
             .to_frame()
         )
+        sector.attrs["classification_policy"] = _single_metadata_policy(
+            metadata,
+            "classification_policy",
+        )
         out["sector"] = sector
         if "market_cap" in metadata.columns:
-            out["market_cap"] = (
+            market_cap = (
                 metadata.drop_duplicates("ticker", keep="last")
                 .set_index("ticker")["market_cap"]
                 .reindex(order)
                 .rename("market_cap")
                 .to_frame()
             )
+            market_cap.attrs["market_cap_policy"] = _single_metadata_policy(
+                metadata,
+                "market_cap_policy",
+            )
+            out["market_cap"] = market_cap
         if require_open and (
             out["open"].empty or out["open"].isna().all(axis=None)
         ):

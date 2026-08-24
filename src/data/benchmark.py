@@ -5,7 +5,7 @@ fallback. Named research universes obtain their benchmark ticker from the
 version-controlled research-universe registry (for example SP500 -> SPY and
 NASDAQ100 -> QQQ). The loader first looks for that ticker in the primary
 immutable dataset version and otherwise resolves a deterministic immutable
-US-equity coverage version as of the primary dataset's target session.
+coverage version for the exact same target session.
 """
 from __future__ import annotations
 
@@ -113,7 +113,11 @@ def _validate_pinned_contract(
     version_id = str(payload.get("dataset_version_id") or "").strip()
     if not data_universe or not version_id:
         raise BenchmarkDataError("Pinned benchmark contract is missing version identity")
-    version = reader.require_version(data_universe, version_id)
+    version = reader.require_version(
+        data_universe,
+        version_id,
+        require_price_semantics=True,
+    )
     expected = {
         "dataset_run_id": version.run_id,
         "target_session": version.target_session.isoformat(),
@@ -128,18 +132,18 @@ def _validate_pinned_contract(
     return version
 
 
-def _published_version_asof(
+def _published_version_for_session(
     reader: MarketDataReader,
     universe: str,
     target_session: date,
 ) -> DatasetVersion | None:
-    """Return a deterministic immutable publication at/before target_session.
+    """Return a deterministic immutable publication for the exact target session.
 
-    The mutable `published_versions` pointer is deliberately not used here. For
-    a fixed primary dataset target session, we pick the newest available target
-    date and, if that date was republished, the earliest immutable publication.
-    Future publications therefore cannot silently change an old backtest's
-    benchmark identity.
+    The mutable `published_versions` pointer is deliberately not used here. A
+    stale ETF observation is not a valid benchmark for a newer strategy
+    publication. If the exact session was corrected and republished, bind the
+    newest immutable publication; the selected version id is then frozen in the
+    task contract.
     """
     catalog = reader.catalog
     if not catalog.path.exists():
@@ -153,8 +157,8 @@ def _published_version_asof(
             FROM dataset_versions
             WHERE universe = ?
               AND status = 'PUBLISHED'
-              AND target_session <= ?
-            ORDER BY target_session DESC, created_at ASC, version_id ASC
+              AND target_session = ?
+            ORDER BY created_at DESC, version_id DESC
             LIMIT 1
             """,
             [str(universe).upper(), target_session],
@@ -164,7 +168,7 @@ def _published_version_asof(
     if row is None:
         return None
     version = catalog._version_from_row(row)  # noqa: SLF001
-    reader.verify_version(version)
+    reader.verify_version(version, require_price_semantics=True)
     return version
 
 
@@ -173,6 +177,7 @@ def _ticker_exists_in_version(
     version: DatasetVersion,
     ticker: str,
 ) -> bool:
+    reader.verify_version(version, require_price_semantics=True)
     sample = reader.load_bars(
         version.universe,
         tickers=[ticker],
@@ -196,27 +201,35 @@ def _resolve_unpinned_source(
         return ticker, primary_version, "PRIMARY_DATASET"
 
     if primary_version is not None:
-        version = _published_version_asof(
+        version = _published_version_for_session(
             reader,
             US_EQUITY_COVERAGE,
             primary_version.target_session,
         )
     else:
         try:
-            version = reader.require_latest(US_EQUITY_COVERAGE)
+            version = reader.require_latest(
+                US_EQUITY_COVERAGE,
+                require_price_semantics=True,
+            )
         except DataFoundationError:
             version = None
     if version is None:
         raise BenchmarkDataError(
             f"Registered benchmark {ticker} is not present in the primary "
             "publication and no deterministic immutable US_EQUITY_COVERAGE "
-            "publication exists on/before the primary target session. Publish "
+            "publication exists for the exact primary target session. Publish "
             "benchmark coverage before running a formal backtest."
         )
     if not _ticker_exists_in_version(reader, version, ticker):
         raise BenchmarkDataError(
             f"Resolved immutable benchmark publication {version.version_id} "
             f"does not contain {ticker} on target session {version.target_session}"
+        )
+    if primary_version is not None and version.target_session != primary_version.target_session:
+        raise BenchmarkDataError(
+            f"Benchmark publication target {version.target_session} does not match "
+            f"primary target {primary_version.target_session}"
         )
     return ticker, version, "US_EQUITY_COVERAGE"
 
@@ -237,6 +250,15 @@ def resolve_registered_benchmark_contract(
             ticker=ticker,
             reader=reader,
         )
+        if (
+            primary_version is not None
+            and version.target_session != primary_version.target_session
+        ):
+            raise BenchmarkDataError(
+                "Pinned benchmark target session does not match the primary "
+                f"publication: benchmark={version.target_session} "
+                f"primary={primary_version.target_session}"
+            )
         source = str(pinned_contract.get("source") or "PINNED")
         if not _ticker_exists_in_version(reader, version, ticker):
             raise BenchmarkDataError(
@@ -276,6 +298,7 @@ def load_registered_benchmark(
     version = reader.require_version(
         contract.data_universe,
         contract.dataset_version_id,
+        require_price_semantics=True,
     )
     bars = reader.load_bars(
         version.universe,

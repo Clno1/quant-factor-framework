@@ -6,16 +6,19 @@ import pandas as pd
 import pytest
 
 import src.backtest.runner as runner_module
-from src.backtest.integrity import quintile_backtest_integrity
-from src.data.access import DataContract
-import src.data.integrity as data_integrity
-from src.data.price_semantics import PriceSemantics
+from src.backtest.quintile_v2 import quintile_backtest_v2
+from src.data.access import DataContract, _resolve_bundle_benchmark
+from src.data.price_semantics import PriceSemantics, build_price_semantics_contract
 from src.research_universes import research_universe_registry
 
 
-def _contract(version_id: str = "TEST_VERSION") -> DataContract:
+def _contract(
+    version_id: str = "TEST_VERSION",
+    *,
+    benchmark: dict | None = None,
+) -> DataContract:
     return DataContract(
-        schema_version=2,
+        schema_version=3,
         requested_universe="SP500",
         data_universe="SP500",
         dataset_version_id=version_id,
@@ -29,6 +32,11 @@ def _contract(version_id: str = "TEST_VERSION") -> DataContract:
         coverage={},
         universe_sha256="universe",
         manifest_sha256="manifest",
+        price_semantics=build_price_semantics_contract(
+            source="TEST_CANONICAL_FIXTURE",
+            history_mode="FULL_REBUILD",
+        ),
+        benchmark=benchmark,
     )
 
 
@@ -40,7 +48,6 @@ def test_registry_benchmarks_are_explicit() -> None:
 
 def test_data_contract_to_dict_includes_bound_benchmark_publication() -> None:
     version_id = "TEST_VERSION"
-    key = ("SP500", version_id)
     benchmark = {
         "schema_version": 1,
         "ticker": "SPY",
@@ -52,24 +59,14 @@ def test_data_contract_to_dict_includes_bound_benchmark_publication() -> None:
         "manifest_sha256": "coverage-manifest",
         "source": "US_EQUITY_COVERAGE",
     }
-    with data_integrity._LOCK:
-        previous = data_integrity._BENCHMARK_CONTRACTS.get(key)
-        data_integrity._BENCHMARK_CONTRACTS[key] = benchmark
-    try:
-        payload = _contract(version_id).to_dict()
-    finally:
-        with data_integrity._LOCK:
-            if previous is None:
-                data_integrity._BENCHMARK_CONTRACTS.pop(key, None)
-            else:
-                data_integrity._BENCHMARK_CONTRACTS[key] = previous
+    payload = _contract(version_id, benchmark=benchmark).to_dict()
     assert payload["benchmark"]["ticker"] == "SPY"
     assert payload["benchmark"]["dataset_version_id"] == "coverage-v1"
     assert payload["benchmark"]["bars_sha256"] == "coverage-bars"
 
 
-def test_async_runner_is_routed_to_integrity_backtest() -> None:
-    assert runner_module.quintile_backtest is quintile_backtest_integrity
+def test_async_runner_uses_explicit_v2_backtest() -> None:
+    assert runner_module.quintile_backtest_v2 is quintile_backtest_v2
 
 
 def test_formal_semantic_backtest_cannot_fall_back_to_equal_weight_benchmark() -> None:
@@ -81,23 +78,22 @@ def test_formal_semantic_backtest_cannot_fall_back_to_equal_weight_benchmark() -
     returns = pd.DataFrame(0.0, index=dates, columns=factor.columns)
     execution_open = pd.DataFrame(100.0, index=dates, columns=factor.columns)
     execution_close = pd.DataFrame(100.0, index=dates, columns=factor.columns)
-    adjusted_close = pd.DataFrame(90.0, index=dates, columns=factor.columns)
-    adjusted_close.attrs["execution_close"] = execution_close
-    adjusted_close.attrs["total_return_open"] = pd.DataFrame(
+    total_return_close = pd.DataFrame(90.0, index=dates, columns=factor.columns)
+    total_return_open = pd.DataFrame(
         90.0, index=dates, columns=factor.columns
     )
-    adjusted_close.attrs["total_return_close"] = adjusted_close.copy()
-    adjusted_close.attrs["benchmark_error"] = "SPY publication missing"
     volume = pd.DataFrame(1_000_000.0, index=dates, columns=factor.columns)
 
-    with pytest.raises(ValueError, match="immutable registered benchmark"):
-        quintile_backtest_integrity(
+    with pytest.raises(ValueError, match="explicit immutable benchmark"):
+        quintile_backtest_v2(
             factor,
             returns,
             n_groups=2,
             rebalance_days=1,
-            open_df=execution_open,
-            price_df=adjusted_close,
+            execution_open_df=execution_open,
+            execution_close_df=execution_close,
+            total_return_open_df=total_return_open,
+            total_return_close_df=total_return_close,
             volume_df=volume,
             benchmark_returns=None,
         )
@@ -125,7 +121,6 @@ def test_unregistered_watchlist_uses_explicit_total_return_basket_benchmark() ->
         "volume": pd.DataFrame(1_000.0, index=dates, columns=columns),
     }
     semantics = PriceSemantics.from_wide(wide)
-    legacy_price = wide["adj_close"]
     version = SimpleNamespace(
         version_id="watch-v1",
         run_id="watch-run",
@@ -133,15 +128,16 @@ def test_unregistered_watchlist_uses_explicit_total_return_basket_benchmark() ->
         checksum_sha256="bars-sha",
         manifest_checksum_sha256="manifest-sha",
     )
-    data_integrity._attach_unregistered_basket_benchmark(
-        legacy_price,
-        semantics,
-        universe="WATCHLIST_TEST",
-        selected_version=version,
+    benchmark, contract = _resolve_bundle_benchmark(
+        requested_universe="WATCHLIST_TEST",
+        data_universe="WATCHLIST_TEST",
+        version=version,
+        prices=semantics,
+        start=dates.min(),
+        end=dates.max(),
+        reader=SimpleNamespace(),
     )
-    benchmark = legacy_price.attrs["benchmark_returns"]
     expected = semantics.total_return_open.pct_change(fill_method=None).shift(-1).mean(axis=1)
     pd.testing.assert_series_equal(benchmark, expected.rename("Benchmark"))
-    contract = legacy_price.attrs["benchmark_contract"]
     assert contract["ticker"] is None
     assert contract["source"] == "UNREGISTERED_EQUAL_WEIGHT_TOTAL_RETURN_BASKET"

@@ -103,6 +103,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="republish the target session and refresh the overlap window",
     )
     update.add_argument(
+        "--full-rebuild",
+        action="store_true",
+        help=(
+            "download the complete configured history without inheriting the "
+            "published parent; required to migrate legacy price semantics"
+        ),
+    )
+    update.add_argument(
         "--run-research",
         action="store_true",
         help="recompute factor artifacts after each successful publication",
@@ -203,6 +211,7 @@ def _run_update(args: argparse.Namespace) -> int:
                 universe,
                 target_session=args.target_session,
                 force=bool(args.force),
+                full_rebuild=bool(args.full_rebuild),
                 workers=args.workers,
                 initial_start=_research_initial_start(universe),
             )

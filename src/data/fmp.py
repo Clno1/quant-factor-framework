@@ -845,6 +845,13 @@ def get_eod_bulk(session: str | pd.Timestamp) -> pd.DataFrame:
     if frame.empty:
         raise RuntimeError("FMP eod-bulk returned no rows")
 
+    adjusted_close_aliases = {
+        "adj_close",
+        "adjClose",
+        "adjustedClose",
+        "adjusted_close",
+    }
+    has_adjusted_close = bool(adjusted_close_aliases.intersection(frame.columns))
     frame = frame.rename(columns={
         "symbol": "ticker",
         "adjClose": "adj_close",
@@ -871,8 +878,12 @@ def get_eod_bulk(session: str | pd.Timestamp) -> pd.DataFrame:
     else:
         frame["date"] = pd.to_datetime(frame["date"], errors="coerce").dt.normalize()
         frame["date"] = frame["date"].fillna(session_ts)
-    if "adj_close" not in frame.columns:
-        frame["adj_close"] = frame["close"]
+    if not has_adjusted_close or "adj_close" not in frame.columns:
+        raise RuntimeError(
+            "FMP eod-bulk did not provide a dividend-adjusted close. Refusing "
+            "to copy executable close into adj_close; use a canonical total-return "
+            "source before publishing this session."
+        )
     for column in _REQUIRED_COLS:
         frame[column] = pd.to_numeric(frame[column], errors="coerce")
     result = (
@@ -885,6 +896,7 @@ def get_eod_bulk(session: str | pd.Timestamp) -> pd.DataFrame:
         .reset_index(drop=True)
     )
     result.attrs["invalid_ticker_rows"] = invalid_ticker_rows
+    result.attrs["price_semantics_source"] = "FMP_EOD_BULK_WITH_ADJUSTED_CLOSE"
     if invalid_ticker_rows:
         log.warning(
             "FMP eod-bulk %s dropped %d rows without a symbol",
@@ -1025,7 +1037,11 @@ def get_canonical_historical_ohlcv(
     if canonical[_REQUIRED_COLS].isna().any(axis=None):
         return None
     canonical.index.name = "date"
-    return canonical[_REQUIRED_COLS]
+    canonical = canonical[_REQUIRED_COLS]
+    canonical.attrs["price_semantics_source"] = (
+        "FMP_FULL_PLUS_DIVIDEND_ADJUSTED"
+    )
+    return canonical
 
 
 def get_historical_ohlcv_complete(

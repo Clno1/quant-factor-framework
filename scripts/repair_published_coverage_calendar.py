@@ -40,6 +40,7 @@ from src.data.foundation import (  # noqa: E402
     MarketDataReader,
     QualityCheck,
 )
+from src.data.price_semantics import build_price_semantics_contract  # noqa: E402
 from src.data.security_master_store import SecurityMasterStore  # noqa: E402
 from src.data.universe_ids import US_EQUITY_COVERAGE  # noqa: E402
 from src.utils.io import atomic_save_json  # noqa: E402
@@ -153,12 +154,21 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     )
     reader = MarketDataReader(catalog=catalog)
     source = (
-        reader.require_version(US_EQUITY_COVERAGE, args.source_version_id)
+        reader.require_version(
+            US_EQUITY_COVERAGE,
+            args.source_version_id,
+            require_price_semantics=True,
+        )
         if args.source_version_id
-        else reader.require_latest(US_EQUITY_COVERAGE)
+        else reader.require_latest(
+            US_EQUITY_COVERAGE,
+            require_price_semantics=True,
+        )
     )
     source_manifest = reader.verify_version(
-        source, verify_partition_children=True
+        source,
+        verify_partition_children=True,
+        require_price_semantics=True,
     )
 
     security_settings = CONFIG.data.security_master
@@ -316,6 +326,11 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             security_universe=security_universe,
             target_session=source.target_session,
             security_master=security_generation,
+            price_semantics=build_price_semantics_contract(
+                source=str(source_manifest["price_semantics"]["source"]),
+                history_mode="INCREMENTAL_FROM_AUTHENTICATED_PARENT",
+            ),
+            price_semantics_parent_version_id=source.version_id,
             min_target_coverage=float(settings.min_target_coverage),
             external_checks=external_checks,
             run_id=run_id,

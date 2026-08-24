@@ -68,7 +68,7 @@
 
 <section id="predictive" class="research-section metric-section">
     <h2>预测力</h2>
-    <p class="cell-note">研究尾部尚未实现的前瞻收益不进入 IC 样本，也不记为失败。</p>
+    <p class="cell-note">研究尾部尚未到期的前瞻收益单独审计；截面内若只有部分股票缺少未来结果，则整日 IC 作废，不按幸存股票重算。</p>
     {% for universe_id, item in assessment.universes.items() %}
     <dl><dt>{{ universe_label(universe_id) }}</dt><dd>平均 IC {{ '%.4f'|format(item.ic_mean) if item.ic_mean is not none else '—' }} · ICIR {{ '%.3f'|format(item.ic_ir) if item.ic_ir is not none else '—' }} · q 值 {{ '%.4f'|format(item.q_value) if item.q_value is not none else '—' }}</dd></dl>
     {% endfor %}

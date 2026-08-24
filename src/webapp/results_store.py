@@ -68,6 +68,7 @@ def save_factor_artifacts(
     ls_returns: pd.Series,
     group_metrics: pd.DataFrame,
     backtest_config: dict,
+    ic_outcome_audit: pd.DataFrame | None = None,
     universe: str = DEFAULT_UNIVERSE,
 ) -> Path:
     d = factor_dir(name, universe=universe)
@@ -79,6 +80,8 @@ def save_factor_artifacts(
     write_parquet(ls_returns.to_frame("LongShort"), d / "ls_returns.parquet")
     write_parquet(group_metrics, d / "group_metrics.parquet")
     save_json(backtest_config, d / "backtest_config.json")
+    if ic_outcome_audit is not None:
+        write_parquet(ic_outcome_audit, d / "ic_outcome_audit.parquet")
     return d
 
 
@@ -177,6 +180,7 @@ def _load_factor_dir(d: Path, name: str) -> dict[str, Any] | None:
         "confidence_checks": read_parquet(d / "confidence_checks.parquet") if (d / "confidence_checks.parquet").exists() else pd.DataFrame(),
         "rank_autocorr": read_parquet(d / "rank_autocorr.parquet") if (d / "rank_autocorr.parquet").exists() else pd.DataFrame(),
         "quantile_turnover": read_parquet(d / "quantile_turnover.parquet") if (d / "quantile_turnover.parquet").exists() else pd.DataFrame(),
+        "ic_outcome_audit": read_parquet(d / "ic_outcome_audit.parquet") if (d / "ic_outcome_audit.parquet").exists() else pd.DataFrame(),
     }
 
 

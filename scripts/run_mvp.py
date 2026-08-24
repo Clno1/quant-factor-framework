@@ -53,10 +53,12 @@ from src.analysis import (  # noqa: E402
     finalize_confidence_reports,
     ic_summary,
 )
-from src.backtest import double_sort_backtest, quintile_backtest  # noqa: E402
+from src.analysis.forward_outcomes import build_forward_outcomes  # noqa: E402
+from src.backtest import double_sort_backtest, quintile_backtest_v2  # noqa: E402
 from src.backtest.quintile import build_tradable_mask  # noqa: E402
 from src.config import CONFIG  # noqa: E402
 from src.data.access import load_published_bundle  # noqa: E402
+from src.data.price_semantics import PriceSemantics  # noqa: E402
 from src.data.pit import (  # noqa: E402
     build_membership_mask,
     point_in_time_required,
@@ -262,14 +264,17 @@ def run_pipeline_for_universe(
     #    wide["adj_close"]、wide["open"]、wide["returns"] 都是这种形状。
     #    后续因子、IC、回测都围绕这些宽表计算。
     wide = bundle.wide
+    if bundle.prices is None:
+        raise RuntimeError(f"[{universe}] published bundle has no typed price semantics")
     if universe_limit:
         for key, frame in list(wide.items()):
             if key in {"sector", "market_cap"}:
                 wide[key] = frame.reindex(tickers)
             else:
                 wide[key] = frame.reindex(columns=tickers)
-    adj_close = wide["adj_close"]
-    returns = wide["returns"]
+    prices = PriceSemantics.from_wide(wide) if universe_limit else bundle.prices
+    adj_close = prices.total_return_close
+    returns = prices.total_returns
     log.info("[%s] adj_close shape=%s, returns shape=%s",
              universe, adj_close.shape, returns.shape)
 
@@ -304,8 +309,8 @@ def run_pipeline_for_universe(
         index=adj_close.index,
         columns=adj_close.columns,
         returns_df=returns,
-        price_df=adj_close,
-        open_df=wide.get("open"),
+        price_df=prices.execution_close,
+        open_df=prices.execution_open,
         volume_df=wide.get("volume"),
         timing="next_open",
     ) & membership_mask
@@ -384,6 +389,16 @@ def run_pipeline_for_universe(
         if (
             research_universe.confidence_enabled
             and bool(CONFIG.preprocessing.neutralize_industry)
+            and not bool(neutralization.get("enabled_industry", False))
+        ):
+            raise RuntimeError(
+                f"[{universe}/{fname}] formal research requested industry "
+                "neutralization, but no PIT date x ticker classification matrix "
+                f"was applied; audit={preprocessing_audit_path}"
+            )
+        if (
+            research_universe.confidence_enabled
+            and bool(CONFIG.preprocessing.neutralize_industry)
             and industry_coverage
             < research_universe.minimum_industry_coverage
         ):
@@ -432,8 +447,33 @@ def run_pipeline_for_universe(
         # 6) 计算单因子 IC。
         #    IC 使用 factor_t 对齐未来 N 日收益，避免使用未来信息。
         #    summary 是均值、标准差、IR、t 统计量等汇总。
-        ic = compute_ic(clean, returns, min_stocks=min_stocks)
+        forward_outcomes = build_forward_outcomes(
+            returns,
+            total_return_close_df=prices.total_return_close,
+            eligible_mask=clean.notna(),
+            membership_events=bundle.membership_events,
+            periods=int(CONFIG.ic_analysis.forward_periods),
+        )
+        ic = compute_ic(
+            clean,
+            returns,
+            min_stocks=min_stocks,
+            resolved_forward_returns=forward_outcomes.returns,
+        )
         summary = ic_summary(ic)
+        summary["forward_outcomes"] = forward_outcomes.summary
+        security_audit = forward_outcomes.audit.copy()
+        security_audit["record_type"] = "SECURITY_OUTCOME"
+        cross_section_audit = pd.DataFrame(
+            list(ic.attrs.get("censor_diagnostics") or [])
+        )
+        if not cross_section_audit.empty:
+            cross_section_audit["record_type"] = "IC_CROSS_SECTION"
+        ic_outcome_audit = pd.concat(
+            [security_audit, cross_section_audit],
+            ignore_index=True,
+            sort=False,
+        )
         log.info("[%s] IC summary for %s: %s", universe, fname, summary)
 
         # 五分位回测：池太小则降低分组数，避免空组
@@ -445,17 +485,26 @@ def run_pipeline_for_universe(
         # 7) 跑单因子分组回测。
         #    把股票按因子值分成 Q1..Qn，观察最高组/最低组/多空组合表现。
         #    这里已经接入 next_open、逐票交易明细、手续费、滑点和可交易过滤。
-        result = quintile_backtest(
+        result = quintile_backtest_v2(
             clean, returns,
             factor_direction=factor.direction,
             n_groups=n_groups,
             rebalance_mode=str(getattr(CONFIG.backtest, "rebalance_mode", "every_n_days")),
-            open_df=wide.get("open"),
-            price_df=wide.get("adj_close"),
+            execution_open_df=prices.execution_open,
+            execution_close_df=prices.execution_close,
+            total_return_open_df=prices.total_return_open,
+            total_return_close_df=prices.total_return_close,
             volume_df=wide.get("volume"),
             tradable_mask=base_tradable_mask,
             membership_mask=membership_mask,
             membership_events=bundle.membership_events,
+            benchmark_returns=bundle.benchmark_returns,
+        )
+        result.config["benchmark_data_contract"] = dict(
+            bundle.contract.benchmark or {}
+        )
+        result.config["benchmark_ticker"] = (
+            (bundle.contract.benchmark or {}).get("ticker")
         )
 
         # If point-in-time market cap is available, persist a size-controlled
@@ -471,8 +520,10 @@ def run_pipeline_for_universe(
                 returns,
                 factor_direction=factor.direction,
                 rebalance_mode=str(getattr(CONFIG.backtest, "rebalance_mode", "every_n_days")),
-                open_df=wide.get("open"),
-                price_df=wide.get("adj_close"),
+                execution_open_df=prices.execution_open,
+                execution_close_df=prices.execution_close,
+                total_return_open_df=prices.total_return_open,
+                total_return_close_df=prices.total_return_close,
                 volume_df=wide.get("volume"),
                 tradable_mask=base_tradable_mask,
                 membership_mask=membership_mask,
@@ -512,6 +563,7 @@ def run_pipeline_for_universe(
             ls_returns=result.long_short_returns,
             group_metrics=result.group_metrics,
             backtest_config=result.config,
+            ic_outcome_audit=ic_outcome_audit,
             universe=universe,
         )
         log.info("Artifacts persisted for %s [%s]", fname, universe)
@@ -531,6 +583,9 @@ def run_pipeline_for_universe(
                 log.info("[%s] Confidence draft built for %s", universe, fname)
             except Exception as e:  # noqa: BLE001
                 log.exception("[%s] Confidence evaluation failed for %s: %s", universe, fname, e)
+                raise RuntimeError(
+                    f"[{universe}/{fname}] formal confidence evaluation failed"
+                ) from e
 
     if _factor_confidence_enabled(universe) and confidence_candidates:
         # 12) 同一个股票池内所有因子一起做 FDR 校正，得到 q-value。

@@ -19,6 +19,8 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+from src.analysis.confidence_hac import confidence_ic_stats_hac
+
 from src.backtest.rebalance import get_rebalance_dates
 from src.config import CONFIG
 
@@ -138,39 +140,7 @@ def _bh_q_values(p_values: Iterable[float]) -> list[float]:
 
 
 def _ic_stats(ic: pd.Series, direction_sign: int) -> dict[str, float]:
-    s_raw = pd.to_numeric(ic, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
-    if s_raw.empty:
-        return {
-            "n_obs": 0, "ic_mean_raw": np.nan, "ic_mean": np.nan, "ic_std": np.nan,
-            "ic_ir": np.nan, "t_stat": np.nan, "p_value": np.nan,
-            "p_value_two_sided": np.nan, "ci95_low": np.nan, "ci95_high": np.nan,
-            "ic_positive_pct": np.nan,
-        }
-
-    s = s_raw * direction_sign
-    n = int(len(s))
-    mean = float(s.mean())
-    std = float(s.std(ddof=1)) if n > 1 else np.nan
-    se = std / np.sqrt(n) if np.isfinite(std) and std > 0 else np.nan
-    t_stat = mean / se if np.isfinite(se) and se > 0 else np.nan
-    p_two = float(2.0 * stats.t.sf(abs(t_stat), df=n - 1)) if np.isfinite(t_stat) and n > 1 else np.nan
-    p_one = float(stats.t.sf(t_stat, df=n - 1)) if np.isfinite(t_stat) and n > 1 else np.nan
-    t_crit = float(stats.t.ppf(0.975, df=n - 1)) if n > 1 else np.nan
-    ci_low = mean - t_crit * se if np.isfinite(t_crit) and np.isfinite(se) else np.nan
-    ci_high = mean + t_crit * se if np.isfinite(t_crit) and np.isfinite(se) else np.nan
-    return {
-        "n_obs": n,
-        "ic_mean_raw": float(s_raw.mean()),
-        "ic_mean": mean,
-        "ic_std": std,
-        "ic_ir": _safe_ratio(mean, std),
-        "t_stat": float(t_stat) if np.isfinite(t_stat) else np.nan,
-        "p_value": p_one,
-        "p_value_two_sided": p_two,
-        "ci95_low": float(ci_low) if np.isfinite(ci_low) else np.nan,
-        "ci95_high": float(ci_high) if np.isfinite(ci_high) else np.nan,
-        "ic_positive_pct": float((s > 0).mean()),
-    }
+    return confidence_ic_stats_hac(ic, direction_sign)
 
 
 def _stability_stats(ic: pd.Series, direction_sign: int) -> dict[str, float]:
@@ -618,6 +588,7 @@ def build_factor_confidence(
     """构建单因子置信评估，q-value 会在 finalize_confidence_reports 中补齐。"""
     direction_sign = int(np.sign(factor_direction)) if factor_direction else 1
     ic_s = pd.to_numeric(ic, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+    ic_s.attrs.update(getattr(ic, "attrs", {}) or {})
     if factor_direction == 0 and not ic_s.empty and ic_s.mean() < 0:
         direction_sign = -1
 
@@ -640,7 +611,7 @@ def build_factor_confidence(
     report = {
         "factor": factor_name,
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "methodology_version": "factor_confidence_v1",
+        "methodology_version": "factor_confidence_v2_hac_censor_aware",
         "score": np.nan,
         "grade": "D",
         "verdict": FAIL,

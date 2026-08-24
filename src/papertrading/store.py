@@ -189,6 +189,7 @@ def load_account_artifacts(account_id: str) -> dict[str, pd.DataFrame]:
             "positions",
             "orders",
             "fills",
+            "cash_events",
             "equity_curve",
             "target_weights",
             "target_history",

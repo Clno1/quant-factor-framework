@@ -94,6 +94,15 @@ def test_paper_detail_renders_frozen_contract_and_fee_components():
             "fee": 1.1964,
             "total_cost_cash": 1.6964,
         }]),
+        "cash_events": pd.DataFrame([{
+            "date": "2026-08-07",
+            "ticker": "AAPL",
+            "event_type": "DIVIDEND_CASH",
+            "quantity": 10,
+            "amount_per_share": 0.25,
+            "amount": 2.5,
+            "dataset_version_id": "dataset-paper-v1",
+        }]),
         "runs": pd.DataFrame([{
             "run_at": "2026-08-08T08:00:00",
             "decision_date": "2026-08-07",
@@ -126,4 +135,7 @@ def test_paper_detail_renders_frozen_contract_and_fee_components():
     assert "dataset-paper-v1" in response.text
     assert "FINRA CAT" in response.text
     assert "0.1234" in response.text
+    assert "分红现金事件" in response.text
+    assert "DIVIDEND_CASH" in response.text
+    assert "2.5000" in response.text
     assert "运行与版本绑定记录" in response.text

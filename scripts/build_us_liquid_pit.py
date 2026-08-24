@@ -81,9 +81,16 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
     catalog = MarketDataCatalog(CONFIG.abs_path(str(CONFIG.data.foundation.catalog_path)))
     market_reader = MarketDataReader(catalog=catalog)
     parent = (
-        market_reader.require_version(US_EQUITY_COVERAGE, args.dataset_version_id)
+        market_reader.require_version(
+            US_EQUITY_COVERAGE,
+            args.dataset_version_id,
+            require_price_semantics=True,
+        )
         if args.dataset_version_id
-        else market_reader.require_latest(US_EQUITY_COVERAGE)
+        else market_reader.require_latest(
+            US_EQUITY_COVERAGE,
+            require_price_semantics=True,
+        )
     )
     parent_manifest = market_reader.verify_version(parent)
     security_settings = CONFIG.data.security_master

@@ -38,6 +38,10 @@ from src.data.foundation import (  # noqa: E402
     MarketDataCatalog,
     QualityCheck,
 )
+from src.data.price_semantics import (  # noqa: E402
+    FMP_CANONICAL_SOURCE,
+    build_price_semantics_contract,
+)
 from src.data.security_master_store import SecurityMasterStore  # noqa: E402
 from src.utils.io import atomic_save_json  # noqa: E402
 
@@ -286,6 +290,10 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             security_universe=security_universe,
             target_session=target,
             security_master=generation,
+            price_semantics=build_price_semantics_contract(
+                source=FMP_CANONICAL_SOURCE,
+                history_mode="FULL_REBUILD",
+            ),
             min_target_coverage=float(settings.min_target_coverage),
             external_checks=external_checks,
             run_id=run_id,

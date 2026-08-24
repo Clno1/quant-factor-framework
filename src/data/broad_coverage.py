@@ -15,7 +15,7 @@ import os
 from pathlib import Path
 import shutil
 import tempfile
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Mapping
 from uuid import uuid4
 
 import numpy as np
@@ -30,6 +30,7 @@ from src.data.foundation import (
     MarketDataReader,
     QualityCheck,
 )
+from src.data.price_semantics import validate_price_semantics_contract
 from src.data.security_master_store import SecurityMasterGeneration
 from src.data.research_history_policy import (
     EXCLUDED_UNVERIFIABLE_HISTORY,
@@ -950,6 +951,8 @@ class BroadCoverageStore:
         security_universe: pd.DataFrame,
         target_session: str | pd.Timestamp,
         security_master: SecurityMasterGeneration,
+        price_semantics: Mapping[str, Any],
+        price_semantics_parent_version_id: str | None = None,
         min_target_coverage: float = 0.98,
         external_checks: Iterable[QualityCheck] = (),
         run_id: str | None = None,
@@ -961,10 +964,41 @@ class BroadCoverageStore:
             raise DataFoundationError(
                 "formal coverage requires a published Security Master generation"
             )
+        semantic_contract = validate_price_semantics_contract(price_semantics)
+        history_mode = str(semantic_contract["history_mode"]).upper()
+        if history_mode == "FULL_REBUILD" and price_semantics_parent_version_id:
+            raise DataFoundationError(
+                "a full broad-coverage rebuild cannot declare a semantic parent"
+            )
+        if (
+            history_mode == "INCREMENTAL_FROM_AUTHENTICATED_PARENT"
+            and not price_semantics_parent_version_id
+        ):
+            raise DataFoundationError(
+                "incremental broad coverage requires an authenticated semantic parent"
+            )
         paths = [Path(path).resolve() for path in partition_paths]
         if not paths or any(not path.is_file() for path in paths):
             raise DataFoundationError("coverage partition list is empty or incomplete")
         target = pd.Timestamp(target_session).normalize()
+        if history_mode == "INCREMENTAL_FROM_AUTHENTICATED_PARENT":
+            parent = self.catalog.get_version(
+                str(price_semantics_parent_version_id),
+                universe=US_EQUITY_COVERAGE,
+            )
+            if parent is None:
+                raise DataFoundationError(
+                    "incremental broad-coverage semantic parent is not a "
+                    "published immutable version"
+                )
+            MarketDataReader(catalog=self.catalog).verify_version(
+                parent,
+                require_price_semantics=True,
+            )
+            if pd.Timestamp(parent.target_session).normalize() > target:
+                raise DataFoundationError(
+                    "incremental broad-coverage target predates its semantic parent"
+                )
         run_id = run_id or uuid4().hex
         checks, stats = self._validate_partitions(
             paths,
@@ -1190,12 +1224,16 @@ class BroadCoverageStore:
                 quarantine_sha = _file_sha256(quarantine_target)
                 quarantine_rows = len(quarantine)
             manifest = {
-                "schema_version": 4,
+                "schema_version": 5,
                 "publication_type": "US_EQUITY_COVERAGE",
                 "version_id": version_id,
                 "run_id": run_id,
                 "universe": US_EQUITY_COVERAGE,
                 "provider": "fmp",
+                "price_semantics": semantic_contract,
+                "price_semantics_parent_version_id": (
+                    price_semantics_parent_version_id
+                ),
                 "status": "PUBLISHED",
                 "target_session": target.date().isoformat(),
                 "created_at": created_at.isoformat(),
@@ -1315,10 +1353,22 @@ class BroadCoverageReader:
         selected = (
             version
             if isinstance(version, DatasetVersion)
-            else self.market_reader.require_version(US_EQUITY_COVERAGE, version)
+            else self.market_reader.require_version(
+                US_EQUITY_COVERAGE,
+                version,
+                require_price_semantics=True,
+            )
             if isinstance(version, str)
-            else self.market_reader.require_latest(US_EQUITY_COVERAGE)
+            else self.market_reader.require_latest(
+                US_EQUITY_COVERAGE,
+                require_price_semantics=True,
+            )
         )
+        if isinstance(version, DatasetVersion):
+            self.market_reader.verify_version(
+                selected,
+                require_price_semantics=True,
+            )
         paths = self.market_reader.partition_paths(selected, start=start, end=end)
         ids = sorted({str(value) for value in security_ids or []})
         selected_columns = (

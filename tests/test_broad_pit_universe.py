@@ -365,6 +365,7 @@ def test_derived_universe_publication_binds_parent_and_rejects_tampering():
             fetcher=lambda ticker, start, end: _standard_bars(
                 ticker, ["2020-03-31"]
             ),
+            fetcher_semantics_source="TEST_CANONICAL_FIXTURE",
         )
         parent = writer.update_universe(
             "US_EQUITY_COVERAGE",

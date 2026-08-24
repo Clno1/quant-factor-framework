@@ -22,6 +22,8 @@
 - [`us_broad_factor_research_implementation.md`](us_broad_factor_research_implementation.md)：宽基代码落地、固定 SG 资源边界、首次回填、11:30 日链和五日影子切换手册。
 - [`factor_preprocessing.md`](factor_preprocessing.md)：raw、去极值、中性化和 z-score。
 - [`factor_confidence.md`](factor_confidence.md)：IC、ICIR、统计置信和稳定性。
+- [`research_integrity_repairs_20260822.md`](research_integrity_repairs_20260822.md)：价格语义、基准、HAC、IC 缺失结果与突破事件研究的金融正确性契约。
+- [`research_integrity_migration_20260824.md`](research_integrity_migration_20260824.md)：旧行情与研究产物的强制重建顺序、验收门槛和回滚边界。
 - [`point_in_time_universe.md`](point_in_time_universe.md)：PIT 股票池契约。
 - [`sp500_pit_and_daily_publication.md`](sp500_pit_and_daily_publication.md)：SP500 每日发布任务。
 - [`trading_costs.md`](trading_costs.md)：回测和模拟盘费用、滑点与成交约束。

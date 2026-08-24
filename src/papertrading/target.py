@@ -23,7 +23,7 @@ from src.utils.date_utils import resolve_date_range
 class TargetResult:
     target_weights: pd.DataFrame
     decision_date: str
-    prices: pd.DataFrame
+    prices: pd.DataFrame  # executable close used for sizing and mark-to-market
     open_prices: pd.DataFrame
     volumes: pd.DataFrame
     normalized_weights: dict[str, float]
@@ -32,6 +32,7 @@ class TargetResult:
     tickers_used: list[str] = field(default_factory=list)
     tickers_missing: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    total_return_close_prices: pd.DataFrame = field(default_factory=pd.DataFrame)
     market_returns: pd.DataFrame = field(default_factory=pd.DataFrame)
     composite: pd.DataFrame = field(default_factory=pd.DataFrame)
     membership_mask: pd.DataFrame = field(default_factory=pd.DataFrame)
@@ -171,6 +172,7 @@ def generate_target_weights(
         composite = adhoc.composite
         prices = adhoc.prices
         open_prices = adhoc.open_prices
+        total_return_close_prices = adhoc.total_return_close_prices
         volumes = adhoc.volumes
         market_returns = adhoc.returns
         normalized = adhoc.normalized_weights
@@ -223,20 +225,15 @@ def generate_target_weights(
         composite = comp.composite
         normalized = comp.normalized_weights
         wide = bundle.wide
-        prices = wide.get("adj_close")
-        if prices is None or prices.empty:
-            prices = wide.get("close")
-        if prices is None:
-            prices = pd.DataFrame()
-        open_prices = wide.get("open")
-        if open_prices is None:
-            open_prices = pd.DataFrame()
+        if bundle.prices is None:
+            raise ValueError("Published paper-trading data have no typed prices")
+        prices = bundle.prices.execution_close
+        open_prices = bundle.prices.execution_open
+        total_return_close_prices = bundle.prices.total_return_close
         volumes = wide.get("volume")
         if volumes is None:
             volumes = pd.DataFrame()
-        market_returns = wide.get("returns")
-        if market_returns is None:
-            market_returns = prices.pct_change(fill_method=None)
+        market_returns = bundle.prices.total_returns
         factor_raw = dict(comp.factor_raw)
         factor_clean = comp.factor_clean
         factor_inputs = comp.factor_inputs
@@ -323,6 +320,7 @@ def generate_target_weights(
         tickers_used=tickers_used,
         tickers_missing=tickers_missing,
         warnings=warnings,
+        total_return_close_prices=total_return_close_prices,
         market_returns=market_returns,
         composite=composite,
         membership_mask=membership_mask,

@@ -248,6 +248,44 @@
 </details>
 
 <details class="chart-panel paper-details">
+    <summary class="panel-title"><span>分红现金事件</span></summary>
+    {% if cash_events %}
+    <div class="table-wrap">
+        <table class="data compact">
+            <thead>
+                <tr>
+                    <th>事件日</th>
+                    <th>股票</th>
+                    <th>类型</th>
+                    <th style="text-align:right;">持有数量</th>
+                    <th style="text-align:right;">每股金额</th>
+                    <th style="text-align:right;">现金金额</th>
+                    <th>行情版本</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for event in cash_events %}
+                <tr>
+                    <td class="mono">{{ event.date }}</td>
+                    <td class="mono">{{ event.ticker }}</td>
+                    <td class="mono">{{ event.event_type }}</td>
+                    <td class="mono" style="text-align:right;">{{ "%.0f"|format(event.quantity or 0) }}</td>
+                    <td class="mono" style="text-align:right;">{{ "%.6f"|format(event.amount_per_share or 0) }}</td>
+                    <td class="mono pos" style="text-align:right;">{{ "%.4f"|format(event.amount or 0) }}</td>
+                    <td class="mono compact-hash" title="{{ event.dataset_version_id or '' }}">
+                        {{ (event.dataset_version_id or '—')[:12] }}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty"><p>尚无分红现金事件。</p></div>
+    {% endif %}
+</details>
+
+<details class="chart-panel paper-details">
     <summary class="panel-title"><span>运行与版本绑定记录</span></summary>
     {% if runs %}
     <div class="table-wrap">

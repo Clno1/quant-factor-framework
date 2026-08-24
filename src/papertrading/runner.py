@@ -21,6 +21,8 @@ from src.papertrading.definition import (
     ORDER_FILLED,
     ORDER_PENDING,
     ORDER_REJECTED,
+    PAPER_ACCOUNTING_METHODOLOGY,
+    PAPER_ACCOUNT_SCHEMA_VERSION,
     STATUS_ACTIVE,
     account_strategy,
     now_iso,
@@ -71,16 +73,14 @@ def _positions_to_map(positions: pd.DataFrame) -> dict[str, dict[str, float]]:
 def _state_from_fill_ledger(
     account: dict[str, Any],
     fills: pd.DataFrame,
+    cash_events: pd.DataFrame | None = None,
 ) -> tuple[float, dict[str, dict[str, float]]]:
-    """Rebuild cash and positions from the append-only fill ledger."""
+    """Rebuild cash and positions from append-only fill and cash ledgers."""
     cash = float(account.get("initial_cash", 0.0) or 0.0)
     positions: dict[str, dict[str, float]] = {}
-    if fills is None or fills.empty:
-        return cash, positions
-    if "fill_id" in fills.columns and fills["fill_id"].astype(str).duplicated().any():
+    ledger = fills.copy() if fills is not None else pd.DataFrame()
+    if not ledger.empty and "fill_id" in ledger.columns and ledger["fill_id"].astype(str).duplicated().any():
         raise ValueError("Duplicate fill_id detected in paper-trading ledger")
-
-    ledger = fills.copy()
     sort_columns = [
         column
         for column in ("fill_date", "filled_at", "fill_id")
@@ -132,6 +132,16 @@ def _state_from_fill_ledger(
                     "quantity": remaining,
                     "avg_price": float(old["avg_price"]),
                 }
+    if cash_events is not None and not cash_events.empty:
+        events = cash_events.copy()
+        if "event_id" not in events.columns:
+            raise ValueError("Paper cash-event ledger has no event_id")
+        if events["event_id"].astype(str).duplicated().any():
+            raise ValueError("Duplicate event_id detected in paper cash-event ledger")
+        amounts = pd.to_numeric(events.get("amount"), errors="coerce")
+        if amounts.isna().any() or (~np.isfinite(amounts)).any():
+            raise ValueError("Paper cash-event ledger contains invalid amounts")
+        cash += float(amounts.sum())
     return float(cash), positions
 
 
@@ -181,6 +191,131 @@ def _latest_price_row(prices: pd.DataFrame, asof: str | None = None) -> tuple[st
             return None, pd.Series(dtype="float64")
     dt = pd.Timestamp(px.index.max())
     return dt.strftime("%Y-%m-%d"), px.ffill().loc[dt]
+
+
+def _derived_dividend_cash_per_share(target: TargetResult) -> pd.DataFrame:
+    """Derive cash distributions while keeping share valuation in raw price units."""
+    execution_close = target.prices.apply(pd.to_numeric, errors="coerce")
+    total_return_close = target.total_return_close_prices.apply(
+        pd.to_numeric,
+        errors="coerce",
+    )
+    common_dates = execution_close.index.intersection(total_return_close.index)
+    common_cols = execution_close.columns.intersection(total_return_close.columns)
+    execution_close = execution_close.reindex(index=common_dates, columns=common_cols)
+    total_return_close = total_return_close.reindex(
+        index=common_dates,
+        columns=common_cols,
+    )
+    previous_execution = execution_close.shift(1)
+    total_return_ratio = total_return_close / total_return_close.shift(1)
+    distribution = previous_execution * total_return_ratio - execution_close
+    tolerance = execution_close.abs().clip(lower=1.0) * 1e-7
+    distribution = distribution.mask(distribution.abs().le(tolerance), 0.0)
+    material_negative = distribution.lt(-tolerance)
+    if material_negative.any(axis=None):
+        locations = np.argwhere(material_negative.to_numpy())[:20]
+        sample = [
+            {
+                "date": pd.Timestamp(distribution.index[i]).date().isoformat(),
+                "ticker": str(distribution.columns[j]),
+                "amount": float(distribution.iat[i, j]),
+            }
+            for i, j in locations
+        ]
+        raise ValueError(
+            "Published execution and total-return prices imply negative cash "
+            f"distributions; refusing paper-accounting fallback: sample={sample}"
+        )
+    return distribution.where(distribution.gt(0), 0.0)
+
+
+def _fills_before_ex_date(fills: pd.DataFrame, ex_date: pd.Timestamp) -> pd.DataFrame:
+    if fills is None or fills.empty or "fill_date" not in fills.columns:
+        return pd.DataFrame(columns=getattr(fills, "columns", None))
+    dates = pd.to_datetime(fills["fill_date"], errors="coerce").dt.normalize()
+    return fills.loc[dates.lt(ex_date)].copy()
+
+
+def _accrue_dividend_cash_events(
+    *,
+    account: dict[str, Any],
+    target: TargetResult,
+    fills: pd.DataFrame,
+) -> pd.DataFrame:
+    """Append deterministic dividend events for shares held before each ex-date."""
+    account_id = str(account["id"])
+    existing = load_table(account_id, "cash_events")
+    if target.total_return_close_prices.empty or fills is None or fills.empty:
+        return existing
+    distributions = _derived_dividend_cash_per_share(target)
+    cutoff = pd.Timestamp(target.decision_date).normalize()
+    candidate_locations = np.argwhere(
+        distributions.loc[distributions.index <= cutoff].gt(0).to_numpy()
+    )
+    existing_by_id = (
+        existing.set_index(existing["event_id"].astype(str), drop=False)
+        if not existing.empty and "event_id" in existing.columns
+        else pd.DataFrame()
+    )
+    rows: list[dict[str, Any]] = []
+    bounded = distributions.loc[distributions.index <= cutoff]
+    for row_no, col_no in candidate_locations:
+        ex_date = pd.Timestamp(bounded.index[row_no]).normalize()
+        ticker = str(bounded.columns[col_no])
+        amount_per_share = float(bounded.iat[row_no, col_no])
+        eligible_fills = _fills_before_ex_date(fills, ex_date)
+        _, held = _state_from_fill_ledger(account, eligible_fills)
+        quantity = float((held.get(ticker) or {}).get("quantity", 0.0) or 0.0)
+        if quantity <= 1e-12:
+            continue
+        event_id = f"DIVIDEND:{account_id}:{ticker}:{ex_date.date().isoformat()}"
+        amount = quantity * amount_per_share
+        if not existing_by_id.empty and event_id in existing_by_id.index:
+            prior = existing_by_id.loc[event_id]
+            if isinstance(prior, pd.DataFrame):
+                raise ValueError(f"Duplicate paper cash event: {event_id}")
+            for field, observed in (
+                ("quantity", quantity),
+                ("amount_per_share", amount_per_share),
+                ("amount", amount),
+            ):
+                expected = float(prior.get(field, np.nan))
+                if not np.isclose(expected, observed, rtol=1e-8, atol=1e-8):
+                    raise ValueError(
+                        "Published dividend economics changed after paper ledger "
+                        f"posting: event_id={event_id} field={field} "
+                        f"ledger={expected} observed={observed}"
+                    )
+            continue
+        rows.append(
+            {
+                "event_id": event_id,
+                "account_id": account_id,
+                "event_type": "DIVIDEND_CASH",
+                "date": ex_date.date().isoformat(),
+                "ticker": ticker,
+                "quantity": quantity,
+                "amount_per_share": amount_per_share,
+                "amount": amount,
+                "dataset_version_id": target.data_contract.get(
+                    "dataset_version_id"
+                ),
+                "created_at": now_iso(),
+            }
+        )
+    if rows:
+        output = (
+            pd.concat([existing, pd.DataFrame(rows)], ignore_index=True)
+            if not existing.empty
+            else pd.DataFrame(rows)
+        )
+        output = output.sort_values(["date", "ticker", "event_id"]).reset_index(
+            drop=True
+        )
+        save_table(account_id, "cash_events", output)
+        return output
+    return existing
 
 
 def _first_open_after(
@@ -674,6 +809,30 @@ def _run_account_once_locked(
     if account.get("status") != STATUS_ACTIVE:
         raise ValueError("模拟盘账户不是 active 状态，不能运行")
 
+    observed_schema = int(account.get("schema_version") or 0)
+    observed_method = str(account.get("accounting_methodology") or "")
+    if (
+        observed_schema != PAPER_ACCOUNT_SCHEMA_VERSION
+        or observed_method != PAPER_ACCOUNTING_METHODOLOGY
+    ):
+        durable = {
+            name: load_table(account_id, name)
+            for name in ("fills", "cash_events", "equity_curve")
+        }
+        if any(not frame.empty for frame in durable.values()):
+            raise ValueError(
+                "Paper account predates dividend-aware execution-price accounting "
+                "and already has a durable ledger. Rebuild it through an explicit "
+                "account migration; it cannot be silently relabelled."
+            )
+        account = update_account(
+            account_id,
+            {
+                "schema_version": PAPER_ACCOUNT_SCHEMA_VERSION,
+                "accounting_methodology": PAPER_ACCOUNTING_METHODOLOGY,
+            },
+        )
+
     try:
         strategy = account_strategy(account)
         risk_cfg = account.get("risk_config") or {}
@@ -711,7 +870,16 @@ def _run_account_once_locked(
                 f"{target.tickers_missing[:20]}"
             )
         fill_ledger = load_table(account_id, "fills")
-        cash, positions_map = _state_from_fill_ledger(account, fill_ledger)
+        cash_events = _accrue_dividend_cash_events(
+            account=account,
+            target=target,
+            fills=fill_ledger,
+        )
+        cash, positions_map = _state_from_fill_ledger(
+            account,
+            fill_ledger,
+            cash_events,
+        )
 
         cash, fills, _ = _fill_pending_orders(
             account=account,
@@ -723,7 +891,16 @@ def _run_account_once_locked(
         # Re-read the durable ledger after execution. This also makes a retry
         # after a later projection write failure exactly idempotent.
         fill_ledger = load_table(account_id, "fills")
-        cash, positions_map = _state_from_fill_ledger(account, fill_ledger)
+        cash_events = _accrue_dividend_cash_events(
+            account=account,
+            target=target,
+            fills=fill_ledger,
+        )
+        cash, positions_map = _state_from_fill_ledger(
+            account,
+            fill_ledger,
+            cash_events,
+        )
         mark_date, latest_prices = _latest_price_row(
             target.prices,
             asof=target.decision_date,

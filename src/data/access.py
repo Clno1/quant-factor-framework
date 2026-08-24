@@ -6,7 +6,7 @@ be attached to the centralized ingestion request queue.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 import hashlib
 import json
 from typing import Any, Iterable, Mapping
@@ -19,6 +19,12 @@ from src.data.foundation import (
     DatasetVersion,
     MarketDataReader,
 )
+from src.data.benchmark import (
+    BenchmarkDataError,
+    load_registered_benchmark,
+    resolve_registered_benchmark_contract,
+)
+from src.data.price_semantics import PriceSemantics, validate_price_semantics_contract
 from src.factors.publication import (
     ResearchPublicationError,
     dataset_version_provenance,
@@ -31,6 +37,7 @@ from src.utils.market_calendar import (
     xnys_session_on_or_after,
     xnys_session_on_or_before,
 )
+from src.research_universes.registry import ResearchUniverseRegistryError
 
 
 DEFAULT_WARMUP_CALENDAR_DAYS = 400
@@ -76,6 +83,8 @@ class DataContract:
     coverage: dict[str, Any]
     universe_sha256: str | None = None
     manifest_sha256: str | None = None
+    price_semantics: dict[str, Any] = field(default_factory=dict)
+    benchmark: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -90,6 +99,8 @@ class PublishedDataBundle:
     membership_events: pd.DataFrame | None
     contract: DataContract
     publication: dict[str, Any] | None = None
+    prices: PriceSemantics | None = None
+    benchmark_returns: pd.Series = field(default_factory=pd.Series)
 
 
 @dataclass
@@ -183,9 +194,16 @@ def resolve_published_version(
     )
     try:
         return (
-            reader.require_version(selected_universe, dataset_version_id)
+            reader.require_version(
+                selected_universe,
+                dataset_version_id,
+                require_price_semantics=True,
+            )
             if dataset_version_id
-            else reader.require_latest(selected_universe)
+            else reader.require_latest(
+                selected_universe,
+                require_price_semantics=True,
+            )
         )
     except DataFoundationError as exc:
         raise MarketDataNotReadyError(
@@ -227,7 +245,7 @@ def validate_daily_data_contract(
     data_universe = str(payload.get("data_universe") or "").strip().upper()
     version_id = str(payload.get("dataset_version_id") or "").strip()
     schema_version = int(payload.get("schema_version") or 0)
-    if schema_version not in {1, 2} or not data_universe or not version_id:
+    if schema_version != 3 or not data_universe or not version_id:
         raise MarketDataNotReadyError(
             "Persisted daily data contract has an unsupported schema or missing identity",
             data_universe=data_universe or "UNKNOWN",
@@ -244,13 +262,19 @@ def validate_daily_data_contract(
         "bars_sha256": version.checksum_sha256,
         "membership_sha256": version.membership_checksum_sha256,
     }
-    if schema_version >= 2:
-        expected.update(
-            {
-                "universe_sha256": version.universe_checksum_sha256,
-                "manifest_sha256": version.manifest_checksum_sha256,
-            }
-        )
+    manifest = (reader or MarketDataReader()).verify_version(
+        version,
+        require_price_semantics=True,
+    )
+    expected.update(
+        {
+            "universe_sha256": version.universe_checksum_sha256,
+            "manifest_sha256": version.manifest_checksum_sha256,
+            "price_semantics": validate_price_semantics_contract(
+                manifest.get("price_semantics")
+            ),
+        }
+    )
     mismatches = [
         key
         for key, value in expected.items()
@@ -423,6 +447,50 @@ def runtime_factor_id(
     return f"runtime:{digest}"
 
 
+def _resolve_bundle_benchmark(
+    *,
+    requested_universe: str,
+    data_universe: str,
+    version: DatasetVersion,
+    prices: PriceSemantics,
+    start: str | pd.Timestamp | None,
+    end: str | pd.Timestamp | None,
+    reader: MarketDataReader,
+) -> tuple[pd.Series, dict[str, Any]]:
+    """Return a typed, version-bound benchmark for every backtest bundle."""
+    try:
+        benchmark = load_registered_benchmark(
+            requested_universe,
+            start=start,
+            end=end,
+            primary_version=version,
+            reader=reader,
+        )
+    except ResearchUniverseRegistryError:
+        basket = (
+            prices.total_return_open.pct_change(fill_method=None).shift(-1).mean(axis=1)
+        ).rename("Benchmark")
+        contract = {
+            "schema_version": 1,
+            "ticker": None,
+            "data_universe": data_universe,
+            "dataset_version_id": version.version_id,
+            "dataset_run_id": version.run_id,
+            "target_session": version.target_session.isoformat(),
+            "bars_sha256": version.checksum_sha256,
+            "manifest_sha256": version.manifest_checksum_sha256,
+            "source": "UNREGISTERED_EQUAL_WEIGHT_TOTAL_RETURN_BASKET",
+        }
+        return basket, contract
+    except BenchmarkDataError as exc:
+        raise MarketDataNotReadyError(
+            "Formal named-universe data are missing their exact-session immutable "
+            f"benchmark: {exc}",
+            data_universe=data_universe,
+        ) from exc
+    return benchmark.holding_returns, benchmark.contract.to_dict()
+
+
 def load_published_bundle(
     *,
     requested_universe: str,
@@ -447,9 +515,16 @@ def load_published_bundle(
     )
     try:
         version = (
-            reader.require_version(selected_universe, dataset_version_id)
+            reader.require_version(
+                selected_universe,
+                dataset_version_id,
+                require_price_semantics=True,
+            )
             if dataset_version_id
-            else reader.require_latest(selected_universe)
+            else reader.require_latest(
+                selected_universe,
+                require_price_semantics=True,
+            )
         )
     except DataFoundationError as exc:
         raise MarketDataNotReadyError(
@@ -529,6 +604,16 @@ def load_published_bundle(
         end=coverage.expected_session,
         version=version,
     )
+    prices = PriceSemantics.from_wide(wide)
+    benchmark_returns, benchmark_contract = _resolve_bundle_benchmark(
+        requested_universe=requested_universe,
+        data_universe=selected_universe,
+        version=version,
+        prices=prices,
+        start=load_start,
+        end=coverage.expected_session,
+        reader=reader,
+    )
     membership = reader.load_membership(
         selected_universe,
         version=version,
@@ -549,8 +634,9 @@ def load_published_bundle(
         ).items()
         if factor_id in factors
     }
+    manifest = reader.verify_version(version, require_price_semantics=True)
     contract = DataContract(
-        schema_version=2,
+        schema_version=3,
         requested_universe=requested_universe,
         data_universe=selected_universe,
         dataset_version_id=version.version_id,
@@ -572,6 +658,10 @@ def load_published_bundle(
         coverage=coverage.to_dict(),
         universe_sha256=version.universe_checksum_sha256,
         manifest_sha256=version.manifest_checksum_sha256,
+        price_semantics=validate_price_semantics_contract(
+            manifest.get("price_semantics")
+        ),
+        benchmark=benchmark_contract,
     )
     return PublishedDataBundle(
         version=version,
@@ -581,6 +671,8 @@ def load_published_bundle(
         membership_events=membership_events,
         contract=contract,
         publication=publication,
+        prices=prices,
+        benchmark_returns=benchmark_returns,
     )
 
 
@@ -674,8 +766,9 @@ def load_published_daily_data(
         if include_membership
         else None
     )
+    manifest = reader.verify_version(version, require_price_semantics=True)
     contract = DataContract(
-        schema_version=2,
+        schema_version=3,
         requested_universe=requested_universe,
         data_universe=selected_universe,
         dataset_version_id=version.version_id,
@@ -689,6 +782,9 @@ def load_published_daily_data(
         coverage=coverage.to_dict(),
         universe_sha256=version.universe_checksum_sha256,
         manifest_sha256=version.manifest_checksum_sha256,
+        price_semantics=validate_price_semantics_contract(
+            manifest.get("price_semantics")
+        ),
     )
     return PublishedDailyDataBundle(
         version=version,
@@ -708,14 +804,26 @@ def current_named_contract(
     """Resolve lightweight named-universe identities at task creation time."""
     reader = reader or MarketDataReader()
     factors = list(dict.fromkeys(str(value) for value in factor_ids))
-    version = reader.require_latest(universe)
+    version = reader.require_latest(universe, require_price_semantics=True)
     publication = validate_factor_research_publication(
         universe,
         version=version,
         factor_ids=factors,
     )
+    try:
+        benchmark = resolve_registered_benchmark_contract(
+            universe,
+            primary_version=version,
+            reader=reader,
+        ).to_dict()
+    except BenchmarkDataError as exc:
+        raise MarketDataNotReadyError(
+            f"Cannot bind task benchmark: {exc}",
+            data_universe=universe,
+        ) from exc
+    manifest = reader.verify_version(version, require_price_semantics=True)
     return DataContract(
-        schema_version=2,
+        schema_version=3,
         requested_universe=universe,
         data_universe=universe,
         dataset_version_id=version.version_id,
@@ -733,6 +841,10 @@ def current_named_contract(
         coverage={},
         universe_sha256=version.universe_checksum_sha256,
         manifest_sha256=version.manifest_checksum_sha256,
+        price_semantics=validate_price_semantics_contract(
+            manifest.get("price_semantics")
+        ),
+        benchmark=benchmark,
     )
 
 

@@ -774,7 +774,10 @@ class PublishedEODMarketDataProvider:
         )
         benchmark = normalize_ticker(benchmark)
         try:
-            version = self.reader.require_latest(self.universe)
+            version = self.reader.require_latest(
+                self.universe,
+                require_price_semantics=True,
+            )
             bars = self._normalize_bars(
                 self.reader.load_bars(
                     self.universe,
@@ -788,7 +791,8 @@ class PublishedEODMarketDataProvider:
                 benchmark_bars = bars.loc[bars["ticker"].eq(benchmark)].copy()
             else:
                 benchmark_version = self.reader.require_latest(
-                    self.benchmark_universe
+                    self.benchmark_universe,
+                    require_price_semantics=True,
                 )
                 benchmark_bars = self._normalize_bars(
                     self.reader.load_bars(

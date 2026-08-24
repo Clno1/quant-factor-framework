@@ -174,7 +174,10 @@ def generate_breakout_events(
         frame.index = pd.DatetimeIndex(pd.to_datetime(frame.index)).normalize()
         frame = frame.loc[~frame.index.duplicated(keep="last")].sort_index()
         if "adj_close" not in frame.columns:
-            frame["adj_close"] = frame["close"]
+            raise ValueError(
+                f"Breakout frame {ticker} is missing adj_close; total-return "
+                "outcomes cannot be reconstructed from raw close."
+            )
         if len(frame) <= cfg.warmup_sessions:
             continue
 
@@ -182,8 +185,6 @@ def generate_breakout_events(
         last_event_position = -10**9
         for position in range(cfg.warmup_sessions - 1, len(frame)):
             dt = pd.Timestamp(frame.index[position]).normalize()
-            if start_ts is not None and dt < start_ts:
-                continue
             if end_ts is not None and dt > end_ts:
                 break
             setup = evaluate_daily_setup(
@@ -201,38 +202,47 @@ def generate_breakout_events(
             cooled_down = position - last_event_position > cfg.cooldown_sessions
             base_ok = bool(setup.get("base_pass")) or not cfg.require_base_pass
             if transitioned and cooled_down and base_ok:
-                outcomes = _event_outcomes(
-                    frame,
-                    signal_position=position,
-                    horizons=cfg.horizons,
-                    round_trip_cost_bps=cfg.round_trip_cost_bps,
-                )
-                regime = None
-                if market_regime is not None:
-                    try:
-                        regime = market_regime.reindex([dt]).iloc[0]
-                    except Exception:
-                        regime = None
-                event_id = f"{ticker}:{dt.strftime('%Y%m%d')}:{status}"
-                rows.append(
-                    {
-                        "event_id": event_id,
-                        "ticker": ticker,
-                        "signal_date": dt.strftime("%Y-%m-%d"),
-                        "trigger_status": status,
-                        "score": float(setup.get("score") or 0.0),
-                        "pivot": float(setup.get("pivot") or np.nan),
-                        "signal_close": float(setup.get("close") or np.nan),
-                        "return_20d": float(setup.get("return_20d") or np.nan),
-                        "adr_20d": float(setup.get("adr_20d") or np.nan),
-                        "prior_move": float(setup.get("prior_move") or np.nan),
-                        "consolidation_days": int(setup.get("consolidation_days") or 0),
-                        "tightness": float(setup.get("tightness") or np.nan),
-                        "volume_dryup": float(setup.get("volume_dryup") or np.nan),
-                        "market_regime": None if pd.isna(regime) else str(regime),
-                        **outcomes,
-                    }
-                )
+                # Pre-start transitions still advance the state machine and
+                # cooldown clock, but are not observations in this study.
+                if start_ts is None or dt >= start_ts:
+                    outcomes = _event_outcomes(
+                        frame,
+                        signal_position=position,
+                        horizons=cfg.horizons,
+                        round_trip_cost_bps=cfg.round_trip_cost_bps,
+                    )
+                    regime = None
+                    if market_regime is not None:
+                        try:
+                            regime = market_regime.reindex([dt]).iloc[0]
+                        except Exception:
+                            regime = None
+                    event_id = f"{ticker}:{dt.strftime('%Y%m%d')}:{status}"
+                    rows.append(
+                        {
+                            "event_id": event_id,
+                            "ticker": ticker,
+                            "signal_date": dt.strftime("%Y-%m-%d"),
+                            "trigger_status": status,
+                            "score": float(setup.get("score") or 0.0),
+                            "pivot": float(setup.get("pivot") or np.nan),
+                            "signal_close": float(setup.get("close") or np.nan),
+                            "return_20d": float(setup.get("return_20d") or np.nan),
+                            "adr_20d": float(setup.get("adr_20d") or np.nan),
+                            "prior_move": float(setup.get("prior_move") or np.nan),
+                            "consolidation_days": int(
+                                setup.get("consolidation_days") or 0
+                            ),
+                            "tightness": float(setup.get("tightness") or np.nan),
+                            "volume_dryup": float(
+                                setup.get("volume_dryup") or np.nan
+                            ),
+                            "market_regime": (
+                                None if pd.isna(regime) else str(regime)
+                            ),
+                            **outcomes,
+                        }
+                    )
                 last_event_position = position
             previous_status = status
 
@@ -339,12 +349,21 @@ def backtest_breakouts(
         pd.Timestamp(start).normalize()
         - pd.Timedelta(days=max(180, cfg.warmup_sessions * 3))
     )
+    signal_end = pd.Timestamp(end).normalize() if end is not None else None
+    outcome_buffer_days = (
+        max(14, max(cfg.horizons) * 3) if signal_end is not None else 0
+    )
+    load_end = (
+        signal_end + pd.Timedelta(days=outcome_buffer_days)
+        if signal_end is not None
+        else None
+    )
     dataset = load_breakout_daily_dataset(
         requested_universe=data_universe,
         data_universe=resolve_market_data_universe(data_universe),
         tickers=normalized,
         start=load_start,
-        end=end,
+        end=load_end,
         dataset_version_id=dataset_version_id,
         lookback_calendar_days=max(400, cfg.warmup_sessions * 4),
     )
@@ -359,6 +378,13 @@ def backtest_breakouts(
         if "sector" in universe.columns
         else {}
     )
+    contract = dataset.contract.to_dict()
+    contract["event_study_window"] = {
+        "signal_start": pd.Timestamp(start).normalize().strftime("%Y-%m-%d"),
+        "signal_end": signal_end.strftime("%Y-%m-%d") if signal_end is not None else None,
+        "outcome_load_end": load_end.strftime("%Y-%m-%d") if load_end is not None else None,
+        "max_forward_sessions": max(cfg.horizons),
+    }
     return backtest_breakout_frames(
         dataset.frames,
         filters=filters,
@@ -368,7 +394,7 @@ def backtest_breakouts(
         names=names,
         sectors=sectors,
         market_regime=market_regime,
-        data_contract=dataset.contract.to_dict(),
+        data_contract=contract,
     )
 
 

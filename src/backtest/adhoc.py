@@ -30,9 +30,11 @@ log = get_logger(__name__)
 class AdhocResult:
     composite: pd.DataFrame                 # date × ticker（zscore 加权合成）
     returns: pd.DataFrame                   # date × ticker 日收益（喂给 quintile_backtest）
-    open_prices: pd.DataFrame               # date × ticker 复权开盘价（execution=next_open 用）
-    prices: pd.DataFrame                    # date × ticker 复权收盘价（可交易过滤用）
+    open_prices: pd.DataFrame               # date × ticker 可执行开盘价
+    prices: pd.DataFrame                    # date × ticker 可执行收盘价
     volumes: pd.DataFrame                   # date × ticker 成交量（可交易过滤用）
+    total_return_open_prices: pd.DataFrame
+    total_return_close_prices: pd.DataFrame
     components: list[StrategyComponent]
     normalized_weights: dict[str, float]
     date_range: tuple[str, str]
@@ -97,7 +99,7 @@ def adhoc_compose(
              {k: round(v, 3) for k, v in norm.items()})
     # 1) 使用调用方固定的数据版本；本模块没有网络或旧缓存读取能力。
     wide = {key: value.copy() for key, value in wide.items()}
-    prices = wide.get("adj_close")
+    prices = wide.get("total_return_close")
     if prices is None or prices.empty:
         raise ValueError("Published wide tables contain no adj_close prices")
     observed = set(str(column).upper() for column in prices.columns)
@@ -176,7 +178,7 @@ def adhoc_compose(
     # 4) 返回 returns（裁剪到同日期范围和 ticker 集合）
     returns_df = wide["returns"].loc[composite.index.min():composite.index.max(),
                                      composite.columns]
-    open_df_out = wide.get("open")
+    open_df_out = wide.get("execution_open")
     if open_df_out is None or open_df_out.empty:
         open_df_out = pd.DataFrame(index=composite.index, columns=composite.columns)
     else:
@@ -188,8 +190,16 @@ def adhoc_compose(
         composite=composite,
         returns=returns_df,
         open_prices=open_df_out,
-        prices=wide["adj_close"].reindex(index=returns_df.index, columns=composite.columns),
+        prices=wide["execution_close"].reindex(
+            index=returns_df.index, columns=composite.columns
+        ),
         volumes=wide["volume"].reindex(index=returns_df.index, columns=composite.columns),
+        total_return_open_prices=wide["total_return_open"].reindex(
+            index=returns_df.index, columns=composite.columns
+        ),
+        total_return_close_prices=wide["total_return_close"].reindex(
+            index=returns_df.index, columns=composite.columns
+        ),
         components=list(components),
         normalized_weights=norm,
         date_range=(

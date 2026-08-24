@@ -1354,6 +1354,7 @@ def paper_detail_page(request: Request, aid: UUID):
     positions = arts.get("positions", pd.DataFrame())
     orders = arts.get("orders", pd.DataFrame())
     fills = arts.get("fills", pd.DataFrame())
+    cash_events = arts.get("cash_events", pd.DataFrame())
     targets = arts.get("target_weights", pd.DataFrame())
     runs = arts.get("runs", pd.DataFrame())
     equity_curve = arts.get("equity_curve", pd.DataFrame())
@@ -1399,6 +1400,7 @@ def paper_detail_page(request: Request, aid: UUID):
         "open_orders": open_orders,
         "orders": _records_for_table(orders, limit=80),
         "fills": _records_for_table(fills, limit=80),
+        "cash_events": _records_for_table(cash_events, limit=80),
         "targets": _records_for_table(targets, limit=50),
         "runs": _records_for_table(runs, limit=20),
         "equity_fig_json": equity_fig_json,

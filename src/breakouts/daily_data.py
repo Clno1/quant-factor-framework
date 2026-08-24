@@ -20,18 +20,34 @@ _PRICE_COLUMNS = ["open", "high", "low", "close", "adj_close", "volume"]
 
 def daily_frames_from_bars(bars: pd.DataFrame) -> dict[str, pd.DataFrame]:
     """Convert one version-bound long table into per-ticker in-memory frames."""
-    required = {"date", "ticker", "open", "high", "low", "close", "volume"}
+    required = {
+        "date",
+        "ticker",
+        "open",
+        "high",
+        "low",
+        "close",
+        "adj_close",
+        "volume",
+    }
     if bars is None or bars.empty or not required.issubset(bars.columns):
+        missing = sorted(required - set(bars.columns if bars is not None else []))
+        if missing:
+            raise ValueError(
+                "Published breakout bars are missing required price semantics "
+                f"columns: {missing}. Rebuild the market-data version; adjusted "
+                "prices must never silently fall back to raw close."
+            )
         return {}
     data = bars.copy()
-    if "adj_close" not in data.columns:
-        data["adj_close"] = data["close"]
     data["date"] = pd.to_datetime(data["date"], errors="coerce").dt.normalize()
     data["ticker"] = data["ticker"].astype(str).str.strip().str.upper()
     data = data.loc[data["date"].notna() & data["ticker"].ne("")].copy()
     for column in _PRICE_COLUMNS:
         data[column] = pd.to_numeric(data[column], errors="coerce")
-    data = data.dropna(subset=["open", "high", "low", "close", "volume"])
+    data = data.dropna(
+        subset=["open", "high", "low", "close", "adj_close", "volume"]
+    )
     data = data.drop_duplicates(["date", "ticker"], keep="last")
 
     frames: dict[str, pd.DataFrame] = {}

@@ -167,8 +167,6 @@ def quintile_backtest_v2(
     benchmark_base = pd.to_numeric(
         benchmark_returns.reindex(common_dates), errors="coerce"
     ).rename("Benchmark")
-    if benchmark_base.notna().sum() < 2:
-        raise ValueError("Benchmark has insufficient overlap with the backtest horizon")
 
     group_cols = [f"Q{g}" for g in range(1, n_groups + 1)]
     gross_ret = _strict_equal_weight_group_returns(
@@ -198,6 +196,17 @@ def quintile_backtest_v2(
                 cost_df.loc[dt, group] += float(row.cost)
 
     group_ret = gross_ret - cost_df
+    benchmark_aligned = benchmark_base.reindex(group_ret.index)
+    missing_benchmark = benchmark_aligned.isna()
+    if missing_benchmark.any():
+        sample = [
+            pd.Timestamp(value).date().isoformat()
+            for value in benchmark_aligned.index[missing_benchmark][:20]
+        ]
+        raise ValueError(
+            "Benchmark must cover every measured strategy return interval; "
+            f"missing_dates={sample} missing_count={int(missing_benchmark.sum())}"
+        )
     days_total = max(len(group_ret.index), 1)
     cost_bps_per_year = {
         f"Q{g}": float(cost_df[f"Q{g}"].sum())
@@ -211,13 +220,12 @@ def quintile_backtest_v2(
     direction = int(factor_direction)
     ls = (raw_ls * direction).rename("LongShort")
     top_returns = group_ret[top].rename(top)
-    benchmark_aligned = benchmark_base.reindex(group_ret.index).dropna()
-    excess = (top_returns - benchmark_base).rename("Excess")
+    excess = (top_returns - benchmark_aligned).rename("Excess")
 
     group_nav = (1.0 + group_ret.fillna(0.0)).cumprod()
     ls_nav = (1.0 + ls.fillna(0.0)).cumprod().rename("LongShort")
     benchmark_nav = (
-        (1.0 + benchmark_base.reindex(group_ret.index).fillna(0.0))
+        (1.0 + benchmark_aligned)
         .cumprod()
         .rename("Benchmark")
     )
@@ -228,7 +236,7 @@ def quintile_backtest_v2(
         metrics_rows[col] = performance_summary(group_ret[col])
         if col == top:
             metrics_rows[col].update(
-                relative_performance_summary(group_ret[col], benchmark_base)
+                relative_performance_summary(group_ret[col], benchmark_aligned)
             )
     metrics_rows["LongShort"] = performance_summary(ls)
     metrics_df = pd.DataFrame(metrics_rows).T

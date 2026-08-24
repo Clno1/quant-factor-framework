@@ -15,7 +15,7 @@ ambiguous ``price_df``.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping
+from typing import Any, Mapping
 
 import numpy as np
 import pandas as pd
@@ -23,6 +23,89 @@ import pandas as pd
 
 class PriceSemanticsError(ValueError):
     """Published price matrices cannot satisfy the explicit semantics contract."""
+
+
+PRICE_SEMANTICS_SCHEMA_VERSION = 1
+PRICE_SEMANTICS_ID = "EXECUTION_AND_TOTAL_RETURN_V1"
+TOTAL_RETURN_OPEN_FORMULA = "execution_open * total_return_close / execution_close"
+FMP_CANONICAL_SOURCE = "FMP_FULL_PLUS_DIVIDEND_ADJUSTED"
+
+
+def build_price_semantics_contract(
+    *,
+    source: str,
+    history_mode: str,
+) -> dict[str, Any]:
+    """Build the immutable manifest declaration for canonical daily bars.
+
+    ``history_mode`` records whether the complete history was downloaded from
+    canonical sources or extended from an already-authenticated semantic parent.
+    It is intentionally not inferred from the column names: legacy files with an
+    ``adj_close`` column are not proof that the values include dividends.
+    """
+    normalized_source = str(source or "").strip().upper()
+    normalized_mode = str(history_mode or "").strip().upper()
+    if not normalized_source:
+        raise PriceSemanticsError("Price-semantics source provenance is required")
+    if normalized_mode not in {"FULL_REBUILD", "INCREMENTAL_FROM_AUTHENTICATED_PARENT"}:
+        raise PriceSemanticsError(
+            "Price-semantics history_mode must be FULL_REBUILD or "
+            "INCREMENTAL_FROM_AUTHENTICATED_PARENT"
+        )
+    return {
+        "schema_version": PRICE_SEMANTICS_SCHEMA_VERSION,
+        "semantic_id": PRICE_SEMANTICS_ID,
+        "execution_columns": {
+            "open": "open",
+            "high": "high",
+            "low": "low",
+            "close": "close",
+            "volume": "volume",
+        },
+        "total_return_close_column": "adj_close",
+        "total_return_open_formula": TOTAL_RETURN_OPEN_FORMULA,
+        "source": normalized_source,
+        "history_mode": normalized_mode,
+    }
+
+
+def validate_price_semantics_contract(payload: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Validate provenance before any table can be treated as total-return data."""
+    if not isinstance(payload, Mapping):
+        raise PriceSemanticsError(
+            "Published data have no explicit price-semantics contract; run a full rebuild"
+        )
+    contract = dict(payload)
+    expected_execution = {
+        "open": "open",
+        "high": "high",
+        "low": "low",
+        "close": "close",
+        "volume": "volume",
+    }
+    failures: list[str] = []
+    if int(contract.get("schema_version") or 0) != PRICE_SEMANTICS_SCHEMA_VERSION:
+        failures.append("schema_version")
+    if contract.get("semantic_id") != PRICE_SEMANTICS_ID:
+        failures.append("semantic_id")
+    if contract.get("execution_columns") != expected_execution:
+        failures.append("execution_columns")
+    if contract.get("total_return_close_column") != "adj_close":
+        failures.append("total_return_close_column")
+    if contract.get("total_return_open_formula") != TOTAL_RETURN_OPEN_FORMULA:
+        failures.append("total_return_open_formula")
+    if not str(contract.get("source") or "").strip():
+        failures.append("source")
+    if str(contract.get("history_mode") or "").strip().upper() not in {
+        "FULL_REBUILD",
+        "INCREMENTAL_FROM_AUTHENTICATED_PARENT",
+    }:
+        failures.append("history_mode")
+    if failures:
+        raise PriceSemanticsError(
+            f"Published price-semantics contract is invalid: {failures}"
+        )
+    return contract
 
 
 def _require_matrix(
@@ -127,4 +210,13 @@ class PriceSemantics:
         return self.execution_close * self.volume
 
 
-__all__ = ["PriceSemantics", "PriceSemanticsError"]
+__all__ = [
+    "FMP_CANONICAL_SOURCE",
+    "PRICE_SEMANTICS_ID",
+    "PRICE_SEMANTICS_SCHEMA_VERSION",
+    "PriceSemantics",
+    "PriceSemanticsError",
+    "TOTAL_RETURN_OPEN_FORMULA",
+    "build_price_semantics_contract",
+    "validate_price_semantics_contract",
+]

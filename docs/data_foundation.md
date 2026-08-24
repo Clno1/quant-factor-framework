@@ -73,8 +73,8 @@ data/lake/universes/US_LIQUID_5M/version=<universe_version_id>/
 |---|---|
 | `date` | XNYS 交易日 |
 | `ticker` | 标准化证券代码 |
-| `open/high/low/close` | 未复权 OHLC |
-| `adj_close` | 复权收盘价 |
+| `open/high/low/close` | 拆股调整后的可执行 OHLC；成交、股价门槛和美元成交额使用这一组 |
+| `adj_close` | 含现金分红的总回报收盘价；因子收益和 IC 使用，不是可成交价格 |
 | `volume` | 成交量 |
 
 Reader 可把长表 pivot 为 `date × ticker` 宽表，供既有因子接口使用。宽表只是运行时 DataFrame，
@@ -101,14 +101,16 @@ Reader 可把长表 pivot 为 `date × ticker` 宽表，供既有因子接口使
 ```text
 上一正式版本
   + 最近 21 个日历日重新请求的数据
-  -> 按 date,ticker 去重，新请求优先
+  -> 在重叠窗口验证每票每字段只有一个一致的历史缩放比例
+  -> 按该比例重标更早父数据；重叠行由新请求替换
   -> 候选版本
   -> 质量门禁
   -> 原子发布
 ```
 
-重叠窗口用于吸收拆股、分红复权和供应商修订。新版本不会原地覆盖旧版本，因此旧回测仍能按
-version ID 复现。相对起点 `5Y` 不会让系统每天自动删掉最早一天；新版本会继承已有历史。
+重叠窗口用于吸收拆股、分红复权和供应商修订。如果重叠日期推导出不一致缩放，增量发布失败并
+要求 `--full-rebuild`，不会在边界制造假收益。新版本不会原地覆盖旧版本，因此旧回测仍能按
+version ID 复现。没有 `price_semantics` 的旧版本不能作为增量父版本，也不能只补 manifest 标签。
 
 动态股票池会下载研究区间内 PIT 历史成员并集，而不是只下载今天的成分股。
 
@@ -119,12 +121,14 @@ version ID 复现。相对起点 `5Y` 不会让系统每天自动删掉最早一
 | 检查 | 要求 |
 |---|---|
 | schema | 必须有 date、ticker、完整 OHLC、adj_close、volume |
+| 价格语义 | manifest 必须声明规范双价格源、历史模式和已认证增量父版本 |
 | 主键 | `date,ticker` 不重复 |
 | 日期 | 可解析且不晚于 target session |
 | 数值 | 必需值非空且有限；价格大于 0；volume 不小于 0 |
 | OHLC | high/low 必须包住 open 和 close |
 | 最新覆盖 | 当前成分目标日覆盖至少 98% |
 | 新鲜覆盖 | 本次供应商请求目标日覆盖至少 98% |
+| 基准支持票 | 注册 benchmark（SPY/QQQ 等）在目标日必须有行情，但不进入成员矩阵 |
 | PIT 日覆盖 | 每个历史 session 至少覆盖 95% 当时成分 |
 | PIT 历史票 | 所有历史 active ticker 都必须有行情 |
 

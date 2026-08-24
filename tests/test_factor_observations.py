@@ -71,6 +71,7 @@ def _fixture(monkeypatch, tmp_path) -> SimpleNamespace:
         catalog=catalog,
         lake_dir=tmp_path / "lake",
         fetcher=_bars,
+        fetcher_semantics_source="TEST_CANONICAL_FIXTURE",
     )
     current = pd.DataFrame(
         {

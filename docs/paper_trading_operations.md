@@ -1,6 +1,6 @@
 # 模拟盘运行与运维
 
-更新日期：2026-08-02
+更新日期：2026-08-24
 
 ## 运行模型
 
@@ -10,10 +10,10 @@
 1. 校验 active 账户使用的命名股票池已有与最新 DuckDB version 一致的完整研究发布。
 2. 强制刷新 active 模拟盘中自定义 Watchlist 的 OHLCV。
 3. 校验策略目标日期等于最近完整 XNYS session；陈旧或超前都失败。
-4. 从 SQLite 的 `fills` frame 重建现金和持仓。
+4. 从 SQLite 的 `fills` 与 `cash_events` 事实账本重建现金和持仓。
 5. 只用截至本次 `as-of` 已出现的开盘价处理旧 pending 订单。
 6. 按账户 `rebalance_mode` 判断当天是否调仓；观察日只记录排名，不创建订单。
-7. 以收盘价估值，保存每日决策回放、账户投影和运行诊断。
+7. 以可执行收盘价估值；分红通过独立现金事件入账，再保存每日决策回放、账户投影和运行诊断。
 
 因此，网页只读取已经落盘的最新结果。当天收益能否出现，取决于 worker 是否在收盘数据和
 因子产物刷新成功后运行，而不是取决于用户是否登录。
@@ -93,10 +93,11 @@ systemctl list-timers --all quant-paper-trading.timer
 - 任一策略因子在某只股票当天缺失，系统不会用其余因子拼成不完整综合分；
 - 持仓股票在 `as-of` 当日及之前没有可用估值价格；
 - 成交账本存在重复 `fill_id`、超卖或非法记录；
+- 分红现金账存在重复 `event_id`，或已入账事件与新行情版本推导出的经济金额冲突；
 - 决策快照文件集合或 SHA-256 与 manifest 不一致。
 
 账户级线程锁和文件锁会阻止网页手动运行与 systemd worker 同时修改同一账户。账户主记录和
-`positions`、`orders`、`fills`、`equity_curve`、`target_weights`、`target_history`、
+`positions`、`orders`、`fills`、`cash_events`、`equity_curve`、`target_weights`、`target_history`、
 `position_history`、`runs` 都保存在 `outputs/quant_app.sqlite3`。每次 record/frame 写入使用
 SQLite 事务并核对 checksum。
 
@@ -105,6 +106,10 @@ SQLite 事务并核对 checksum。
 中途故障注入、重启恢复和重复运行验收，不能只凭单元测试宣称整轮完全原子。
 
 ## 边界
+
+当前 `cash_events` 根据可执行收盘价与总回报收盘价在除息日推导经济应计，并不包含券商实际
+派息日、预扣税、股票股利或拆股处理。因此它解决了“持仓收益漏掉现金分红”，但还不能等同于
+券商级 corporate-action ledger；模拟盘页面会把这些事件单独展示，避免把它们混成价格收益。
 
 这是内部日线模拟盘，不会连接券商，也不能提交真实订单。费用和滑点是显式模型，不是券商
 真实回报；交易所路由、盘口排队、盘前盘后、借券费、融资利息和 corporate actions 的券商

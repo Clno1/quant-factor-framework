@@ -26,8 +26,8 @@ from src.backtest.metrics import performance_summary, relative_performance_summa
 from src.backtest.quintile import (
     BacktestCapacityError,
     build_tradable_mask,
-    quintile_backtest,
 )
+from src.backtest.quintile_v2 import quintile_backtest_v2
 from src.backtest import store as bt_store
 from src.config import CONFIG
 from src.data.access import (
@@ -516,6 +516,8 @@ def _run_task(task_id: str) -> None:
         returns = adhoc_result.returns
         open_prices = adhoc_result.open_prices
         prices = adhoc_result.prices
+        total_return_open_prices = adhoc_result.total_return_open_prices
+        total_return_close_prices = adhoc_result.total_return_close_prices
         volumes = adhoc_result.volumes
         factor_raw = adhoc_result.factor_raw
         factor_clean = adhoc_result.factor_clean
@@ -621,9 +623,13 @@ def _run_task(task_id: str) -> None:
                 )
 
         wide = bundle.wide
-        returns = wide["returns"]
-        open_prices = wide.get("open")
-        prices = wide.get("adj_close")
+        if bundle.prices is None:
+            raise RuntimeError("Published bundle has no typed price semantics")
+        returns = bundle.prices.total_returns
+        open_prices = bundle.prices.execution_open
+        prices = bundle.prices.execution_close
+        total_return_open_prices = bundle.prices.total_return_open
+        total_return_close_prices = bundle.prices.total_return_close
         volumes = wide.get("volume")
         factor_raw = dict(comp_result.factor_raw)
         factor_clean = comp_result.factor_clean
@@ -721,19 +727,28 @@ def _run_task(task_id: str) -> None:
         columns=composite.columns,
         fill_value=False,
     )
-    result = quintile_backtest(
+    result = quintile_backtest_v2(
         composite, returns,
         factor_direction=+1,   # 合成后默认正向（权重已处理方向）
         n_groups=effective_n_groups,
         rebalance_days=rebalance_days,
         rebalance_mode=rebalance_mode,
-        open_df=open_prices,
-        price_df=prices,
+        execution_open_df=open_prices,
+        execution_close_df=prices,
+        total_return_open_df=total_return_open_prices,
+        total_return_close_df=total_return_close_prices,
         volume_df=volumes,
         tradable_mask=decision_tradable_mask,
         membership_mask=membership_mask,
         membership_events=bundle.membership_events,
+        benchmark_returns=bundle.benchmark_returns,
         execution=exec_cfg,
+    )
+    result.config["benchmark_data_contract"] = dict(
+        bundle.contract.benchmark or {}
+    )
+    result.config["benchmark_ticker"] = (
+        (bundle.contract.benchmark or {}).get("ticker")
     )
 
     top_col = f"Q{effective_top}"

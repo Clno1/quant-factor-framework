@@ -185,6 +185,60 @@ def test_duplicate_fill_ids_are_rejected():
         runner._state_from_fill_ledger(account, fills)
 
 
+def test_dividend_cash_ledger_is_economic_and_idempotent(monkeypatch, tmp_path):
+    _paper_root(monkeypatch, tmp_path)
+    account_id = str(uuid4())
+    account = _account(account_id)
+    account["initial_cash"] = 2_000.0
+    dates = pd.DatetimeIndex([
+        "2026-01-05",
+        "2026-01-06",
+        "2026-01-07",
+    ])
+    target = SimpleNamespace(
+        decision_date="2026-01-07",
+        prices=pd.DataFrame({"A": [100.0, 99.0, 100.0]}, index=dates),
+        total_return_close_prices=pd.DataFrame(
+            {"A": [100.0, 100.0, 100.0 * (100.0 / 99.0)]},
+            index=dates,
+        ),
+        data_contract={"dataset_version_id": "dataset-v1"},
+    )
+    fills = pd.DataFrame([{
+        "fill_id": str(uuid4()),
+        "fill_date": "2026-01-05",
+        "filled_at": "2026-01-05T14:30:00+00:00",
+        "ticker": "A",
+        "side": "BUY",
+        "quantity": 10.0,
+        "fill_price": 100.0,
+        "notional": 1_000.0,
+        "fee": 0.0,
+    }])
+
+    first = runner._accrue_dividend_cash_events(
+        account=account,
+        target=target,
+        fills=fills,
+    )
+    second = runner._accrue_dividend_cash_events(
+        account=account,
+        target=target,
+        fills=fills,
+    )
+
+    assert len(first) == 1
+    assert len(second) == 1
+    assert first.iloc[0]["date"] == "2026-01-06"
+    assert first.iloc[0]["quantity"] == pytest.approx(10.0)
+    assert first.iloc[0]["amount_per_share"] == pytest.approx(1.0)
+    assert first.iloc[0]["amount"] == pytest.approx(10.0)
+    assert first.iloc[0]["dataset_version_id"] == "dataset-v1"
+    cash, positions = runner._state_from_fill_ledger(account, fills, second)
+    assert cash == pytest.approx(1_010.0)
+    assert positions["A"]["quantity"] == pytest.approx(10.0)
+
+
 def test_historical_asof_resolves_previous_xnys_session():
     assert runner._expected_target_session("2026-01-04") == pd.Timestamp(
         "2026-01-02"
