@@ -866,9 +866,10 @@ def enqueue_market_data_request(
         )
     )
     payload = {
-        # Version 2 aligns fixed-basket membership with any earlier published
-        # history. It also prevents terminal v1 requests from blocking retries.
-        "schema_version": 2,
+        # Version 3 requires an authenticated price-semantics publication.
+        # Its distinct request key prevents an old successful v1/v2 request
+        # from suppressing the mandatory immutable-history rebuild.
+        "schema_version": 3,
         "data_universe": safe_path_component(
             data_universe.upper(),
             label="data_universe",

@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 import pandas as pd
 
 from src.data.foundation import DataFoundationError
+from src.data.access import enqueue_market_data_request
 from src.data.request_worker import process_pending_data_requests
 from src.storage import (
     DATA_REQUEST_FAILED,
@@ -250,3 +251,25 @@ def test_request_worker_does_not_rebuild_over_integrity_failure(tmp_path):
 
     assert processed[0].status != DATA_REQUEST_SUCCESS
     writer.update_universe.assert_not_called()
+
+
+def test_market_data_request_v3_does_not_deduplicate_to_legacy_success():
+    expected = object()
+    universe = pd.DataFrame([{"ticker": "AAA", "name": "Alpha"}])
+
+    with patch("src.data.access.app_database") as database_factory:
+        database_factory.return_value.enqueue_data_request.return_value = expected
+        actual = enqueue_market_data_request(
+            data_universe="WATCHLIST_TEST",
+            universe_frame=universe,
+            start="2025-01-01",
+            end="2025-12-31",
+            consumer_kind="backtest",
+            consumer_id="task-one",
+        )
+
+    assert actual is expected
+    payload = database_factory.return_value.enqueue_data_request.call_args.kwargs[
+        "payload"
+    ]
+    assert payload["schema_version"] == 3
