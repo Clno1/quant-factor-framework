@@ -6,7 +6,11 @@ from typing import Any
 
 import pandas as pd
 
-from src.data.foundation import MarketDataWriter
+from src.data.foundation import (
+    DataFoundationError,
+    MarketDataReader,
+    MarketDataWriter,
+)
 from src.config import CONFIG
 from src.storage import (
     DATA_REQUEST_SUCCESS,
@@ -25,6 +29,30 @@ class RequestProcessingResult:
     request_id: str
     status: str
     payload: dict[str, Any]
+
+
+def _requires_full_rebuild(
+    writer: MarketDataWriter,
+    latest: Any,
+) -> bool:
+    """Return true only when a published version predates price semantics.
+
+    Integrity failures are deliberately re-raised. A missing authenticated
+    price-semantics contract can be repaired only by fetching immutable source
+    history again; a checksum or catalog mismatch must never be papered over.
+    """
+    if latest is None:
+        return False
+    try:
+        MarketDataReader(catalog=writer.catalog).verify_version(
+            latest,
+            require_price_semantics=True,
+        )
+    except DataFoundationError as exc:
+        if "predates the authenticated price-semantics contract" not in str(exc):
+            raise
+        return True
+    return False
 
 
 def _membership_for_request(
@@ -62,6 +90,7 @@ def process_data_request(
         if universe_frame.empty or "ticker" not in universe_frame.columns:
             raise ValueError("Data request contains no universe records")
         latest = writer.catalog.latest_version(request.data_universe)
+        full_rebuild = _requires_full_rebuild(writer, latest)
         membership = _membership_for_request(
             request,
             earliest_existing_date=(latest.min_date if latest is not None else None),
@@ -71,6 +100,7 @@ def process_data_request(
             target_session=None,
             # A request exists because the current version failed preflight.
             force=True,
+            full_rebuild=full_rebuild,
             universe_frame=universe_frame,
             initial_start=payload["initial_start"],
             membership_frame=membership,

@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pandas as pd
 
+from src.data.foundation import DataFoundationError
 from src.data.request_worker import process_pending_data_requests
 from src.storage import (
     DATA_REQUEST_FAILED,
@@ -169,12 +170,83 @@ def test_request_worker_extends_membership_to_existing_history_start(tmp_path):
     )
     writer.update_universe.return_value = result
 
-    processed = process_pending_data_requests(
-        limit=1,
-        database=database,
-        writer=writer,
-    )
+    with patch("src.data.request_worker.MarketDataReader") as reader_class:
+        reader_class.return_value.verify_version.return_value = {
+            "price_semantics": {"schema_version": 1}
+        }
+        processed = process_pending_data_requests(
+            limit=1,
+            database=database,
+            writer=writer,
+        )
 
     assert processed[0].status == DATA_REQUEST_SUCCESS
     membership = writer.update_universe.call_args.kwargs["membership_frame"]
     assert membership["date"].min() == pd.Timestamp("2020-07-06")
+    assert writer.update_universe.call_args.kwargs["full_rebuild"] is False
+
+
+def test_request_worker_full_rebuilds_only_legacy_price_semantics(tmp_path):
+    database = AppDatabase(tmp_path / "app.sqlite3")
+    request = database.enqueue_data_request(
+        data_universe="WATCHLIST_TEST",
+        payload={
+            "universe_records": [{"ticker": "AAA"}],
+            "tickers": ["AAA"],
+            "initial_start": "2020-07-07",
+        },
+        consumer_kind="backtest",
+        consumer_id="task-one",
+    )
+    result = Mock()
+    result.to_dict.return_value = {"version_id": "version-three"}
+    result.version.version_id = "version-three"
+    writer = Mock()
+    writer.catalog.latest_version.return_value = SimpleNamespace(
+        min_date="2020-07-06"
+    )
+    writer.update_universe.return_value = result
+
+    with patch("src.data.request_worker.MarketDataReader") as reader_class:
+        reader_class.return_value.verify_version.side_effect = DataFoundationError(
+            "version predates the authenticated price-semantics contract"
+        )
+        processed = process_pending_data_requests(
+            limit=1,
+            database=database,
+            writer=writer,
+        )
+
+    assert processed[0].status == DATA_REQUEST_SUCCESS
+    assert writer.update_universe.call_args.kwargs["full_rebuild"] is True
+
+
+def test_request_worker_does_not_rebuild_over_integrity_failure(tmp_path):
+    database = AppDatabase(tmp_path / "app.sqlite3")
+    request = database.enqueue_data_request(
+        data_universe="WATCHLIST_TEST",
+        payload={
+            "universe_records": [{"ticker": "AAA"}],
+            "tickers": ["AAA"],
+            "initial_start": "2020-07-07",
+        },
+        consumer_kind="backtest",
+        consumer_id="task-one",
+    )
+    writer = Mock()
+    writer.catalog.latest_version.return_value = SimpleNamespace(
+        min_date="2020-07-06"
+    )
+
+    with patch("src.data.request_worker.MarketDataReader") as reader_class:
+        reader_class.return_value.verify_version.side_effect = DataFoundationError(
+            "manifest checksum mismatch"
+        )
+        processed = process_pending_data_requests(
+            limit=1,
+            database=database,
+            writer=writer,
+        )
+
+    assert processed[0].status != DATA_REQUEST_SUCCESS
+    writer.update_universe.assert_not_called()
