@@ -212,11 +212,14 @@ def _versioned_membership(
     tickers: list[str],
     start: pd.Timestamp,
     target: pd.Timestamp,
+    full_rebuild: bool = False,
 ) -> pd.DataFrame:
-    try:
-        existing = reader.load_membership(US_LIQUID_5M)
-    except Exception:
-        existing = None
+    existing = None
+    if not full_rebuild:
+        try:
+            existing = reader.load_membership(US_LIQUID_5M)
+        except Exception:
+            existing = None
     snapshots: list[pd.DataFrame] = []
     if existing is not None and not existing.empty:
         snapshots.append(existing.loc[existing["date"].lt(target)].copy())
@@ -246,6 +249,15 @@ def main() -> None:
         help="Only refresh symbols whose screener dollar volume meets this USD millions floor.",
     )
     parser.add_argument("--force-universe", action="store_true")
+    parser.add_argument(
+        "--full-rebuild",
+        action="store_true",
+        help=(
+            "fetch a fresh immutable history without inheriting the current "
+            "market-data or membership version; required for price-semantics "
+            "migration"
+        ),
+    )
     parser.add_argument(
         "--stocks-only",
         action="store_true",
@@ -344,6 +356,7 @@ def main() -> None:
         tickers=tickers,
         start=start,
         target=target,
+        full_rebuild=bool(args.full_rebuild),
     )
     formal_universe = _formal_universe_frame(
         universe,
@@ -355,6 +368,7 @@ def main() -> None:
         US_LIQUID_5M,
         target_session=target,
         force=args.force_universe,
+        full_rebuild=bool(args.full_rebuild),
         workers=args.workers,
         universe_frame=formal_universe,
         initial_start=start,

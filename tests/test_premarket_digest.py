@@ -46,6 +46,7 @@ from scripts.refresh_us_active import (
     _latest_completed_xnys_session,
     _publish_universe_manifest,
     _select_refresh_tickers,
+    _versioned_membership,
 )
 
 
@@ -589,6 +590,31 @@ class MomentumSourceTests(unittest.TestCase):
                 always_tickers=set(),
                 limit=None,
             )
+
+    def test_full_rebuild_does_not_inherit_legacy_membership(self):
+        reader = Mock()
+        reader.load_membership.return_value = pd.DataFrame(
+            {
+                "date": [pd.Timestamp("2025-01-01")],
+                "ticker": ["LEGACY"],
+                "active": [True],
+            }
+        )
+
+        membership = _versioned_membership(
+            reader,
+            tickers=["AAA", "BBB"],
+            start=pd.Timestamp("2026-01-01"),
+            target=pd.Timestamp("2026-08-21"),
+            full_rebuild=True,
+        )
+
+        reader.load_membership.assert_not_called()
+        self.assertEqual(set(membership["ticker"]), {"AAA", "BBB"})
+        self.assertEqual(
+            set(membership["date"]),
+            {pd.Timestamp("2026-01-01"), pd.Timestamp("2026-08-21")},
+        )
 
     def test_stock_only_exact_asof_gate_and_completed_bar(self):
         with tempfile.TemporaryDirectory() as temporary:
