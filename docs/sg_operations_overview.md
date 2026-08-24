@@ -1,18 +1,17 @@
 # SG 生产运维总览
 
-更新日期：2026-08-24
+更新日期：2026-08-25
 
 ## 1. 当前部署状态
 
 | 范围 | 状态 |
 |---|---|
-| 本地 `/Users/huozhihong/Documents/Quant` | 全美宽基、可恢复首次链与独立运维站代码完成，待提交共享仓库 |
-| SG `/home/projects/quant` | 宽基代码和独立运维站已部署；主 Web、双核心研究池、既有调度与运维采集均已验收 |
+| 共享仓库 | 研究完整性修复已提交；远端 `main` 与 `master` 同步 |
+| SG `/home/projects/quant` | 研究完整性代码、命名池、宽基数据和真实业务链均已部署验收 |
 | 全美宽基 v1 | Security Master、coverage、PIT 和八因子已连续通过 2026-08-20/21 影子验收，当前 2/5；日常 timer 已启用，网页默认开关仍关闭 |
 
-SG 发布使用精确白名单 rsync，不从未推送的本地 `main` 做远端 `git pull`。当前部署标记
-`/home/projects/quant/.deploy-commit` 为 `3a52611`，服务器仓库 HEAD 为 `026ae89fad53`；
-2026-08-11 NASDAQ100 修复和 2026-08-12 全美宽基代码均作为审核热修复部署，仍需提交共享仓库。
+SG 发布使用隔离 worktree 生成的精确白名单包，不从用户仍有未提交改动的本地工作目录直接部署。
+本次先把此前 SG 审核热修复纳入共享提交，再让远端 `main`、`master` 与 SG `.deploy-commit` 对齐。
 部署始终排除 `.git`、项目根目录的 `data/outputs/logs`、虚拟环境和密钥文件。rsync 排除项必须写成
 `/data/`、`/outputs/` 等根锚定形式；非锚定 `data/` 会误排除代码目录 `src/data/`。
 
@@ -556,3 +555,57 @@ cgroup 设置 `MemoryHigh=420M`、`MemoryMax=600M`、`MemorySwapMax=0`、`OOMPol
 两只股票的最新历史排名和同日日期截面排名完全一致。重启后的 kernel journal 无新 OOM。
 宽基 timer 为 `enabled/active`，下次计划在 2026-08-25 11:31 SGT 左右运行；影子台账保持
 2/5、剩余 3 日，网页默认开关继续关闭。
+
+## 16. 2026-08-24/25 研究完整性强制重建与真实业务验收
+
+发布前备份为：
+
+```text
+/home/projects/quant-backups/research-integrity-20260824T210149+0800
+```
+
+备份约 7.9 GB，包含项目、`/etc/quant` 环境文件、systemd unit 和维护前 11 个 timer 清单。代码包
+没有覆盖 `.git`、`data/`、`outputs/`、`logs/`、虚拟环境或密钥。远端 `main` 与 `master` 同步；
+本地用户工作目录中的未提交改动没有被 reset、覆盖或拿来拼生产包。
+
+这次不再信任只有列名、但没有来源语义认证的旧行情。正式重建结果：
+
+| 对象 | 当前正式身份 | 结果 |
+|---|---|---|
+| SP500 行情 | `f150d0b840004c768909bf19659e87e2` | 978,326 行，621 票，target 2026-08-21 |
+| NASDAQ100 行情 | `4a847de456c14a129e2a61ee757b6975` | 251,942 行，166 票，target 2026-08-21 |
+| MAG7 行情 | `12eaee8f10134553aa76fb21956d367c` | 13,344 行，8 票，target 2026-08-21 |
+| 全美 coverage | `a3d19d164a6143bda815589a10b93311` | 10,404,180 行，7,963 个证券，640 个分片 |
+| PIT US_LIQUID_5M | `c5c45b65d83c43e2a6d5689f5fa43eed` | 91 个快照，当前 2,779 个成员 |
+| 宽基八因子 | `796257a9-5704-4f77-960a-d13f8bdf119a` | 8 因子、640 分片，逐子文件哈希通过 |
+| 业务 US_LIQUID_5M | `0727972df65340de9685ae84618cc81d` | 365,085 行、2,935 票、99.9659% 目标覆盖 |
+
+SP500、NASDAQ100 和 MAG7 的正式研究 publication 分别为
+`fe4ffa5a-9316-49fc-9a90-93bdb7787019`、`25f47502-22d3-4570-bcf1-abbf47eb9b78`、
+`afae67cf-d090-40e4-aca3-7e7032398e8e`。三者都绑定同目标日的新行情版本，并通过 schema 3、
+价格语义、HAC 和 confidence 文件哈希校验。
+
+重建业务 `US_LIQUID_5M` 时，旧命令曾在 2026-08-24 美股盘中刷新 live universe。该候选在发布前
+被发现并停止，未成为正式版本；无效 ingestion 明确标记 `FAILED`，原文件保存在
+`outputs/data_audits/research_integrity_20260825/`。正式重建改用 target 2026-08-21、9,786 票、
+SHA-256 为 `acb44911c0725d4d084725ed724dde7bdf2d09fb3ac871e199f45be4d3c5249a` 的冻结清单，代码现在强制
+校验 source session、行数与 SHA，禁止再次把未来可知股票清单写入历史目标日。
+
+真实业务验收使用 Watchlist `36d324f4-4391-42b3-855b-3f9c91cfae80`：v3 缺数请求先后真实经历
+`pending -> running -> success`，发布专属版本 `41907b7b9e1b4437be32f853f0527d4c`；worker 重启后
+成功请求 attempts 仍为 1。回测任务 `57750813-86a4-4903-a7cd-97b294c00997` 从
+`WAITING_FOR_DATA` 自动恢复到 `success`，绑定上述版本并产生 72 条逐票交易记录，总成本扣减
+`0.03418349277437505`，年化成本约 70.263 bps。模拟盘账户
+`ba277a68-fa45-4d5c-b3df-7b6e596da0bb` 使用 `ibkr_us_pro_fixed + volume_share`，按 `next_open`
+创建 2 条 pending order；同日重跑和 `quant-paper-trading.service` 冷启动均没有重复订单。因下一交易日
+2026-08-24 日线尚未发布，当前 0 fill 是正确行为，不允许用 2026-08-21 收盘价代替下一开盘价。
+
+宽基影子台账只按不同 target session 计数，目前通过 2026-08-20、2026-08-21，进度 2/5，剩余
+3 个交易日，`web_default_enabled=false` 保持不变。readiness 的
+`PIT_CLASSIFICATION_POLICY`、`PIT_INDUSTRY_COVERAGE` 仍为预期阻断：当前行业数据是 latest-known，
+不能发布正式宽基 IC/置信结论。基础行情、PIT、八因子数据和查询已就绪，这不等于宽基正式研究通过。
+
+本地完整回归为 `595 passed`；SG 代码基线完整回归为 `593 passed`。业务 SQLite、运维 SQLite 和
+快照 integrity 都为 `ok`，Quant systemd unit 的 `systemd-analyze verify` 无错误。维护结束后恢复
+主 Web、运维 Web 与备份清单中的 11 个 timer；计划维护造成的当日盘前和部分小时动量缺口保留为
+运维 incident，不补发、不删除，待下一个完整交易日自然验收。

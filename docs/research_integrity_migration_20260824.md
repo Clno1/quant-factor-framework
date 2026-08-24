@@ -1,6 +1,6 @@
 # 研究完整性升级与强制重建手册
 
-更新时间：2026-08-24
+更新时间：2026-08-25
 
 这次升级改变的是金融语义和统计口径，不只是文件格式。旧发布版本即使包含
 `open`、`close`、`adj_close`，也不能仅凭列名证明可执行价与总回报价来自正确数据源，
@@ -132,7 +132,33 @@ python scripts/run_factor_research.py \
 
 任一门槛失败时，不更新 SG 正式指针，不启动每日增量任务，也不删除旧版本。
 
-## 6. 本次代码工作的部署状态
+## 6. 2026-08-24/25 正式部署结果
 
-本手册记录的是代码与本机只读数据验收结果。本次任务没有连接 SG、没有上传代码、没有执行
-FMP 全量下载，也没有切换任何生产定时任务。SG 部署必须在独立备份和维护窗口内按上述顺序执行。
+本次升级已经在隔离 worktree 完成审阅、提交并推送到共享仓库，远端 `main` 和 `master` 保持同一
+提交。SG `/home/projects/quant` 已从白名单发布包部署；生产数据、密钥、虚拟环境、日志和既有输出
+没有被代码包覆盖。部署前完整备份位于：
+
+```text
+/home/projects/quant-backups/research-integrity-20260824T210149+0800
+```
+
+正式验收基线如下：
+
+- 本地完整回归 `595 passed`，SG 完整回归 `593 passed`；新增运维判定另有针对性回归通过；
+- 全部 Quant unit 通过 `systemd-analyze verify`，唯一输出是无关的腾讯 `tat_agent` 旧 `/var/run` 警告；
+- SP500、NASDAQ100、MAG7 的新行情版本、研究 publication 和全部子文件哈希通过；
+- 全美 coverage `a3d19d164a6143bda815589a10b93311`、PIT
+  `c5c45b65d83c43e2a6d5689f5fa43eed`、八因子 publication
+  `796257a9-5704-4f77-960a-d13f8bdf119a` 已完成强制重建；
+- 用冻结且经 SHA/行数认证的 2026-08-21 股票清单重建了业务
+  `US_LIQUID_5M` 版本 `0727972df65340de9685ae84618cc81d`；盘中误刷新的候选未发布并保留审计；
+- 真实 Watchlist 已完成 `pending -> running -> success`、专属版本发布、
+  `WAITING_FOR_DATA` 自动恢复和 worker 重启不重复领取；
+- 真实回测绑定不可变数据版本，产生 72 条逐票交易成本；真实模拟盘账户按 `next_open` 创建 2 条
+  待成交订单，同日重跑和生产服务冷启动均未重复下单；
+- 业务 SQLite、运维 SQLite 和只读快照完整性均为 `ok`。
+
+宽基影子台账仍严格为不同 target session 的 `2/5`，日期是 2026-08-20、2026-08-21，剩余 3 日；
+`web_default_enabled=false` 未修改。宽基正式 IC/置信结论仍因缺少有效日期行业历史被
+`PIT_CLASSIFICATION_POLICY` 和 `PIT_INDUSTRY_COVERAGE` 阻断。行情、PIT、八因子数据和查询能力
+可用，但不得把这两项保护性阻断描述成正式宽基研究已经发布。
