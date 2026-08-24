@@ -129,7 +129,7 @@ def test_unregistered_watchlist_uses_explicit_total_return_basket_benchmark() ->
         manifest_checksum_sha256="manifest-sha",
     )
     benchmark, contract = _resolve_bundle_benchmark(
-        requested_universe="WATCHLIST_TEST",
+        requested_universe="watchlist:36d324f4-4391-42b3-855b-3f9c91cfae80",
         data_universe="WATCHLIST_TEST",
         version=version,
         prices=semantics,

@@ -28,7 +28,19 @@ class ResearchUniverseRegistry:
         self.source = source
 
     def get(self, universe_id: str) -> ResearchUniverse:
-        key = safe_path_component(universe_id.upper(), label="research_universe")
+        try:
+            key = safe_path_component(
+                universe_id.upper(),
+                label="research_universe",
+            )
+        except ValueError as exc:
+            # Dynamic consumer identifiers such as ``watchlist:<uuid>`` are
+            # intentionally outside the formal research registry. Normalize
+            # that distinction to the registry's public error contract so
+            # callers can select their explicit unregistered-universe path.
+            raise ResearchUniverseRegistryError(
+                f"Unknown research universe: {universe_id}"
+            ) from exc
         try:
             return self._entries[key]
         except KeyError as exc:
