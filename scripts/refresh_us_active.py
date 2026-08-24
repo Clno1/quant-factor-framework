@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import hashlib
+import json
 import os
 from pathlib import Path
 import sys
@@ -104,6 +105,45 @@ def _publish_universe_manifest(
         manifest_path,
     )
     return manifest_path
+
+
+def _load_authenticated_universe_cache(
+    target: pd.Timestamp,
+) -> pd.DataFrame:
+    """Load a frozen US_ACTIVE snapshot only when its manifest is exact."""
+    cache_path = ROOT / "data" / "raw" / "universe" / "us_active.parquet"
+    manifest_path = cache_path.with_suffix(".premarket.json")
+    if not cache_path.is_file() or not manifest_path.is_file():
+        raise RuntimeError(
+            "frozen US_ACTIVE cache or authentication manifest is missing"
+        )
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError("frozen US_ACTIVE manifest is unreadable") from exc
+    if not isinstance(manifest, dict):
+        raise RuntimeError("frozen US_ACTIVE manifest must be an object")
+    expected = {
+        "schema_version": 1,
+        "universe": "US_ACTIVE",
+        "source_session": target.date().isoformat(),
+        "parquet_sha256": _sha256_path(cache_path),
+    }
+    mismatches = [
+        key for key, value in expected.items()
+        if manifest.get(key) != value
+    ]
+    if mismatches:
+        raise RuntimeError(
+            "frozen US_ACTIVE cache authentication failed: "
+            f"mismatches={mismatches}"
+        )
+    frame = pd.read_parquet(cache_path)
+    if int(manifest.get("row_count") or -1) != len(frame):
+        raise RuntimeError(
+            "frozen US_ACTIVE cache row count differs from its manifest"
+        )
+    return frame
 
 
 def _select_refresh_tickers(
@@ -250,6 +290,14 @@ def main() -> None:
     )
     parser.add_argument("--force-universe", action="store_true")
     parser.add_argument(
+        "--frozen-universe-cache",
+        action="store_true",
+        help=(
+            "use only the authenticated US_ACTIVE cache whose source_session "
+            "exactly matches the target; never refresh it from the provider"
+        ),
+    )
+    parser.add_argument(
         "--full-rebuild",
         action="store_true",
         help=(
@@ -276,6 +324,19 @@ def main() -> None:
         help="Safely load KEY=VALUE settings without shell-sourcing the file.",
     )
     args = parser.parse_args()
+    if args.force_universe and args.frozen_universe_cache:
+        parser.error(
+            "--force-universe and --frozen-universe-cache are mutually exclusive"
+        )
+    if (
+        args.full_rebuild
+        and not args.force_universe
+        and not args.frozen_universe_cache
+    ):
+        parser.error(
+            "--full-rebuild requires either --force-universe or "
+            "--frozen-universe-cache"
+        )
     if args.env_file is not None:
         if load_local_env(args.env_file) is None:
             raise FileNotFoundError("the requested environment file does not exist")
@@ -291,7 +352,11 @@ def main() -> None:
         )
     target = _latest_completed_xnys_session()
     refresh_started_at = datetime.now(timezone.utc)
-    universe = get_universe("US_ACTIVE", force_refresh=args.force_universe)
+    universe = (
+        _load_authenticated_universe_cache(target)
+        if args.frozen_universe_cache
+        else get_universe("US_ACTIVE", force_refresh=args.force_universe)
+    )
     if args.force_universe:
         manifest_path = _publish_universe_manifest(
             universe,

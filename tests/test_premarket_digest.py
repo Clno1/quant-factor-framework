@@ -44,6 +44,7 @@ from scripts.configure_premarket_discord import (
 from scripts.run_premarket_digest import main as run_premarket_digest_main
 from scripts.refresh_us_active import (
     _latest_completed_xnys_session,
+    _load_authenticated_universe_cache,
     _publish_universe_manifest,
     _select_refresh_tickers,
     _versioned_membership,
@@ -561,6 +562,27 @@ class MomentumSourceTests(unittest.TestCase):
                     refresh_started_at=datetime.now(timezone.utc),
                     previous_signature=signature,
                 )
+
+    def test_frozen_universe_cache_requires_exact_target_and_hash(self):
+        with tempfile.TemporaryDirectory() as temporary, patch(
+            "scripts.refresh_us_active.ROOT", Path(temporary)
+        ):
+            cache = Path(temporary) / "data/raw/universe/us_active.parquet"
+            cache.parent.mkdir(parents=True)
+            frame = pd.DataFrame(
+                {
+                    "ticker": ["AAA", "BBB"],
+                    "asset_type": ["STOCK", "STOCK"],
+                }
+            )
+            frame.to_parquet(cache)
+            _write_universe_manifest(cache, len(frame))
+
+            loaded = _load_authenticated_universe_cache(pd.Timestamp(SOURCE))
+            pd.testing.assert_frame_equal(loaded, frame)
+
+            with self.assertRaisesRegex(RuntimeError, "source_session"):
+                _load_authenticated_universe_cache(pd.Timestamp(TARGET))
 
     def test_refresh_limit_keeps_low_liquidity_always_stock_but_not_etf(self):
         universe = pd.DataFrame(
