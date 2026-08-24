@@ -1,7 +1,7 @@
 """Evidence adapters for the application SQLite queue and paper accounts."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 import json
 from pathlib import Path
 from typing import Any, Iterable
@@ -43,6 +43,59 @@ def _decode(value: Any) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _request_interval(row: dict[str, Any]) -> tuple[date, date] | None:
+    payload = _decode(row.get("payload_json"))
+    start_value = payload.get("initial_start") or payload.get("start")
+    end_value = payload.get("end")
+    try:
+        return date.fromisoformat(str(start_value)), date.fromisoformat(str(end_value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _successful_request_supersedes(
+    failed: dict[str, Any],
+    succeeded: dict[str, Any],
+) -> bool:
+    """Return whether a later success fully repairs one retained failure."""
+    if str(failed.get("data_universe") or "") != str(
+        succeeded.get("data_universe") or ""
+    ):
+        return False
+    failed_at = parse_datetime(
+        failed.get("finished_at") or failed.get("updated_at") or failed.get("created_at")
+    )
+    succeeded_at = parse_datetime(
+        succeeded.get("finished_at")
+        or succeeded.get("updated_at")
+        or succeeded.get("created_at")
+    )
+    if failed_at is None or succeeded_at is None or succeeded_at <= failed_at:
+        return False
+    failed_interval = _request_interval(failed)
+    succeeded_interval = _request_interval(succeeded)
+    if failed_interval is None or succeeded_interval is None:
+        return False
+    failed_start, failed_end = failed_interval
+    succeeded_start, succeeded_end = succeeded_interval
+    if succeeded_start > failed_start or succeeded_end < failed_end:
+        return False
+    failed_payload = _decode(failed.get("payload_json"))
+    succeeded_payload = _decode(succeeded.get("payload_json"))
+    failed_tickers = sorted(str(value) for value in failed_payload.get("tickers") or [])
+    succeeded_tickers = sorted(
+        str(value) for value in succeeded_payload.get("tickers") or []
+    )
+    if failed_tickers and succeeded_tickers and failed_tickers != succeeded_tickers:
+        return False
+    try:
+        return int(succeeded_payload.get("schema_version") or 0) >= int(
+            failed_payload.get("schema_version") or 0
+        )
+    except (TypeError, ValueError):
+        return False
+
+
 def _collect_data_requests(
     job: JobDefinition,
     *,
@@ -61,6 +114,25 @@ def _collect_data_requests(
     for row in rows:
         state = str(row.get("status") or "UNKNOWN").upper()
         counts[state] = counts.get(state, 0) + 1
+    successful_rows = [
+        row
+        for row in rows
+        if str(row.get("status") or "").upper() == "SUCCESS"
+    ]
+    failed_rows = [
+        row
+        for row in rows
+        if str(row.get("status") or "").upper() == "FAILED"
+    ]
+    unresolved_failed = [
+        failed
+        for failed in failed_rows
+        if not any(
+            _successful_request_supersedes(failed, succeeded)
+            for succeeded in successful_rows
+        )
+    ]
+    superseded_failed_count = len(failed_rows) - len(unresolved_failed)
     pending_limit = int(job.schedule.get("oldest_pending_minutes") or 20)
     running_limit = int(job.schedule.get("stale_running_minutes") or 30)
     old_pending: list[dict[str, Any]] = []
@@ -82,12 +154,16 @@ def _collect_data_requests(
     elif counts.get("RUNNING", 0):
         status = JobStatus.RUNNING
         reason = f"正在处理 {counts['RUNNING']} 个请求"
-    elif counts.get("FAILED", 0):
+    elif unresolved_failed:
         status = JobStatus.DEGRADED
-        reason = f"队列空闲，历史仍有 {counts['FAILED']} 个失败请求"
+        reason = f"队列空闲，仍有 {len(unresolved_failed)} 个未恢复失败请求"
     else:
         status = JobStatus.SUCCESS
-        reason = "队列空闲且没有超时请求"
+        reason = (
+            f"队列空闲；{superseded_failed_count} 个历史失败已由后续成功覆盖"
+            if superseded_failed_count
+            else "队列空闲且没有超时请求"
+        )
     if stale_running or old_pending:
         result.incidents.append(IncidentCandidate(
             fingerprint="data_requests:queue_lag",
@@ -156,6 +232,8 @@ def _collect_data_requests(
             "status_counts": counts,
             "oldest_pending_count": len(old_pending),
             "stale_running_count": len(stale_running),
+            "unresolved_failed_count": len(unresolved_failed),
+            "superseded_failed_count": superseded_failed_count,
         },
     ))
     return result
