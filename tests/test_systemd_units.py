@@ -176,6 +176,15 @@ class SystemdUnitTests(unittest.TestCase):
         self.assertIn("MemorySwapMax=0", web)
         self.assertIn("OOMPolicy=stop", web)
 
+    def test_sg_release_excludes_only_root_state_directories(self):
+        guide = (PROJECT_ROOT / "docs" / "sg_manual_deploy_3a52611.md").read_text(
+            encoding="utf-8"
+        )
+
+        for directory in ("data", "outputs", "logs", "runlog"):
+            self.assertIn(f"--exclude='/{directory}/'", guide)
+            self.assertNotIn(f"--exclude='{directory}/'", guide)
+
 
 if __name__ == "__main__":
     unittest.main()

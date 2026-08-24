@@ -118,7 +118,11 @@ def test_operations_public_bind_accepts_valid_independent_credentials(monkeypatc
 def test_business_app_does_not_mount_operations_routes():
     from src.webapp.app import create_app as create_business_app
 
-    paths = {route.path for route in create_business_app().routes}
+    paths = {
+        route.path
+        for route in create_business_app().routes
+        if hasattr(route, "path")
+    }
     assert "/incidents" not in paths
     assert "/api/overview" not in paths
     assert "/projects" not in paths

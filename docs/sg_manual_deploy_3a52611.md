@@ -65,18 +65,18 @@ test -f "$RELEASE/scripts/run_mvp.py"
 
 ```bash
 rsync -ani --delete \
-  --exclude='.git/' --exclude='.env.local' --exclude='.venv/' --exclude='.venv-worker/' \
-  --exclude='data/' --exclude='outputs/' --exclude='logs/' --exclude='runlog/' \
-  --exclude='.deploy-commit' "$RELEASE/" /home/projects/quant/
+  --exclude='/.git/' --exclude='/.env.local' --exclude='/.venv/' --exclude='/.venv-worker/' \
+  --exclude='/data/' --exclude='/outputs/' --exclude='/logs/' --exclude='/runlog/' \
+  --exclude='/.deploy-commit' "$RELEASE/" /home/projects/quant/
 ```
 
 确认预览只涉及代码、模板、测试和文档后执行正式同步：
 
 ```bash
 rsync -a --delete \
-  --exclude='.git/' --exclude='.env.local' --exclude='.venv/' --exclude='.venv-worker/' \
-  --exclude='data/' --exclude='outputs/' --exclude='logs/' --exclude='runlog/' \
-  --exclude='.deploy-commit' "$RELEASE/" /home/projects/quant/
+  --exclude='/.git/' --exclude='/.env.local' --exclude='/.venv/' --exclude='/.venv-worker/' \
+  --exclude='/data/' --exclude='/outputs/' --exclude='/logs/' --exclude='/runlog/' \
+  --exclude='/.deploy-commit' "$RELEASE/" /home/projects/quant/
 printf '%s\n' '3a52611' > /home/projects/quant/.deploy-commit
 cd /home/projects/quant
 .venv/bin/python -m pip install -r requirements.txt
