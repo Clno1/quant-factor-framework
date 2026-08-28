@@ -79,7 +79,11 @@ def _state_from_fill_ledger(
     cash = float(account.get("initial_cash", 0.0) or 0.0)
     positions: dict[str, dict[str, float]] = {}
     ledger = fills.copy() if fills is not None else pd.DataFrame()
-    if not ledger.empty and "fill_id" in ledger.columns and ledger["fill_id"].astype(str).duplicated().any():
+    if (
+        not ledger.empty
+        and "fill_id" in ledger.columns
+        and ledger["fill_id"].astype(str).duplicated().any()
+    ):
         raise ValueError("Duplicate fill_id detected in paper-trading ledger")
     sort_columns = [
         column
@@ -193,8 +197,17 @@ def _latest_price_row(prices: pd.DataFrame, asof: str | None = None) -> tuple[st
     return dt.strftime("%Y-%m-%d"), px.ffill().loc[dt]
 
 
+_FMP_REPORTED_PRICE_HALF_QUANTUM_USD = 0.0050001
+
+
 def _derived_dividend_cash_per_share(target: TargetResult) -> pd.DataFrame:
-    """Derive cash distributions while keeping share valuation in raw price units."""
+    """Derive conservative cash distributions in executable-price units.
+
+    FMP's published total-return close is cent-quantized while executable close
+    may carry finer decimals. Interval arithmetic treats any distribution that
+    could be zero within the reported precision as zero. A definitely negative
+     interval remains a hard error, so this does not weaken the quality gate.
+    """
     execution_close = target.prices.apply(pd.to_numeric, errors="coerce")
     total_return_close = target.total_return_close_prices.apply(
         pd.to_numeric,
@@ -208,11 +221,27 @@ def _derived_dividend_cash_per_share(target: TargetResult) -> pd.DataFrame:
         columns=common_cols,
     )
     previous_execution = execution_close.shift(1)
-    total_return_ratio = total_return_close / total_return_close.shift(1)
+    previous_total_return = total_return_close.shift(1)
+    total_return_ratio = total_return_close / previous_total_return
     distribution = previous_execution * total_return_ratio - execution_close
-    tolerance = execution_close.abs().clip(lower=1.0) * 1e-7
-    distribution = distribution.mask(distribution.abs().le(tolerance), 0.0)
-    material_negative = distribution.lt(-tolerance)
+
+    quantum = _FMP_REPORTED_PRICE_HALF_QUANTUM_USD
+    ratio_low = (total_return_close - quantum).clip(lower=1e-12) / (
+        previous_total_return + quantum
+    )
+    ratio_high = (total_return_close + quantum) / (
+        previous_total_return - quantum
+    ).clip(lower=1e-12)
+    distribution_low = (
+        (previous_execution - quantum).clip(lower=1e-12) * ratio_low
+        - (execution_close + quantum)
+    )
+    distribution_high = (
+        (previous_execution + quantum) * ratio_high
+        - (execution_close - quantum)
+    )
+
+    material_negative = distribution_high.lt(0)
     if material_negative.any(axis=None):
         locations = np.argwhere(material_negative.to_numpy())[:20]
         sample = [
@@ -220,17 +249,21 @@ def _derived_dividend_cash_per_share(target: TargetResult) -> pd.DataFrame:
                 "date": pd.Timestamp(distribution.index[i]).date().isoformat(),
                 "ticker": str(distribution.columns[j]),
                 "amount": float(distribution.iat[i, j]),
+                "upper_bound": float(distribution_high.iat[i, j]),
             }
             for i, j in locations
         ]
         raise ValueError(
             "Published execution and total-return prices imply negative cash "
-            f"distributions; refusing paper-accounting fallback: sample={sample}"
+            f"distributions beyond source precision; sample={sample}"
         )
-    return distribution.where(distribution.gt(0), 0.0)
+    return distribution.where(distribution_low.gt(0), 0.0)
 
 
-def _fills_before_ex_date(fills: pd.DataFrame, ex_date: pd.Timestamp) -> pd.DataFrame:
+def _fills_before_ex_date(
+    fills: pd.DataFrame,
+    ex_date: pd.Timestamp,
+) -> pd.DataFrame:
     if fills is None or fills.empty or "fill_date" not in fills.columns:
         return pd.DataFrame(columns=getattr(fills, "columns", None))
     dates = pd.to_datetime(fills["fill_date"], errors="coerce").dt.normalize()
@@ -250,16 +283,14 @@ def _accrue_dividend_cash_events(
         return existing
     distributions = _derived_dividend_cash_per_share(target)
     cutoff = pd.Timestamp(target.decision_date).normalize()
-    candidate_locations = np.argwhere(
-        distributions.loc[distributions.index <= cutoff].gt(0).to_numpy()
-    )
+    bounded = distributions.loc[distributions.index <= cutoff]
+    candidate_locations = np.argwhere(bounded.gt(0).to_numpy())
     existing_by_id = (
         existing.set_index(existing["event_id"].astype(str), drop=False)
         if not existing.empty and "event_id" in existing.columns
         else pd.DataFrame()
     )
     rows: list[dict[str, Any]] = []
-    bounded = distributions.loc[distributions.index <= cutoff]
     for row_no, col_no in candidate_locations:
         ex_date = pd.Timestamp(bounded.index[row_no]).normalize()
         ticker = str(bounded.columns[col_no])

@@ -1,0 +1,12 @@
+[Unit]
+Description=Prepare US premarket digests before the delivery window
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 07:00:00 America/New_York
+Persistent=true
+AccuracySec=30s
+RandomizedDelaySec=15s
+Unit=quant-premarket-prepare.service
+
+[Install]
+WantedBy=timers.target

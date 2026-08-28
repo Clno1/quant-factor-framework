@@ -681,6 +681,22 @@ def test_store_publishes_all_frames_atomically_and_verifies_hashes():
             store.load_published()
 
 
+def test_load_published_never_initializes_catalog_on_read(monkeypatch):
+    candidate = _candidate()
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        store = SecurityMasterStore(root / "catalog.duckdb", root / "snapshots")
+        generation = store.publish(candidate)
+
+        def fail_if_called() -> None:
+            raise AssertionError("read path attempted catalog initialization")
+
+        monkeypatch.setattr(store, "initialize", fail_if_called)
+        loaded_generation, _ = store.load_published()
+
+        assert loaded_generation.generation_id == generation.generation_id
+
+
 def test_published_ticker_resolution_is_point_in_time_and_fail_closed():
     candidate = _candidate()
     with tempfile.TemporaryDirectory() as temporary:

@@ -31,6 +31,17 @@ from src.operations.models import (
 )
 
 
+def _integer_metric(
+    payload: dict[str, Any] | None,
+    key: str,
+    *,
+    default: int,
+) -> int:
+    """Preserve meaningful zero values while defaulting absent metrics."""
+    value = (payload or {}).get(key)
+    return int(default if value is None else value)
+
+
 def _latest_pipeline_report() -> dict[str, Any] | None:
     root = PROJECT_ROOT / "outputs" / "data_audits" / "broad_daily_pipeline"
     candidates = sorted(root.glob("target=*/run=*.json"), key=lambda path: path.stat().st_mtime)
@@ -115,7 +126,15 @@ def _publication(path: Path) -> dict[str, Any] | None:
     return load_json(path)
 
 
+_UPSTREAM_RUNTIME_UNITS = (
+    "quant-market-data.service",
+    "quant-factor-research.service",
+    "quant-paper-trading.service",
+)
+
+
 _ROLLOUT_RUNTIME_UNITS = (
+    *_UPSTREAM_RUNTIME_UNITS,
     "quant-broad-provider-retry.service",
     "quant-broad-initial-rollout.service",
     "quant-us-equity-coverage.service",
@@ -123,6 +142,24 @@ _ROLLOUT_RUNTIME_UNITS = (
     "quant-broad-research-readiness.service",
     "quant-broad-shadow-observation.service",
 )
+
+
+def _rollout_project_status(
+    *,
+    web_default_enabled: bool,
+    shadow_ready: bool,
+    required_ready: bool,
+    job_status: JobStatus,
+) -> JobStatus:
+    if web_default_enabled and shadow_ready and required_ready:
+        return JobStatus.SUCCESS
+    if job_status == JobStatus.RUNNING:
+        return JobStatus.RUNNING
+    if job_status == JobStatus.FAILED:
+        return JobStatus.FAILED
+    if web_default_enabled and shadow_ready:
+        return JobStatus.DEGRADED
+    return JobStatus.BLOCKED
 
 
 def _active_rollout_runtime() -> dict[str, str] | None:
@@ -388,8 +425,37 @@ def collect_broad_evidence(
             factor_status = JobStatus.BLOCKED
 
     runtime_stage: str | None = None
+    runtime_unit = str((rollout_runtime or {}).get("Id") or "")
+    upstream_runtime = runtime_unit in _UPSTREAM_RUNTIME_UNITS
     if rollout_runtime and not security_gate_blocked:
-        if security_status != JobStatus.SUCCESS:
+        if upstream_runtime:
+            upstream_name = {
+                "quant-market-data.service": "核心行情日更",
+                "quant-factor-research.service": "核心因子研究",
+                "quant-paper-trading.service": "模拟盘结算",
+            }[runtime_unit]
+            runtime_stage = f"等待{upstream_name}完成"
+            security_status = (
+                JobStatus.SUCCESS
+                if security_status == JobStatus.SUCCESS
+                else JobStatus.SCHEDULED
+            )
+            coverage_status = (
+                JobStatus.SUCCESS
+                if coverage_status == JobStatus.SUCCESS
+                else JobStatus.SCHEDULED
+            )
+            pit_status = (
+                JobStatus.SUCCESS
+                if pit_status == JobStatus.SUCCESS
+                else JobStatus.SCHEDULED
+            )
+            factor_status = (
+                JobStatus.SUCCESS
+                if factor_status == JobStatus.SUCCESS
+                else JobStatus.SCHEDULED
+            )
+        elif security_status != JobStatus.SUCCESS:
             security_status = JobStatus.RUNNING
             runtime_stage = "证券主表"
         elif coverage_status != JobStatus.SUCCESS:
@@ -623,6 +689,11 @@ def collect_broad_evidence(
     elif required_ready:
         job_status = JobStatus.SUCCESS
         reason = "宽基因子数据链已发布"
+    elif bool(CONFIG.data.broad_factor_data.web_default_enabled) and (
+        ledger or {}
+    ).get("ready_for_web_default"):
+        job_status = JobStatus.DEGRADED
+        reason = "宽基网页已启用，但当前交易日的数据链尚未完整发布"
     else:
         job_status = JobStatus.BLOCKED
         reason = "首次上线的前置数据链尚未完整发布"
@@ -722,9 +793,21 @@ def collect_broad_evidence(
         output_version=str((factor_publication or {}).get("generation_id") or "") or None,
         metrics={
             "web_default_enabled": bool(CONFIG.data.broad_factor_data.web_default_enabled),
-            "shadow_passed": int((ledger or {}).get("consecutive_passed_sessions") or 0),
-            "shadow_required": int((ledger or {}).get("required_sessions") or 5),
-            "shadow_remaining": int((ledger or {}).get("remaining_sessions") or 5),
+            "shadow_passed": _integer_metric(
+                ledger,
+                "consecutive_passed_sessions",
+                default=0,
+            ),
+            "shadow_required": _integer_metric(
+                ledger,
+                "required_sessions",
+                default=5,
+            ),
+            "shadow_remaining": _integer_metric(
+                ledger,
+                "remaining_sessions",
+                default=5,
+            ),
             "formal_research_status": (readiness or {}).get("status") or "BLOCKED",
         },
     ))
@@ -744,32 +827,39 @@ def collect_broad_evidence(
             if provider_failure else "US_EQUITY_COVERAGE_PIPELINE_FAILED",
             *rollout_blockers,
         ]
+    web_default_enabled = bool(CONFIG.data.broad_factor_data.web_default_enabled)
+    shadow_ready = bool((ledger or {}).get("ready_for_web_default"))
+    project_status = _rollout_project_status(
+        web_default_enabled=web_default_enabled,
+        shadow_ready=shadow_ready,
+        required_ready=required_ready,
+        job_status=job_status,
+    )
     result.projects.append(ProjectObservation(
         project_id="us_broad_factor_rollout",
         display_name="全美宽基因子研究上线",
-        status=(
-            JobStatus.SUCCESS
-            if bool(CONFIG.data.broad_factor_data.web_default_enabled)
-            and (ledger or {}).get("ready_for_web_default")
-            else JobStatus.RUNNING
-            if job_status == JobStatus.RUNNING or required_ready
-            else JobStatus.FAILED
-            if job_status == JobStatus.FAILED
-            else JobStatus.BLOCKED
-        ),
+        status=project_status,
         observed_at=observed_at,
         summary=(
             "宽基页面默认开关已启用"
-            if bool(CONFIG.data.broad_factor_data.web_default_enabled)
+            if project_status == JobStatus.SUCCESS
             else reason
         ),
         stages=tuple(stages),
         blockers=tuple(dict.fromkeys(rollout_blockers)),
         metrics={
             "target_session": expected,
-            "shadow_passed": int((ledger or {}).get("consecutive_passed_sessions") or 0),
-            "shadow_required": int((ledger or {}).get("required_sessions") or 5),
-            "web_default_enabled": bool(CONFIG.data.broad_factor_data.web_default_enabled),
+            "shadow_passed": _integer_metric(
+                ledger,
+                "consecutive_passed_sessions",
+                default=0,
+            ),
+            "shadow_required": _integer_metric(
+                ledger,
+                "required_sessions",
+                default=5,
+            ),
+            "web_default_enabled": web_default_enabled,
         },
     ))
     for object_id, name, payload, version_key in (

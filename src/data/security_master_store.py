@@ -226,6 +226,9 @@ def _is_transitive_predecessor(
 def _lineage_maps(
     changes: pd.DataFrame,
     profile: pd.DataFrame,
+    reviewed_identity_continuity: set[
+        tuple[str, str, pd.Timestamp]
+    ] | None = None,
 ) -> tuple[
     dict[str, list[tuple[str, pd.Timestamp]]],
     list[str],
@@ -235,14 +238,49 @@ def _lineage_maps(
     backward: dict[str, list[tuple[str, pd.Timestamp]]] = {}
     conflicts: list[str] = []
     verified = changes.copy()
-    support = verified.apply(
-        lambda row: _identity_support_score(
+    reviewed_edges = {
+        (
+            _ticker(old_ticker),
+            _ticker(new_ticker),
+            pd.Timestamp(event_date).normalize(),
+        )
+        for old_ticker, new_ticker, event_date in (
+            reviewed_identity_continuity or set()
+        )
+    }
+    source_edges = {
+        (
+            str(row.old_ticker),
+            str(row.new_ticker),
+            pd.Timestamp(row.date).normalize(),
+        )
+        for row in verified.itertuples(index=False)
+    }
+    missing_reviewed_edges = sorted(reviewed_edges - source_edges)
+    if missing_reviewed_edges:
+        raise ValueError(
+            "reviewed identity-continuity edge missing from provider events: "
+            + ",".join(
+                f"{old}->{new}@{event.date()}"
+                for old, new, event in missing_reviewed_edges
+            )
+        )
+
+    def support_for(row: pd.Series) -> tuple[int, str | None]:
+        edge = (
+            str(row["old_ticker"]),
+            str(row["new_ticker"]),
+            pd.Timestamp(row["date"]).normalize(),
+        )
+        if edge in reviewed_edges:
+            return 4, "REVIEWED_SEC_CONTINUITY"
+        return _identity_support_score(
             str(row["old_ticker"]),
             str(row["new_ticker"]),
             identities,
-        ),
-        axis=1,
-    )
+        )
+
+    support = [support_for(row) for _, row in verified.iterrows()]
     verified["_support_score"] = [value[0] for value in support]
     verified["_support_key"] = [value[1] or "" for value in support]
     unverified = verified.loc[verified["_support_score"].eq(0)].copy()
@@ -327,7 +365,18 @@ def _lineage_maps(
         ).hexdigest(),
         "resolved_multiple_predecessors": resolved,
         "unresolved_multiple_predecessor_count": int(len(conflicts)),
-        "policy": "AUTO_LINK_SHARED_ISSUE_ID_OR_NONCONFLICTING_CIK",
+        "reviewed_identity_continuity": [
+            {
+                "old_ticker": old,
+                "new_ticker": new,
+                "effective_date": event.date().isoformat(),
+            }
+            for old, new, event in sorted(reviewed_edges)
+        ],
+        "policy": (
+            "AUTO_LINK_SHARED_ISSUE_ID_OR_NONCONFLICTING_CIK_"
+            "PLUS_EXACT_SEC_REVIEW"
+        ),
     }
     return backward, conflicts, diagnostics
 
@@ -734,6 +783,9 @@ def build_security_master_candidate(
     minimum_name_coverage: float = 0.99,
     minimum_classification_coverage: float = 0.95,
     research_history_policy: dict[str, Any] | None = None,
+    reviewed_identity_continuity: set[
+        tuple[str, str, pd.Timestamp]
+    ] | None = None,
 ) -> SecurityMasterCandidate:
     """Build and validate one immutable Security Master candidate."""
     target = pd.Timestamp(target_session).normalize()
@@ -746,7 +798,9 @@ def build_security_master_candidate(
     changes = _normalize_changes(symbol_changes, target)
     delisted = _normalize_delisted(delisted_companies, target)
     backward, lineage_conflicts, lineage_diagnostics = _lineage_maps(
-        changes, profile
+        changes,
+        profile,
+        reviewed_identity_continuity=reviewed_identity_continuity,
     )
     previous_map, previous_ambiguous_keys = _previous_identity_map(
         previous_identity_keys
@@ -1520,16 +1574,20 @@ class SecurityMasterStore:
         return generation
 
     def published_generation(self) -> SecurityMasterGeneration:
-        self.initialize()
         connection = self._connect(read_only=True)
         try:
-            row = connection.execute("""
-                SELECT g.*
-                FROM published_security_master AS p
-                JOIN security_master_generations AS g
-                  ON g.generation_id = p.generation_id
-                WHERE p.singleton = TRUE
-            """).fetchone()
+            try:
+                row = connection.execute("""
+                    SELECT g.*
+                    FROM published_security_master AS p
+                    JOIN security_master_generations AS g
+                      ON g.generation_id = p.generation_id
+                    WHERE p.singleton = TRUE
+                """).fetchone()
+            except duckdb.CatalogException as exc:
+                raise FileNotFoundError(
+                    "No Security Master generation is published"
+                ) from exc
         finally:
             connection.close()
         if row is None:

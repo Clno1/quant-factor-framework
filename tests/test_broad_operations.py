@@ -32,6 +32,8 @@ from scripts.update_us_equity_coverage import (
 from src.data.foundation import DataFoundationError
 from src.operations.adapters.broad import (
     _ROLLOUT_RUNTIME_UNITS,
+    _integer_metric,
+    _rollout_project_status,
     collect_broad_evidence,
 )
 from src.operations.models import JobDefinition, JobStatus
@@ -50,9 +52,36 @@ def test_resource_guard_reports_memory_and_disk(tmp_path):
 
 
 def test_broad_runtime_units_cover_every_post_coverage_stage():
+    assert "quant-market-data.service" in _ROLLOUT_RUNTIME_UNITS
+    assert "quant-factor-research.service" in _ROLLOUT_RUNTIME_UNITS
+    assert "quant-paper-trading.service" in _ROLLOUT_RUNTIME_UNITS
     assert "quant-broad-factor-data.service" in _ROLLOUT_RUNTIME_UNITS
     assert "quant-broad-research-readiness.service" in _ROLLOUT_RUNTIME_UNITS
     assert "quant-broad-shadow-observation.service" in _ROLLOUT_RUNTIME_UNITS
+
+
+def test_enabled_web_does_not_mask_stale_daily_publications():
+    assert _rollout_project_status(
+        web_default_enabled=True,
+        shadow_ready=True,
+        required_ready=False,
+        job_status=JobStatus.DEGRADED,
+    ) == JobStatus.DEGRADED
+    assert _rollout_project_status(
+        web_default_enabled=True,
+        shadow_ready=True,
+        required_ready=False,
+        job_status=JobStatus.RUNNING,
+    ) == JobStatus.RUNNING
+
+
+def test_integer_metric_preserves_completed_zero_remaining_sessions():
+    assert _integer_metric(
+        {"remaining_sessions": 0},
+        "remaining_sessions",
+        default=5,
+    ) == 0
+    assert _integer_metric({}, "remaining_sessions", default=5) == 5
 
 
 def test_initial_rollout_stage_inherits_progress_stderr(capfd):
@@ -76,9 +105,11 @@ def test_initial_rollout_stage_inherits_progress_stderr(capfd):
     assert stage["stderr_tail"] is None
 
 
-def test_operations_registry_expects_daily_refresh_and_broad_observation_timer():
+def test_operations_registry_retires_legacy_refresh_and_expects_broad_timer():
     registry = OperationsRegistry("configs/operations.yaml")
-    assert registry.get("us_daily_refresh").enabled_expected is True
+    legacy = registry.get("us_daily_refresh")
+    assert legacy.enabled_expected is False
+    assert legacy.adapter == "retired"
     assert registry.get("broad_us_pipeline").enabled_expected is True
 
 

@@ -1,7 +1,7 @@
 [Unit]
 Description=Quant hourly US momentum alerts
 Wants=network-online.target
-After=network-online.target quant-us-daily-refresh.service
+After=network-online.target quant-us-equity-coverage.service
 
 [Service]
 Type=oneshot

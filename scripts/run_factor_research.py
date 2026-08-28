@@ -148,31 +148,44 @@ def main(argv: list[str] | None = None) -> int:
                 }
             )
 
-    try:
-        from src.research_universes.service import (
-            publish_cross_universe_assessments,
+    if failures:
+        results.append(
+            {
+                "universe": "CROSS_UNIVERSE",
+                "status": "BLOCKED",
+                "target_session": expected.date().isoformat(),
+                "error": (
+                    "cross-universe publication requires every requested "
+                    "single-universe publication to succeed"
+                ),
+            }
         )
+    else:
+        try:
+            from src.research_universes.service import (
+                publish_cross_universe_assessments,
+            )
 
-        cross = publish_cross_universe_assessments(target_session=expected)
-        results.append(
-            {
-                "universe": "CROSS_UNIVERSE",
-                "status": "PUBLISHED",
-                "target_session": cross.get("target_session"),
-                "data_version_id": cross.get("generation_id"),
-                "verdict_counts": cross.get("verdict_counts"),
-            }
-        )
-    except Exception as exc:  # noqa: BLE001
-        log.exception("Cross-universe publication failed: %s", exc)
-        failures.append("CROSS_UNIVERSE")
-        results.append(
-            {
-                "universe": "CROSS_UNIVERSE",
-                "status": "FAILED",
-                "error": str(exc),
-            }
-        )
+            cross = publish_cross_universe_assessments(target_session=expected)
+            results.append(
+                {
+                    "universe": "CROSS_UNIVERSE",
+                    "status": "PUBLISHED",
+                    "target_session": cross.get("target_session"),
+                    "data_version_id": cross.get("generation_id"),
+                    "verdict_counts": cross.get("verdict_counts"),
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Cross-universe publication failed: %s", exc)
+            failures.append("CROSS_UNIVERSE")
+            results.append(
+                {
+                    "universe": "CROSS_UNIVERSE",
+                    "status": "FAILED",
+                    "error": str(exc),
+                }
+            )
 
     payload = {"results": results, "failures": sorted(set(failures))}
     if args.json:

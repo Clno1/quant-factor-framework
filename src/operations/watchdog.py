@@ -38,7 +38,13 @@ Collector = Callable[..., CollectionResult]
 _COLLECTOR_ADAPTERS = {
     "market": {"market_data"},
     "research": {"factor_research", "group_analytics"},
-    "delivery": {"premarket", "hourly_momentum", "intraday_momentum"},
+    "delivery": {
+        "premarket",
+        "premarket_prepare",
+        "hourly_momentum",
+        "intraday_candidate_prepare",
+        "intraday_momentum",
+    },
     "application": {"data_requests", "paper_trading"},
     "broad": {"broad_pipeline"},
 }

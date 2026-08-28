@@ -1,7 +1,7 @@
 # 全美宽基因子研究实施记录
 
-更新日期：2026-08-24
-当前状态：首次正式链与人工验收已通过，`quant-us-equity-coverage.timer` 已启用。2026-08-20 和 2026-08-21 两个连续 XNYS 交易日已通过精确影子核验，当前进度 2/5。`web_default_enabled=false` 继续保持，正式宽基置信研究仍只被 PIT 历史行业分类门槛阻断。
+更新日期：2026-08-26
+当前状态：首次正式链与人工验收已通过，`quant-us-equity-coverage.timer` 已启用。2026-08-20、21、24、25 四个连续 XNYS 交易日已通过精确影子核验，当前进度 4/5。`web_default_enabled=false` 继续保持，正式宽基置信研究仍只被 PIT 历史行业分类门槛阻断。
 
 本文件记录 [`us_broad_factor_research_requirements.md`](us_broad_factor_research_requirements.md)
 的实际落地和上线步骤。需求口径以需求文档为准。
@@ -12,13 +12,13 @@
 |---|---|---|
 | Phase 0 供应商与容量 | 完成 | FMP 能力审计和 SG 合成容量实测完成 |
 | Phase 1 Security Master | 已重新发布 | `PROSPECTIVE_ONLY` 台账、身份唯一性和质量门禁通过 |
-| Phase 2 Coverage 与 PIT | 已正式发布 | 2026-08-21 coverage 与 PIT 版本严格绑定，全历史行情覆盖门禁通过 |
+| Phase 2 Coverage 与 PIT | 已正式发布 | 2026-08-25 coverage 与 PIT 版本严格绑定，全历史行情覆盖门禁通过 |
 | Phase 3 宽基因子数据 | 已正式发布 | 8 因子、640 个月分片及 raw/clean/rank/percentile 哈希验证通过 |
 | Phase 4 Web/API | 完成 | 全局证券搜索和宽基 adapter 已接入；默认切换开关保持关闭 |
 | Phase 5 正式宽基研究 | 门禁完成、研究暂缓 | 当前行业为 latest-known，不满足严格 PIT，readiness 必须返回 `BLOCKED` |
-| Phase 6 SG 影子 | 观察中 | 2026-08-20、2026-08-21 连续通过，当前 2/5；timer 已启用，网页默认开关仍关闭 |
+| Phase 6 SG 影子 | 观察中 | 2026-08-20、21、24、25 连续通过，当前 4/5；timer 已启用，网页默认开关仍关闭 |
 
-因此当前可以宣称“全美宽基基础数据链已进入生产影子观察”，但在 5/5 前不得打开网页默认开关，也不得发布宽基 IC、ICIR 或置信结论。现有 SP500、NASDAQ100、MAG7、Watchlist、回测、模拟盘和动量链路没有被本次宽基处置改写。
+因此当前可以宣称“全美宽基基础数据链已进入生产影子观察”，但在 5/5 前不得打开网页默认开关，也不得发布宽基 IC、ICIR 或置信结论。第五个不同交易日只能由下一次正式日常链产生，不能重复登记 2026-08-25 或手工推进台账。
 
 ## 2. 已实现的数据链
 
@@ -736,3 +736,246 @@ disabled/inactive 告警；文档同时混淆“5/5 后打开网页默认开关�
 当前影子台账仍为 2026-08-20/21 两日通过、2/5、剩余 3 日；`--require-ready` 退出码 2 是正确的
 “仍在观察”。下一次 `quant-us-equity-coverage.timer` 计划于 2026-08-25 11:31 SGT 左右运行，
 `web_default_enabled=false` 未改变。
+
+## 18. 2026-08-25 第三日因 Security Master 身份漂移阻断
+
+11:31 SGT 的 target `2026-08-24` 日常链在第一阶段 Security Master fail-closed，30 分钟后的
+systemd 自动重试以同一错误再次失败。两次都没有进入 coverage、PIT、八因子或 shadow，
+因此 2026-08-24 不计入观察，台账仍为 2/5。
+
+失败对象是 `sec_5cba73738dbb59188a27c25dbaedf178`。研究历史政策预期它为活跃的 GRML / Greenland
+Mines Ltd.，新候选却把该旧 security_id 解析为不活跃的 KLTO / Klotho Neurosciences, Inc.。
+不可变 FMP 源同时给出同一 CIK `0001907223` 的两条普通股 profile：GRML 活跃、CUSIP
+`49876K202`；KLTO 不活跃、CUSIP `49876K103`，并给出 2026-03-12 的 KLTO -> GRML 事件。
+
+SEC 官方 CIK 提交索引确认 Greenland Mines Ltd. 的 former name 是 Klotho Neurosciences, Inc.；
+2026-03-16 8-K 又明确说明这只是公司名称和代码变更、GRML 自 2026-03-12 开始交易，而且普通股
+CUSIP 保持不变。FMP 的两个不同 CUSIP 因而与官方连续性证据冲突。当前 selector drift 门禁正确地
+阻止了自动改写身份，不能直接把政策中的名字或 security_id 改成候选值。
+
+本次冻结源必须保留：
+
+```text
+outputs/data_audits/security_master_candidates/asof=2026-08-24/run=20260825T033103Z_5dfd58eb/provider_sources
+outputs/data_audits/security_master_candidates/asof=2026-08-24/run=20260825T040524Z_cf6bd73a/provider_sources
+```
+
+下一步需扩展严格 corrections 合同，允许在 SEC 明确证明证券连续、但 FMP issue identifier 漂移时，
+登记带来源的 provider identifier override；随后用同一冻结源双重构建，验证四表精确幂等、旧
+security_id 连续、无并行 share-class 误合并，再原子更新研究历史政策并补跑 target 2026-08-24。
+在这些门槛完成前不得降低校验、不得计入失败日，也不得打开网页默认开关。
+
+## 19. 2026-08-26 标识纠正、第三日恢复与下游统一读链
+
+GRML/KLTO 事故已经按 `SAME_LISTED_ISSUE` 解决，不是通过修改历史政策、放宽身份覆盖率或猜测
+CUSIP 完成。`configs/security_master_corrections.yaml` 的 schema v2 新增
+`reviewed_provider_identifier_conflicts`：规则必须精确匹配生效日、前后 ticker、名称、资产类型、
+交易所、CIK、FMP 原始 ISIN/CUSIP、挂牌日和活跃状态，并附 SEC 一手来源。构建器只授权这一条
+证券连续性边；FMP 返回的两个冲突标识仍原样保存在 profile/alias 审计中，不会被改写成虚假的
+一致值。
+
+同一份冻结 provider source 连续构建两次后，Security Master 四张表和 manifest 哈希精确一致，
+随后正式发布 target 2026-08-24：
+
+```text
+security_master_generation = 1e5e249c62424fc1ad679f3d70f179fc
+security_master_manifest   = 8e132f61028493bdfc35efb4db9fb54fc61e254ddd4313942a5bbce537f3fe2c
+coverage_version           = 77cfefacab4a417cbec8d681bed6e201
+coverage_manifest          = 634107dfaf2ca5d50cb809b4519f0951a75edb27f2fc11d0af76ae4fad881b48
+universe_version           = 19fd8dc8fee24d11bd1869b4276505b2
+factor_generation          = 0fd93177f78444fc981c448d603fb437
+factor_publication_id      = 49d02d27-8dcc-401d-b9e8-c5f06b184487
+factor_manifest            = 87a10b2c4e407ba2768d95e68429b870ac38128aa4418d46bbe8e23e67e8b46b
+```
+
+8 因子 640 个分片、全 coverage child hash、PIT membership/eligibility、MDB/AEVA 查询及版本绑定
+均通过；readiness 只保留预期的 PIT 行业历史 blocker。2026-08-24 因此成为第三个连续 PASS，
+shadow 为 3/5，`web_default_enabled=false`。
+
+本次还完成了动量数据消费者迁移。旧 `refresh_us_active.py` 发布的短历史
+`US_LIQUID_5M` 不再是当前数据源；新的只读适配器把 `US_ACTIVE` 解析为：
+
+1. `US_EQUITY_COVERAGE` 的不可变父行情和认证价格语义；
+2. 同一 target 的 `US_LIQUID_5M` PIT membership/eligibility；
+3. 精确绑定的 Security Master generation/manifest；
+4. membership、eligibility 和 PIT manifest 三个 SHA-256。
+
+动量候选只从 PIT 当日成员读取股票，SPY/QQQ 等 ETF 只从父 coverage 作为市场基准读取，不进入
+股票排名。盘前板块轮动的 benchmark 也改读 `US_EQUITY_COVERAGE`。旧短历史 publication、原始
+文件和运行记录保留只读，日常 timer 在新读链真实验收后关闭。
+
+核心 SP500/NASDAQ100/MAG7 日更遇到 `non-uniform adj_close/volume revision` 时，严格语义门禁
+要求完整历史重建。这不是网络重试问题。新增 `scripts/run_core_market_data.py` 只在**全部失败池**
+都明确属于该语义漂移且错误要求 full rebuild 时，才对失败池执行 `--force --full-rebuild`；FMP
+timeout、PIT/hash 错误或混合故障继续失败关闭。子任务日志实时进入 journal，报告只保留有界尾部；
+日常 unit 使用 4 workers、单线程 BLAS、`700M/900M` 内存边界和禁止 swap。
+
+## 20. 2026-08-26 第四日、业务链恢复与 FMP 精度边界
+
+target `2026-08-25` 的正式宽基链已通过，当前绑定如下：
+
+```text
+security_master_generation = 1953abeff75c402a9d363413f6c7978b
+security_master_manifest   = 8e243a7e70493590366ff9389501c7ea82d471647b7e39e6d2059d899c65fc1e
+coverage_version           = b91499501659453abedf008290e95fea
+coverage_bars_index_sha    = b82c7130179fc27f2c6fc3d03235e4349fac0653e9a08af9515b86b9acee4b18
+universe_version           = ef508d571b76485c86eef744e6696a35
+factor_generation          = 9eadbfad7bc54150a738b5d4a4b5c9c1
+factor_publication_id      = 059bdcd1-ffc4-4ca7-9c0f-a55af6931924
+```
+
+8 因子、640 个分片、coverage child hash、PIT membership/eligibility 和真实排名查询均通过。
+影子日期为 2026-08-20、21、24、25，当前连续 4/5、剩余 1 日。资源门禁为 PASS，可用内存
+1,156.3 MB、可用磁盘 46.8 GB。下一次 11:30 SGT 日常链才有资格产生 target 2026-08-26 的
+第五条观察；`web_default_enabled=false` 未修改。
+
+同日补齐两个与宽基共用数据基础设施的生产边界：
+
+- 自定义 Watchlist 增量遇到 `non-uniform revision` 时，缺数 worker 只在错误同时明确要求
+  `full rebuild` 时重建该专属股票池。FMP 超时、身份冲突、PIT/hash 或质量门禁不得进入恢复分支。
+- FMP 的 `adj_close` 在部分证券上以美分精度发布，而执行 `close` 可有更细小数。直接反推现金分红
+  会产生约正负 0.005 美元的伪事件。模拟盘改为按半美分输入量化误差做区间运算：零落在区间内即
+  归零；整个区间仍为负则继续硬失败。6 股全历史 483 个负点和 498 个正点均属于量化噪声，未生成
+  虚假现金事件。
+
+Watchlist 正式重建版本为 `93eb4878bc4b4e0b9829fbf690bc39f4`，6/6 股票、7,496 行、目标日覆盖
+100%。模拟盘随后绑定该版本成功运行；相同决策日二次执行没有重复订单、成交或现金事件。部署备份：
+
+当前生产代码已在 SG 以 `MemoryHigh=550M`、`MemoryMax=700M`、`CPUQuota=50%` 的临时验证单元
+完成全量回归：`608 passed, 1 warning in 108.42s`，峰值内存 281.1 MB、未使用 swap。唯一警告为
+FastAPI TestClient 弃用提示，不影响生产行为。
+
+```text
+/home/projects/quant-backups/request-worker-semantic-recovery-20260826T214500CST
+/home/projects/quant-backups/paper-dividend-precision-20260826T234000CST
+```
+
+## 21. 2026-08-27 五日完成与网页正式启用
+
+第五个不同 XNYS 交易日 `2026-08-26` 已通过完整生产链与影子核验。连续 PASS 日期为
+2026-08-20、21、24、25、26，台账状态为 `READY`、`5/5`、剩余 0。当前不可变绑定为：
+
+```text
+security_master_generation = 6706c172a3f04d9bb1b92cbb8c76fdcf
+security_master_manifest   = 6c586ae8635678c64f060e01b16b379b6b6593696a1f4aebbbabe78402cdc9d6
+coverage_version           = e4963942c52a4031bf31fba475753e63
+coverage_bars_index_sha    = 21da6c0a8f9bcc6d4167a8e6ecdd0965cd50823a416388948f48b589996625ec
+universe_version           = ded547cbef6b446399a7a74cf39c482c
+membership_sha             = 203b97d91255e5a1b5ce76f32958fc50259db766e870fec003411b56c5ede262
+eligibility_sha            = ff941757c2e482ac5ff2da0b99f6a1fef74c902a51e83de7480d911de9596254
+factor_generation          = 1a60b302fa474a589d4a73fd9fab2555
+factor_publication_id      = 1e6d8c6a-e8ff-47e7-922f-9be03bd3e84a
+factor_manifest_sha        = 6257ac84e13c842b2a08283f610e79d9e181ea2dd2c0cc9ff145dbfecf5a0332
+```
+
+当日 coverage/PIT 于 14:06 SGT 完成后，已排队的板块研究和八因子任务同时启动。板块研究先以
+read-only 连接持有 DuckDB 共享锁，而八因子的 `published_generation()` 在只读查询前错误调用
+`initialize()` 尝试获取写锁，导致两次失败。修复包括：Security Master 发布读取不再初始化或写库；
+八因子在板块研究之前执行；核心行情、宽基生产和板块研究共享 `.broad-production.lock`。备份为：
+
+```text
+/home/projects/quant-backups/duckdb-scheduling-fix-20260827T1530CST
+```
+
+修复后八因子从已认证的 1/640 checkpoint 继续，最终发布 8 因子、640 分片；systemd 峰值内存
+714.5 MB、无 swap。readiness 仅以预期的 PIT 行业历史 blocker 返回退出码 2，shadow 自动 PASS。
+配置备份位于 `/home/projects/quant-backups/broad-web-enable-20260827T1715CST`，随后将
+`data.broad_factor_data.web_default_enabled` 设为 `true`。SG 完整回归为
+`609 passed, 1 warning`；MDB 与 AEVA 的 MOM_12M 历史查询均返回 5/5 有效交易日并精确绑定上述版本。
+
+因此全美宽基因子数据浏览现已正式启用；宽基 IC、ICIR 和置信结论仍被
+`PIT_CLASSIFICATION_POLICY`/`PIT_INDUSTRY_COVERAGE` 阻断，二者不是同一个上线门槛。
+
+## 22. 2026-08-28 核心全量重建内存退化修复
+
+target `2026-08-27` 的核心三池增量认证分别在 A 的 open、ABNB 的 volume 和 AMZN 的 volume
+发现非均匀历史修订，严格门禁要求 full rebuild。MAG7 与 NASDAQ100 已于 08:25、08:28 SGT
+发布；SP500 的 621 只证券在 08:37 已完成 FMP 抓取，raw ingestion
+`8557e15a063843c7ba09e2bba789b761` 无失败证券，但随后长时间停留在本地数据整理。
+
+根因不是 FMP、磁盘或 DuckDB 锁。full rebuild 使用无类型空 parent 与 fetched bars 执行
+`pd.concat`，把约 98 万行的数值列从 `float64` 转成 Python `object`。现网原生栈停在
+`array_astype -> PyFloat_FromDouble -> PyObject_Malloc`，服务内存约 815 MB，cgroup
+`memory.events.high` 达 80,863 次，形成持续对象分配和内存回收。修复后空 parent 直接复制
+fetched frame，只有 parent 和 fetched 都非空时才 concat，因此保留原始数值 dtype；回归测试明确
+验证 OHLCV 六列仍为 numeric。
+
+该修复不降低历史语义门禁，也不接受有差异的旧数据。A/ABNB/AMZN 仍必须走正式 full rebuild；
+改变的只是重建内部的内存表示。部署前备份位于
+`/home/projects/quant-backups/core-rebuild-observability-fix-20260828T1205CST`。截至本节记录时，
+旧进程尚在等待自然完成或 systemd 超时，修复后的重试和 target `2026-08-27` 四层发布仍需以正式
+publication、哈希和质量门禁验收，不能手工标记成功。
+
+## 23. 2026-08-28 target 2026-08-27 恢复完成
+
+修复后的核心 SP500 full rebuild 已正式完成，而不是通过修改状态或复用旧 publication 绕过门禁。
+SP500 版本为 `e151b46c1d814d93a9d631dafc730ab1`，共 980,613 行、621 只证券，目标日覆盖率
+100%，FMP 失败证券为 0；运行 CPU 时间约 2 分 03 秒，systemd 峰值内存 688.2 MB、无 swap。
+MAG7 和 NASDAQ100 也已发布到 target `2026-08-27`。
+
+宽基日更随后暴露出第二个独立问题：日更脚本已要求把认证价格语义及父版本写入 publication，
+但 `BroadCoverageStore.publish_partitions()` 尚未接收这两个参数。该接口合同已补齐并将 manifest
+schema 升为 v5；增量发布必须绑定与质量 lineage 相同的已认证父版本，full rebuild 则禁止伪造
+父版本。覆盖、PIT 和八因子的最终不可变绑定为：
+
+```text
+security_master_generation = be02e2fff93d4ccf93b4d2c237c0f8b5
+security_master_manifest   = e553f1ebef5d271dae94b616dca0a3c19b3f35a55ab2d3d1fa01e5c2ec71d357
+coverage_version           = 378d1f3fae8944af863d6f67704b0313
+coverage_manifest          = ee138aa657f6b2acb7a2fc63c071396afefee1a3bf9dc7c6a866e9c54295829c
+coverage_bars_index_sha    = 66c560e7e2bed0fa6780fb4f7c9e68d774ca21d7d391c1ca189f08394db5b8e3
+universe_version           = 8f19d47b45b64305b15c091cf959f5d4
+membership_sha             = 88c0cbd95ac42b68372b1c44d9a8388261f2621d6f446e382ca43c06996c928b
+eligibility_sha            = 8501f6a3cdbcb692f092e4c7018eb5ec3fd7fcc7e24c496857de1c57a0ace950
+factor_generation          = 11247203be72468c9c72d592d72b5332
+factor_publication_id      = d4b69444-bbc4-4106-85d1-aea511fb0573
+factor_manifest            = db4cc5b6a7db6edffeaa5cc6e8f34a92693b92aa7077cd73fcf8f9e36487644b
+```
+
+coverage 共 10,431,001 行、7,975 只证券；17,118 条当日供应商记录中 17,117 条成功映射，1 条缺少
+身份的记录进入隔离台账，未静默进入正式数据。PIT 共 223,235 条 membership、91 个快照、当前
+2,780 个成员，`historical_pit_daily_bar_coverage` 门禁通过。宽基日更全链耗时约 120 秒，峰值
+719.8 MB、无 swap。
+
+Security Master 变化要求八因子重算 640/640 个 factor-month 分片。任务从认证 checkpoint 完成，
+耗时 1 小时 08 分 43 秒，systemd 峰值 703.7 MB、无 OOM 或 swap。MDB、AEVA 的 MOM_12M
+真实历史查询均返回 2026-08-20 至 2026-08-27 的 6 个交易日，并精确绑定上述 coverage、PIT 和
+因子 publication。readiness 仅保留预期的 `PIT_CLASSIFICATION_POLICY`、
+`PIT_INDUSTRY_COVERAGE`；shadow 台账新增 2026-08-27，当前连续通过日期为 2026-08-20、21、
+24、25、26、27，即 `6/5`。
+
+恢复期间还确认板块研究曾运行满 2 小时后超时并自动重试，占用 `.broad-production.lock`，使宽基
+日更首次人工重跑等待 60 秒后退出。为优先恢复主数据链，只停止了该次板块重试，timer 未删除；
+板块研究的性能和超时是独立待办，不能标记为宽基失败。核心 SP500/NASDAQ100 正式因子研究仍因
+缺少 PIT 行业历史而 fail closed，MAG7 已发布；这也不影响已经完成的宽基因子数据浏览上线。
+
+## 24. 2026-08-28 宽基消费者有界读取与盘前事故
+
+板块研究和盘前预计算的长耗时不是因子公式本身变慢。例行消费者在读取少量股票、少量日期前，
+`MarketDataReader` 会重复校验 coverage 的 92 个历史月分片；板块研究还加载了 SP500 全历史，实际
+只需要当前日、上一交易日和 ADV60。低内存 SG 上这些无界读取持续触发 cgroup 高水位回收，板块
+任务最终达到 3 小时超时，旧盘前预计算运行超过 4 小时仍未完成。
+
+现已拆分“发布级全量审计”和“消费级有界认证”：
+
+1. shadow、publication 和人工完整核验仍逐个哈希全部 child partition；
+2. 普通读取先认证 manifest 和 partition index，再只哈希实际读取的月分片；
+3. 板块研究将行情窗口限制在 as-of 前 120 个日历日，足以覆盖 60 个交易日 ADV；
+4. 价格语义、父版本、PIT membership 和实际分片哈希门禁均未降低。
+
+部署后板块与子行业研究在 target `2026-08-27` 上成功发布，CPU 9.609 秒，而不是再次触发 3 小时
+超时。盘前预计算重新运行后约 11 分钟完成，CPU 8 分 42.79 秒、峰值 537.1 MB、无 swap，生成
+target `2026-08-28` 的 94 个动量候选和两个不可变 payload。由于完成时间已晚于 09:29 ET 投递
+截止时间，两个 payload 只保留审计，没有迟到补发；当天盘前投递属于真实 `MISSED`。
+
+运维适配器同步改为按 SLA 推导状态：截止后仍为 `PENDING/SENDING` 的源记录显示 `MISSED`，完整
+但晚于预计算截止时间的 payload 显示 `DEGRADED`。原始 SQLite 状态、截止时间和 `past_deadline`
+继续写入元数据，页面结论不覆盖源证据。部署备份位于：
+
+```text
+/home/projects/quant-backups/consumer-bounded-read-20260828T1905CST
+/home/projects/quant-backups/operations-deadline-state-20260828T2340CST
+```
+
+本地完整回归为 `586 passed`；SG 宽基与运维定向回归为 `28 passed`。宽基数据链保持 target
+`2026-08-27`、连续 shadow `6/5`，本次消费者性能修复没有改写 publication 或历史观察台账。

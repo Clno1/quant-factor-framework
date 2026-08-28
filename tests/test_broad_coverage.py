@@ -493,6 +493,13 @@ def test_partitioned_coverage_is_readable_and_child_hashes_are_enforced():
         )
         reader = MarketDataReader(catalog=catalog)
         assert reader.require_latest("US_EQUITY_COVERAGE") == publication.version
+        manifest = reader.verify_version(
+            publication.version,
+            require_price_semantics=True,
+        )
+        assert manifest["schema_version"] == 5
+        assert manifest["price_semantics"]["history_mode"] == "FULL_REBUILD"
+        assert manifest["price_semantics_parent_version_id"] is None
         broad = BroadCoverageReader(market_reader=reader)
         rows = broad.load_bars(
             security_ids=["sec_aaa"],
@@ -541,6 +548,69 @@ def test_partitioned_coverage_is_readable_and_child_hashes_are_enforced():
             reader.require_latest("US_EQUITY_COVERAGE")
 
 
+def test_incremental_coverage_authenticates_price_semantics_parent():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        catalog = MarketDataCatalog(root / "catalog.duckdb")
+        store = BroadCoverageStore(catalog=catalog, lake_dir=root / "lake")
+        parent = store.publish_frames(
+            [
+                pd.concat([
+                    _bars("sec_aaa", "AAA", ["2020-03-30", "2020-03-31"]),
+                    _bars("sec_bbb", "BBB", ["2020-03-30", "2020-03-31"]),
+                    _bars("sec_old", "OLD", ["2020-03-30"]),
+                ], ignore_index=True)
+            ],
+            security_universe=_universe(),
+            target_session="2020-03-31",
+            security_master=_security_generation(),
+            min_target_coverage=1.0,
+        )
+        contract = build_price_semantics_contract(
+            source="TEST_INCREMENTAL_PROVIDER",
+            history_mode="INCREMENTAL_FROM_AUTHENTICATED_PARENT",
+        )
+        child = store.publish_frames(
+            [
+                pd.concat([
+                    _bars("sec_aaa", "AAA", ["2020-03-30", "2020-03-31"]),
+                    _bars("sec_bbb", "BBB", ["2020-03-30", "2020-03-31"]),
+                    _bars("sec_old", "OLD", ["2020-03-30"]),
+                ], ignore_index=True)
+            ],
+            security_universe=_universe(),
+            target_session="2020-03-31",
+            security_master=_security_generation(),
+            price_semantics=contract,
+            price_semantics_parent_version_id=parent.version.version_id,
+            quality_lineage={
+                "parent_dataset_version_id": parent.version.version_id,
+            },
+            min_target_coverage=1.0,
+        )
+        manifest = MarketDataReader(catalog=catalog).verify_version(
+            child.version,
+            require_price_semantics=True,
+        )
+        assert manifest["price_semantics"] == contract
+        assert (
+            manifest["price_semantics_parent_version_id"]
+            == parent.version.version_id
+        )
+
+        with pytest.raises(DataFoundationError, match="quality lineage parent"):
+            store.publish_frames(
+                [_bars("sec_aaa", "AAA", ["2020-03-31"])],
+                security_universe=_universe().iloc[[0]].copy(),
+                target_session="2020-03-31",
+                security_master=_security_generation(),
+                price_semantics=contract,
+                price_semantics_parent_version_id="wrong-parent",
+                quality_lineage={
+                    "parent_dataset_version_id": parent.version.version_id,
+                },
+                min_target_coverage=1.0,
+            )
 def test_published_coverage_compacts_candidate_batches_into_month_partitions():
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)

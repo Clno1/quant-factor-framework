@@ -8,6 +8,7 @@ from typing import Any
 import pandas as pd
 
 from src.breakouts.daily_data import load_breakout_daily_dataset
+from src.breakouts.broad_daily_data import load_broad_breakout_universe
 from src.breakouts.scan_cache import load_scan_cache, save_scan_cache
 from src.breakouts.scanner import (
     BreakoutFilters,
@@ -127,10 +128,16 @@ def resolve_breakout_universe(
 
     data_universe = resolve_market_data_universe(universe)
     try:
-        published = load_published_universe(
-            requested_universe=universe,
-            data_universe=data_universe,
-            dataset_version_id=dataset_version_id,
+        published = (
+            load_broad_breakout_universe(
+                dataset_version_id=dataset_version_id,
+            )
+            if data_universe == US_LIQUID_5M
+            else load_published_universe(
+                requested_universe=universe,
+                data_universe=data_universe,
+                dataset_version_id=dataset_version_id,
+            )
         )
         metadata = published.universe
     except DataFoundationError as exc:

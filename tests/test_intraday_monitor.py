@@ -477,6 +477,62 @@ class RollingAndDetectorTests(unittest.TestCase):
 
 
 class StateAndServiceTests(unittest.TestCase):
+    def test_prepare_candidates_persists_snapshot_without_live_feed_io(self):
+        class ForbiddenFeed:
+            source_name = "forbidden"
+
+            async def market_status(self, _exchange):
+                raise AssertionError("candidate preparation must not query market status")
+
+            async def quotes(self, _symbols):
+                raise AssertionError("candidate preparation must not query quotes")
+
+            async def intraday_many(self, *_args, **_kwargs):
+                raise AssertionError("candidate preparation must not query minute bars")
+
+            def counters(self):
+                return {}
+
+        snapshot = {
+            "session_date": "2026-07-28",
+            "generated_at": "2026-07-28T10:30:00+00:00",
+            "algorithm_version": ALGORITHM_VERSION,
+            "parameter_version": PARAMETER_VERSION,
+            "source_data_date": "2026-07-27",
+            "data_contract": _FakeContract().to_dict(),
+            "candidate_count": 1,
+            "rows": [_candidate().to_dict()],
+        }
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            settings = replace(
+                IntradayMonitorSettings(),
+                state_path=root / "state.sqlite3",
+                snapshots_dir=root / "snapshots",
+            )
+            state = IntradayMonitorState(settings.state_path)
+            monitor = IntradayMomentumMonitor(
+                settings,
+                feed=ForbiddenFeed(),
+                state=state,
+                candidate_builder=lambda *_args, **_kwargs: snapshot,
+                source_session_resolver=lambda _session: "2026-07-27",
+                contract_validator=lambda _contract: True,
+            )
+
+            result = asyncio.run(monitor.prepare_candidates(
+                now=datetime(2026, 7, 28, 6, 30, tzinfo=NEW_YORK),
+            ))
+
+            self.assertEqual(result["phase"], "candidates_prepared")
+            self.assertEqual(result["candidate_count"], 1)
+            self.assertIsNotNone(state.load_candidate_snapshot(
+                "2026-07-28",
+                ALGORITHM_VERSION,
+                PARAMETER_VERSION,
+            ))
+
     def test_candidate_snapshot_schema_migrates_and_indexes_data_contract(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "state.sqlite3"

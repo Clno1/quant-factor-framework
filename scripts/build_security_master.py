@@ -51,7 +51,7 @@ from src.utils.market_calendar import (  # noqa: E402
 
 
 SCHEMA_VERSION = 1
-CORRECTION_SCHEMA_VERSION = 1
+CORRECTION_SCHEMA_VERSION = 2
 DEFAULT_AUDIT_DIR = ROOT / "outputs" / "data_audits"
 
 
@@ -154,6 +154,11 @@ def load_security_master_corrections(
     transitions = payload.get("reviewed_symbol_transitions") or []
     if not isinstance(transitions, list):
         raise ValueError("reviewed_symbol_transitions must be a list")
+    continuity = payload.get("reviewed_provider_identifier_conflicts") or []
+    if not isinstance(continuity, list):
+        raise ValueError(
+            "reviewed_provider_identifier_conflicts must be a list"
+        )
     identifiers: set[str] = set()
     pairs: set[tuple[str, str]] = set()
     for item in transitions:
@@ -191,6 +196,90 @@ def load_security_master_corrections(
                 )
         identifiers.add(correction_id)
         pairs.add((old_ticker, new_ticker))
+    continuity_pairs: set[tuple[str, str]] = set()
+    for item in continuity:
+        if not isinstance(item, dict):
+            raise ValueError(
+                "Security Master identifier-conflict entry must be a mapping"
+            )
+        correction_id = str(item.get("id") or "").strip()
+        old_ticker = str(item.get("old_ticker") or "").strip().upper()
+        new_ticker = str(item.get("new_ticker") or "").strip().upper()
+        effective = pd.to_datetime(item.get("effective_date"), errors="coerce")
+        sources = item.get("sources") or []
+        if not correction_id or correction_id in identifiers:
+            raise ValueError("Security Master correction IDs must be unique")
+        if not old_ticker or not new_ticker or old_ticker == new_ticker:
+            raise ValueError(f"{correction_id}: invalid ticker transition")
+        if pd.isna(effective):
+            raise ValueError(f"{correction_id}: invalid effective_date")
+        if (old_ticker, new_ticker) in pairs:
+            raise ValueError(
+                f"{correction_id}: transition is already registered as a "
+                "reviewed symbol transition"
+            )
+        if (old_ticker, new_ticker) in continuity_pairs:
+            raise ValueError(
+                f"duplicate reviewed identifier conflict: "
+                f"{old_ticker}->{new_ticker}"
+            )
+        if item.get("decision") != "SAME_LISTED_ISSUE":
+            raise ValueError(
+                f"{correction_id}: decision must be SAME_LISTED_ISSUE"
+            )
+        if not str(item.get("reason") or "").strip():
+            raise ValueError(f"{correction_id}: reason is required")
+        if not sources or any(
+            not str(source).startswith("https://www.sec.gov/")
+            for source in sources
+        ):
+            raise ValueError(
+                f"{correction_id}: primary SEC source URLs are required"
+            )
+        for side in ("old_profile", "new_profile"):
+            expectation = item.get(side)
+            required = {
+                "name_contains", "asset_type", "exchange", "cik", "isin",
+                "cusip", "listing_date", "is_active",
+            }
+            if not isinstance(expectation, dict) or required - set(expectation):
+                raise ValueError(
+                    f"{correction_id}: {side} must bind exact provider identity"
+                )
+        old_profile = dict(item["old_profile"])
+        new_profile = dict(item["new_profile"])
+        if bool(old_profile["is_active"]) or not bool(new_profile["is_active"]):
+            raise ValueError(
+                f"{correction_id}: continuity must replace one inactive ticker "
+                "with one active ticker"
+            )
+        old_asset_type = str(old_profile["asset_type"]).strip().upper()
+        new_asset_type = str(new_profile["asset_type"]).strip().upper()
+        if old_asset_type != new_asset_type or old_asset_type not in {
+            "STOCK", "ADR",
+        }:
+            raise ValueError(
+                f"{correction_id}: continuity asset_type must be STOCK or ADR"
+            )
+        old_cik = "".join(
+            char for char in str(old_profile["cik"]).upper()
+            if char.isalnum()
+        )
+        new_cik = "".join(
+            char for char in str(new_profile["cik"]).upper()
+            if char.isalnum()
+        )
+        if not old_cik or old_cik != new_cik:
+            raise ValueError(
+                f"{correction_id}: continuity profiles must bind the same CIK"
+            )
+        event = item.get("provider_event")
+        if not isinstance(event, dict) or not event.get("company_name_contains"):
+            raise ValueError(
+                f"{correction_id}: provider_event.company_name_contains is required"
+            )
+        identifiers.add(correction_id)
+        continuity_pairs.add((old_ticker, new_ticker))
     return payload, resolved, _file_sha256(resolved)
 
 
@@ -238,7 +327,132 @@ def _verify_reviewed_profile(
         raise ValueError(
             f"{correction_id}: {ticker} provider is_active drifted"
         )
+    for field in ("asset_type", "exchange"):
+        if field not in expectation:
+            continue
+        if _profile_value(row.get(field)).upper() != _profile_value(
+            expectation[field]
+        ).upper():
+            raise ValueError(
+                f"{correction_id}: {ticker} provider {field} drifted"
+            )
+    if "listing_date" in expectation:
+        observed_date = pd.to_datetime(row.get("listing_date"), errors="coerce")
+        expected_date = pd.to_datetime(
+            expectation["listing_date"], errors="coerce"
+        )
+        if (
+            pd.isna(observed_date)
+            or pd.isna(expected_date)
+            or pd.Timestamp(observed_date).normalize()
+            != pd.Timestamp(expected_date).normalize()
+        ):
+            raise ValueError(
+                f"{correction_id}: {ticker} provider listing_date drifted"
+            )
     return row
+
+
+def apply_reviewed_provider_identifier_conflicts(
+    profiles: pd.DataFrame,
+    changes: pd.DataFrame,
+    registry: dict[str, Any],
+    *,
+    target_session: pd.Timestamp,
+) -> tuple[set[tuple[str, str, pd.Timestamp]], list[dict[str, Any]]]:
+    """Approve exact SEC-backed continuity without rewriting provider IDs."""
+    reviewed_edges: set[tuple[str, str, pd.Timestamp]] = set()
+    audit: list[dict[str, Any]] = []
+    for item in registry.get("reviewed_provider_identifier_conflicts") or []:
+        correction_id = str(item["id"])
+        effective = pd.Timestamp(item["effective_date"]).normalize()
+        old_ticker = str(item["old_ticker"]).strip().upper()
+        new_ticker = str(item["new_ticker"]).strip().upper()
+        if effective > target_session:
+            audit.append({
+                "id": correction_id,
+                "action": "FUTURE_NOT_APPLIED",
+                "effective_date": effective.date().isoformat(),
+                "old_ticker": old_ticker,
+                "new_ticker": new_ticker,
+            })
+            continue
+        old_row = _verify_reviewed_profile(
+            profiles,
+            ticker=old_ticker,
+            expectation=dict(item["old_profile"]),
+            correction_id=correction_id,
+        )
+        new_row = _verify_reviewed_profile(
+            profiles,
+            ticker=new_ticker,
+            expectation=dict(item["new_profile"]),
+            correction_id=correction_id,
+        )
+        old_cik = _profile_value(old_row.get("cik"))
+        new_cik = _profile_value(new_row.get("cik"))
+        if not old_cik or old_cik != new_cik:
+            raise ValueError(
+                f"{correction_id}: reviewed profiles no longer share CIK"
+            )
+        conflicts = {
+            field.upper(): {
+                "old": _profile_value(old_row.get(field)).upper(),
+                "new": _profile_value(new_row.get(field)).upper(),
+            }
+            for field in ("cusip", "isin")
+            if _profile_value(old_row.get(field))
+            and _profile_value(new_row.get(field))
+            and _profile_value(old_row.get(field)).upper()
+            != _profile_value(new_row.get(field)).upper()
+        }
+        if not conflicts:
+            raise ValueError(
+                f"{correction_id}: provider identifier conflict no longer exists"
+            )
+        pair = changes.loc[
+            changes["old_ticker"].fillna("").astype(str).str.upper().eq(
+                old_ticker
+            )
+            & changes["new_ticker"].fillna("").astype(str).str.upper().eq(
+                new_ticker
+            )
+        ].copy()
+        exact = pair.loc[
+            pd.to_datetime(pair["date"], errors="coerce").dt.normalize().eq(
+                effective
+            )
+        ]
+        if len(exact) != 1:
+            raise ValueError(
+                f"{correction_id}: expected one exact provider transition, "
+                f"observed {len(exact)}"
+            )
+        company_contains = str(
+            item["provider_event"]["company_name_contains"]
+        ).strip().upper()
+        if company_contains not in _profile_value(
+            exact.iloc[0].get("company_name")
+        ).upper():
+            raise ValueError(
+                f"{correction_id}: provider event company_name drifted"
+            )
+        edge = (old_ticker, new_ticker, effective)
+        reviewed_edges.add(edge)
+        audit.append({
+            "id": correction_id,
+            "action": "SEC_CONTINUITY_APPROVED",
+            "decision": "SAME_LISTED_ISSUE",
+            "effective_date": effective.date().isoformat(),
+            "old_ticker": old_ticker,
+            "new_ticker": new_ticker,
+            "shared_cik": old_cik,
+            "provider_identifier_conflicts": conflicts,
+            "provider_values_preserved": True,
+            "reason": str(item["reason"]),
+            "sources": [str(source) for source in item["sources"]],
+        })
+    return reviewed_edges, audit
 
 
 def apply_reviewed_symbol_transitions(
@@ -760,6 +974,15 @@ def run_build(
         correction_registry,
         target_session=target_session,
     )
+    (
+        reviewed_identity_continuity,
+        identifier_conflict_audit,
+    ) = apply_reviewed_provider_identifier_conflicts(
+        profiles,
+        changes,
+        correction_registry,
+        target_session=target_session,
+    )
     profiles, changes, scope_diagnostics = _prepare_research_scope(
         profiles,
         changes,
@@ -786,6 +1009,7 @@ def run_build(
             settings.minimum_classification_coverage
         ),
         research_history_policy=history_policy_registry,
+        reviewed_identity_continuity=reviewed_identity_continuity,
     )
     build_duration = time.perf_counter() - build_started
     if source_failures:
@@ -796,6 +1020,9 @@ def run_build(
         ]
         candidate.quality["status"] = "FAIL"
     candidate.quality["reviewed_symbol_transitions"] = correction_audit
+    candidate.quality["reviewed_provider_identifier_conflicts"] = (
+        identifier_conflict_audit
+    )
     candidate.quality["correction_registry_sha256"] = registry_sha256
     candidate.quality["history_policy_registry_sha256"] = (
         history_policy_registry_sha256
@@ -822,7 +1049,11 @@ def run_build(
         "corrections": {
             "registry_path": str(registry_path),
             "registry_sha256": registry_sha256,
-            "applied": correction_audit,
+            "reviewed_symbol_transitions": correction_audit,
+            "reviewed_provider_identifier_conflicts": (
+                identifier_conflict_audit
+            ),
+            "applied": [*correction_audit, *identifier_conflict_audit],
         },
         "research_history_policy": {
             "registry_path": str(resolved_history_policy_path),

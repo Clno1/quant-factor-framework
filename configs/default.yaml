@@ -135,7 +135,7 @@ data:
     output_dir: "outputs/universes/US_LIQUID_5M/factor_data"
     # 五个不同交易日的 SG 影子核验通过后才改为 true。false 时页面仍可
     # 显式选择宽基池验收，但不会自动替代标普 500 成为默认比较池。
-    web_default_enabled: false
+    web_default_enabled: true
     methodology_version: "BROAD_FACTOR_DATA_V1"
     preprocessing_methodology_version: "FACTOR_CLEAN_V1"
     partition_frequency: "month"

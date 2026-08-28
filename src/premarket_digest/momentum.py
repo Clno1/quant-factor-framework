@@ -190,9 +190,14 @@ class CompletedSessionMomentumSource:
     def load(self, source_session: str) -> dict[str, Any]:
         daily: BreakoutDailyDataset | None = None
         if self.use_published_dataset:
+            def include_regime_benchmark(metadata: pd.DataFrame) -> list[str]:
+                tickers = metadata["ticker"].astype(str).str.upper().tolist()
+                return list(dict.fromkeys([*tickers, "QQQ"]))
+
             try:
                 daily = self.dataset_loader(
                     requested_universe=self.settings.momentum_universe,
+                    ticker_selector=include_regime_benchmark,
                     end=source_session,
                     min_latest_coverage=(
                         self.settings.momentum_min_exact_asof_coverage

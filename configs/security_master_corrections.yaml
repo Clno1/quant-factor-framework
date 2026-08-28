@@ -3,8 +3,41 @@
 # Every transition must identify exact provider profile fields and cite primary
 # evidence. The loader rejects source-free entries, provider drift and pairs
 # that do not share an issue-level CUSIP or ISIN.
-schema_version: 1
+schema_version: 2
 universe: US_SECURITY_MASTER
+
+# FMP can change issue identifiers across a documented rename even when SEC
+# filings establish continuity. These entries authorize only the exact dated
+# lineage edge; raw provider CUSIP/ISIN values remain unchanged and auditable.
+reviewed_provider_identifier_conflicts:
+  - id: klto_to_grml_sec_continuity
+    effective_date: "2026-03-12"
+    old_ticker: KLTO
+    new_ticker: GRML
+    old_profile:
+      name_contains: "Klotho Neurosciences"
+      asset_type: STOCK
+      exchange: NASDAQ
+      cik: "0001907223"
+      isin: US49876K1034
+      cusip: 49876K103
+      listing_date: "2022-04-29"
+      is_active: false
+    new_profile:
+      name_contains: "Greenland Mines"
+      asset_type: STOCK
+      exchange: NASDAQ
+      cik: "0001907223"
+      isin: US49876K2024
+      cusip: 49876K202
+      listing_date: "2022-04-29"
+      is_active: true
+    provider_event:
+      company_name_contains: "Greenland Mines Ltd. Common Stock"
+    decision: SAME_LISTED_ISSUE
+    reason: "The SEC registrant history and 2026-03-16 Form 8-K establish a company-name and ticker change to GRML and state that the common-stock CUSIP remained unchanged; FMP nevertheless returned conflicting old/new issue identifiers."
+    sources:
+      - "https://www.sec.gov/Archives/edgar/data/1907223/000121390026028158/ea0281637-8k_greenland.htm"
 
 reviewed_symbol_transitions:
   - id: viaca_to_paraa_name_change

@@ -37,6 +37,11 @@ def main() -> int:
         action="store_true",
         help="Run shadow until the promotion gate passes, then start live delivery.",
     )
+    mode.add_argument(
+        "--prepare-candidates",
+        action="store_true",
+        help="Build the daily candidate snapshot without quotes or delivery.",
+    )
     parser.add_argument("--once", action="store_true", help="Execute one monitor cycle.")
     parser.add_argument("--status", action="store_true", help="Print persisted monitor status.")
     parser.add_argument(
@@ -74,8 +79,10 @@ def main() -> int:
         return 0
     if not settings.enabled:
         parser.error("intraday_momentum_monitor.enabled must be true")
-    if not args.shadow and not args.live and not args.auto:
-        parser.error("one of --shadow, --live or --auto is required")
+    if not args.shadow and not args.live and not args.auto and not args.prepare_candidates:
+        parser.error(
+            "one of --shadow, --live, --auto or --prepare-candidates is required"
+        )
     notifier = None
     delivery_mode = "shadow"
     wants_live = args.live or (
@@ -106,6 +113,10 @@ def main() -> int:
         delivery_mode=delivery_mode,
         notifier=notifier,
     )
+    if args.prepare_candidates:
+        result = asyncio.run(monitor.prepare_candidates())
+        print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
     if args.once:
         result = asyncio.run(monitor.cycle(
             allow_closed=args.allow_closed,

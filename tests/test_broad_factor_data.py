@@ -494,7 +494,7 @@ def test_factor_data_publication_binds_all_parents_and_rejects_tampering():
         assert [row["factor_rank"] for row in history.rows] == [2, 1]
         metadata = backend.metadata(selected_factor="MOM_1M")
         assert metadata["universe"]["factor_data_status"] == "PUBLISHED"
-        assert metadata["universe"]["web_default_enabled"] is False
+        assert metadata["universe"]["web_default_enabled"] is True
         assert metadata["universe"]["research_status"] == "BLOCKED"
         assert metadata["universe"]["research_blockers"] == [
             "PIT_CLASSIFICATION_POLICY"

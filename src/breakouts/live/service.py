@@ -35,7 +35,7 @@ from src.breakouts.live.session import (
 )
 from src.breakouts.live.settings import IntradayMonitorSettings
 from src.breakouts.live.state import IntradayMonitorState
-from src.data.access import validate_daily_data_contract
+from src.breakouts.broad_daily_data import validate_breakout_daily_data_contract
 from src.utils.io import atomic_save_json
 
 
@@ -53,7 +53,7 @@ class IntradayMomentumMonitor:
         state: IntradayMonitorState | None = None,
         candidate_builder: CandidateBuilder = build_daily_candidate_snapshot,
         source_session_resolver: SourceSessionResolver = expected_source_session,
-        contract_validator: ContractValidator = validate_daily_data_contract,
+        contract_validator: ContractValidator = validate_breakout_daily_data_contract,
         delivery_mode: str = "shadow",
         notifier: SignalNotifier | None = None,
     ) -> None:
@@ -158,6 +158,32 @@ class IntradayMomentumMonitor:
             or now - self.last_broad_at
             >= timedelta(minutes=self.settings.broad_refresh_minutes)
         )
+
+    async def prepare_candidates(
+        self,
+        *,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Build and persist the next session's daily snapshot without live I/O."""
+        started = monotonic_time.perf_counter()
+        aware_now = (now or datetime.now(self.timezone)).astimezone(self.timezone)
+        session_date = aware_now.strftime("%Y-%m-%d")
+        await self._ensure_candidates(session_date)
+        snapshot = self.candidate_snapshot or {}
+        contract = snapshot.get("data_contract") or {}
+        return {
+            "phase": "candidates_prepared",
+            "session_date": session_date,
+            "source_data_date": snapshot.get("source_data_date"),
+            "candidate_count": len(self.candidates),
+            "data_universe": contract.get("data_universe"),
+            "dataset_version_id": contract.get("dataset_version_id"),
+            "bars_sha256": contract.get("bars_sha256"),
+            "cycle_seconds": round(
+                monotonic_time.perf_counter() - started,
+                3,
+            ),
+        }
 
     async def _refresh_market_status(self, now: datetime, *, force: bool) -> None:
         due = (

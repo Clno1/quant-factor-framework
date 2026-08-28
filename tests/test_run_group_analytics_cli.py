@@ -122,7 +122,7 @@ class RunGroupAnalyticsCliTests(unittest.TestCase):
         self.assertIn("Environment=GROUP_ANALYTICS_ENABLED=true", content)
         self.assertIn("Environment=GROUP_ANALYTICS_WEB_ENABLED=false", content)
         self.assertIn("Restart=on-failure", content)
-        self.assertIn("RestartSec=15min", content)
+        self.assertIn("RestartSec=30min", content)
 
         refresh_service = service_file.with_name("quant-us-daily-refresh.service")
         refresh_content = refresh_service.read_text(encoding="utf-8")

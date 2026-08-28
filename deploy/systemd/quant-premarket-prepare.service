@@ -1,9 +1,9 @@
 [Unit]
-Description=Send isolated US premarket momentum and sector digests
+Description=Prepare immutable US premarket digest payloads without delivery
 Wants=network-online.target
-After=network-online.target quant-us-equity-coverage.service
-StartLimitIntervalSec=30min
-StartLimitBurst=4
+After=network-online.target quant-us-equity-coverage.service quant-group-analytics-eod.service
+StartLimitIntervalSec=1h
+StartLimitBurst=3
 
 [Service]
 Type=oneshot
@@ -11,6 +11,7 @@ User=quant
 Group=quant
 WorkingDirectory=/opt/quant
 Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONPATH=/opt/quant
 Environment=MPLCONFIGDIR=/opt/quant/data/cache/matplotlib
 Environment=OMP_NUM_THREADS=1
@@ -22,15 +23,13 @@ Environment=BLIS_NUM_THREADS=1
 Environment=PREMARKET_SECTOR_ROTATION_ENABLED=true
 EnvironmentFile=/etc/quant/premarket-digest.env
 ExecStartPre=/opt/quant/.venv/bin/python -c "import sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
-ExecStartPre=/opt/quant/.venv/bin/python /opt/quant/scripts/verify_momentum_discord_routing.py --component premarket
-ExecStart=/opt/quant/.venv/bin/python /opt/quant/scripts/run_premarket_digest.py --env-file /etc/quant/premarket-digest.env --send --scheduled --channel all
-TimeoutStartSec=10min
+ExecStart=/opt/quant/.venv/bin/python /opt/quant/scripts/run_premarket_digest.py --env-file /etc/quant/premarket-digest.env --prepare --channel all
+TimeoutStartSec=1h
 Restart=on-failure
-RestartSec=3min
-RestartPreventExitStatus=2 3
+RestartSec=15min
 UMask=0077
-MemoryHigh=300M
-MemoryMax=450M
+MemoryHigh=500M
+MemoryMax=700M
 MemorySwapMax=0
 CPUQuota=100%
 TasksMax=64
@@ -38,7 +37,9 @@ OOMPolicy=stop
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
-ProtectHome=true
+ProtectHome=read-only
+ReadWritePaths=/opt/quant/data /opt/quant/outputs /opt/quant/logs
+ReadWritePaths=-/opt/quant/runlog
 
 [Install]
 WantedBy=multi-user.target

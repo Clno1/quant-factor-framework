@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from scripts.build_security_master import (
+    apply_reviewed_provider_identifier_conflicts,
     apply_reviewed_symbol_transitions,
     _load_delisted_history,
     _load_provider_sources,
@@ -451,4 +452,139 @@ def test_reviewed_security_master_transition_fails_on_provider_drift():
             ]),
             registry,
             target_session=pd.Timestamp("2026-08-12"),
+        )
+
+
+def _reviewed_identifier_conflict_profiles() -> pd.DataFrame:
+    common = {
+        "asset_type": "STOCK",
+        "exchange": "NASDAQ",
+        "country": "US",
+        "currency": "USD",
+        "cik": "0001907223",
+        "listing_date": "2022-04-29",
+        "sector": "Basic Materials",
+        "sub_industry": "Other Precious Metals",
+    }
+    return pd.DataFrame([
+        {
+            **common,
+            "ticker": "KLTO",
+            "name": "Klotho Neurosciences, Inc.",
+            "isin": "US49876K1034",
+            "cusip": "49876K103",
+            "trading_status": "INACTIVE",
+            "is_active": False,
+        },
+        {
+            **common,
+            "ticker": "GRML",
+            "name": "Greenland Mines Ltd.",
+            "isin": "US49876K2024",
+            "cusip": "49876K202",
+            "trading_status": "ACTIVE",
+            "is_active": True,
+        },
+    ])
+
+
+def _reviewed_identifier_conflict_event() -> pd.DataFrame:
+    return pd.DataFrame([{
+        "date": "2026-03-12",
+        "old_ticker": "KLTO",
+        "new_ticker": "GRML",
+        "company_name": "Greenland Mines Ltd. Common Stock",
+    }])
+
+
+def test_sec_reviewed_identifier_conflict_preserves_stable_security_id():
+    registry, _path, _digest = load_security_master_corrections(
+        "configs/security_master_corrections.yaml"
+    )
+    current_profiles = _reviewed_identifier_conflict_profiles()
+    changes = _reviewed_identifier_conflict_event()
+    reviewed_edges, audit = apply_reviewed_provider_identifier_conflicts(
+        current_profiles,
+        changes,
+        registry,
+        target_session=pd.Timestamp("2026-08-24"),
+    )
+    assert reviewed_edges == {
+        ("KLTO", "GRML", pd.Timestamp("2026-03-12"))
+    }
+    assert audit[0]["action"] == "SEC_CONTINUITY_APPROVED"
+    assert audit[0]["provider_values_preserved"] is True
+
+    previous_profiles = current_profiles.copy()
+    previous_profiles.loc[
+        previous_profiles["ticker"].eq("GRML"), ["cusip", "isin"]
+    ] = ["49876K103", "US49876K1034"]
+    previous = build_security_master_candidate(
+        previous_profiles,
+        symbol_changes=changes,
+        delisted_companies=pd.DataFrame(),
+        target_session="2026-08-21",
+        minimum_active_stocks=1,
+    )
+    previous_row = previous.master.loc[
+        previous.master["current_ticker"].eq("GRML")
+    ].iloc[0]
+    security_id = str(previous_row["security_id"])
+
+    current = build_security_master_candidate(
+        current_profiles,
+        symbol_changes=changes,
+        delisted_companies=pd.DataFrame(),
+        target_session="2026-08-24",
+        previous_identity_keys=previous.identity_keys,
+        previous_master=previous.master,
+        previous_symbols=previous.symbols,
+        previous_classifications=previous.classifications,
+        minimum_active_stocks=1,
+        research_history_policy={
+            "decision": {"basis": "approved provider limitation"},
+            "entries": [{
+                "security_id": security_id,
+                "current_ticker": "GRML",
+                "name": "Greenland Mines Ltd.",
+                "trading_status": "ACTIVE",
+                "policy": "PROSPECTIVE_ONLY",
+                "effective_from": "2026-08-14",
+                "reason_codes": ["UNVERIFIABLE_TICKER_INTERVAL"],
+            }],
+        },
+        reviewed_identity_continuity=reviewed_edges,
+    )
+
+    assert current.quality["status"] == "PASS"
+    assert current.master["security_id"].eq(security_id).sum() == 1
+    row = current.master.loc[current.master["security_id"].eq(security_id)].iloc[0]
+    assert row["current_ticker"] == "GRML"
+    assert row["cusip"] == "49876K202"
+    assert set(current.identity_keys.loc[
+        current.identity_keys["security_id"].eq(security_id)
+        & current.identity_keys["key_type"].eq("CUSIP"),
+        "key_value",
+    ]) == {"49876K103", "49876K202"}
+    assert current.quality["symbol_change_diagnostics"][
+        "reviewed_identity_continuity"
+    ] == [{
+        "old_ticker": "KLTO",
+        "new_ticker": "GRML",
+        "effective_date": "2026-03-12",
+    }]
+
+
+def test_sec_reviewed_identifier_conflict_fails_on_new_provider_drift():
+    registry, _path, _digest = load_security_master_corrections(
+        "configs/security_master_corrections.yaml"
+    )
+    drifted = _reviewed_identifier_conflict_profiles()
+    drifted.loc[drifted["ticker"].eq("GRML"), "cusip"] = "DRIFTED"
+    with pytest.raises(ValueError, match="GRML provider cusip drifted"):
+        apply_reviewed_provider_identifier_conflicts(
+            drifted,
+            _reviewed_identifier_conflict_event(),
+            registry,
+            target_session=pd.Timestamp("2026-08-24"),
         )

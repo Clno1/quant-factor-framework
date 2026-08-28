@@ -179,6 +179,94 @@ def test_missing_premarket_channels_are_visible_as_expected_deliveries(
     assert {row.status for row in result.deliveries} == {"MISSED"}
 
 
+def _write_premarket_deliveries(
+    path: Path,
+    *,
+    created_at: str,
+    status: str = "PENDING",
+) -> None:
+    with sqlite3.connect(path) as connection:
+        connection.executescript("""
+            CREATE TABLE deliveries (
+                target_session TEXT NOT NULL,
+                channel TEXT NOT NULL,
+                destination TEXT NOT NULL,
+                source_session TEXT NOT NULL,
+                payload_hash TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                message_id TEXT,
+                last_error_code TEXT,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                sent_at TEXT,
+                retryable INTEGER,
+                PRIMARY KEY (target_session, channel)
+            );
+        """)
+        for channel in ("momentum", "sector-rotation"):
+            connection.execute(
+                """INSERT INTO deliveries VALUES
+                   (?, ?, 'discord:test', '2026-08-11', 'sha256:test', '{}',
+                    ?, 0, NULL, NULL, NULL, ?, ?, NULL, 1)""",
+                ("2026-08-12", channel, status, created_at, created_at),
+            )
+
+
+def test_pending_premarket_rows_become_missed_after_delivery_deadline(
+    monkeypatch,
+    tmp_path: Path,
+):
+    database = tmp_path / "premarket.sqlite3"
+    _write_premarket_deliveries(
+        database,
+        created_at="2026-08-12T14:25:00+00:00",
+    )
+    monkeypatch.setattr("src.operations.adapters.delivery.PREMARKET_DB", database)
+    registry = OperationsRegistry("configs/operations.yaml")
+
+    result = collect_delivery_evidence(
+        [registry.get("premarket_digest")],
+        now=datetime(2026, 8, 12, 14, 35, tzinfo=timezone.utc),
+        observed_at="2026-08-12T14:35:00+00:00",
+    )
+
+    snapshot = result.snapshots[0]
+    assert snapshot.status == JobStatus.MISSED
+    assert snapshot.metrics["past_deadline"] is True
+    assert {row.status for row in result.deliveries} == {"MISSED"}
+    assert {row.metadata["source_status"] for row in result.deliveries} == {"PENDING"}
+    assert result.runs[0].status == JobStatus.MISSED
+
+
+def test_complete_premarket_payloads_are_degraded_when_prepared_late(
+    monkeypatch,
+    tmp_path: Path,
+):
+    database = tmp_path / "premarket.sqlite3"
+    _write_premarket_deliveries(
+        database,
+        created_at="2026-08-12T13:25:00+00:00",
+    )
+    monkeypatch.setattr("src.operations.adapters.delivery.PREMARKET_DB", database)
+    registry = OperationsRegistry("configs/operations.yaml")
+
+    result = collect_delivery_evidence(
+        [registry.get("premarket_digest_prepare")],
+        now=datetime(2026, 8, 12, 14, 0, tzinfo=timezone.utc),
+        observed_at="2026-08-12T14:00:00+00:00",
+    )
+
+    snapshot = result.snapshots[0]
+    assert snapshot.status == JobStatus.DEGRADED
+    assert snapshot.metrics["prepared_late"] is True
+    assert snapshot.last_success_at == "2026-08-12T13:25:00+00:00"
+    assert result.runs[0].status == JobStatus.DEGRADED
+    assert result.runs[0].metadata["prepared_late"] is True
+
+
 def test_hourly_retries_do_not_count_as_distinct_scheduled_hours(
     monkeypatch,
     tmp_path: Path,

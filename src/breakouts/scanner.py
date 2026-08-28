@@ -336,7 +336,7 @@ def scan_breakouts(
     normalized_set = set(normalized_tickers)
     loaded_frames = (
         {
-            str(ticker).strip().upper(): _normalize_daily(frame)
+            str(ticker).strip().upper(): frame
             for ticker, frame in frames.items()
             if str(ticker).strip().upper() in normalized_set
         }
