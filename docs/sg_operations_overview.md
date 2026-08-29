@@ -97,6 +97,8 @@ flowchart TD
 | Research outputs | `/home/projects/quant/outputs/universes/` | 当前 factor publication 与 generation |
 | Backtest artifacts | `/home/projects/quant/outputs/backtests/` | 大型结果和日志 |
 | Intraday momentum state | `/home/projects/quant/outputs/intraday_momentum_monitor/state.sqlite3` | 信号、outbox、逐分钟观测、五日晋级证据 |
+
+茶杯柄检测复用 `quant-intraday-momentum-monitor.service`，不新增第二个行情抓取服务。它在同一 SQLite 中使用 `cup_handle_evaluations`、`cup_handle_cycles` 和 `cup_handle_session_observations`，并以 `daily-cup-5m-handle-shadow-v1` 独立累计五个完整交易日。部署后必须保持 `intraday_momentum_monitor.cup_handle.delivery_enabled: false`，直到新台账达到 `5/5` 且历史回放误报统计经人工验收。
 | Operations ledger | `/home/projects/quant/outputs/operations/operations.sqlite3` | 任务运行、数据新鲜度、投递和异常台账；Web 读取独立原子快照 |
 
 DuckDB 和 SQLite 都是嵌入式文件，不需要独立 daemon。Parquet 也是文件格式。数据只存在部署它们
@@ -744,3 +746,28 @@ MAG7 正常发布。二者都不能覆盖宽基数据浏览已经成功上线的
 最终 watchdog 指标为 `shadow_passed=6`、`shadow_required=5`、`shadow_remaining=0`。旧代码用
 `remaining_sessions or 5` 读取指标，会把合法的 0 误替换成 5；现已改为仅在值为 `None` 时使用
 默认值。SG 宽基与运维定向回归为 `28 passed`，本地完整回归为 `586 passed`。
+
+## 23. 2026-08-29 茶杯柄独立 shadow 上线
+
+独立 `daily-cup-5m-handle-shadow-v1` 已接入现有分钟行情进程，不新增 FMP 请求服务。日线候选、
+有界完整五分钟序列、柄形态检测、SQLite/outbox、历史回放和运维指标均已部署；消息发送开关保持
+false。部署备份为：
+
+```text
+/home/projects/quant-backups/cup-handle-shadow-20260829T152237CST
+```
+
+生产验收结果：22 个部署文件 SHA-256 全部一致；SG 专项测试 `40 passed`，正式 `tests/` 全量回归
+`620 passed, 1 warning`；SQLite integrity 为 `ok`，新增三表可读；运维站任务详情 HTTP 200 且
+包含独立算法版本。systemd 校验只有腾讯云 `tat_agent` 的无关旧路径提示。候选预计算 timer 和盘中
+timer 均已启用，下一次分别为 2026-08-31 18:30、21:20 SGT。
+
+新的五日门槛从 2026-08-31 独立起算，旧动量观察日不得复用。每个交易日必须核对周期覆盖率、
+实际评估数、日线筛选合同、错误比例、P95 延迟和 96 根序列上限；没有命中允许通过，没有评估不
+允许通过。五日全部通过后仍需查看历史回放误报代理与拒绝原因分布，再单独决定是否开启发送。
+
+真实盘前预验收已使用 source 2026-08-28 构建 2026-08-31 快照：评估 2,772 只、日线杯体合格
+1,343 只、保留候选 600 只，耗时 49.062 秒。MDB 的两日分钟回放处理 110 根完整五分钟 bar，
+信号 0，误报率保持 null；报告保存于
+`outputs/data_audits/cup_handle_replay_mdb_20260810_20260811.json`。这只能证明生产链可运行，
+不能替代五个完整交易日或更长历史样本的参数判断。

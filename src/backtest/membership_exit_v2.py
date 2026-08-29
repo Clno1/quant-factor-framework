@@ -52,7 +52,10 @@ def apply_membership_exit_policy_v2(
         if begin >= finish:
             continue
         segment_membership = membership.iloc[begin:finish]
-        exited = (~segment_membership).cummax()
+        # A membership snapshot becomes knowable at that session's close. The
+        # resulting exit can execute at the following open, so cash starts on
+        # the next modeled interval, never on the observation row itself.
+        exited = (~segment_membership).cummax().shift(1, fill_value=False)
         cash_mask.iloc[begin:finish] = held.iloc[begin:finish].notna() & exited
     adjusted = adjusted.mask(cash_mask, 0.0)
 
@@ -118,14 +121,18 @@ def apply_membership_exit_policy_v2(
             f"{ticker} {effective_date.date()} reason={reason!r}"
         )
 
-    next_membership = membership.shift(-1)
-    terminal = held.notna() & membership & next_membership.eq(False) & ~cash_mask
+    previous_membership = membership.shift(1, fill_value=False)
+    terminal = (
+        held.notna()
+        & previous_membership
+        & membership.eq(False)
+        & ~cash_mask
+    )
     event_rows: list[dict] = []
     for row_no, col_no in np.argwhere(terminal.to_numpy()):
-        if row_no + 1 >= len(dates):
-            continue
         dt = dates[row_no]
-        next_dt = dates[row_no + 1]
+        has_next_session = row_no + 1 < len(dates)
+        next_dt = dates[row_no + 1] if has_next_session else dt
         ticker = str(columns[col_no])
         assignment = held.iat[row_no, col_no]
         reason = ""
@@ -136,9 +143,54 @@ def apply_membership_exit_policy_v2(
                 f"Invalid held group size for membership exit: {dt.date()} {ticker}"
             )
 
-        next_execution_open = _safe_lookup(execution_open_df, next_dt, ticker)
-        observed_return = adjusted.iat[row_no, col_no]
-        if next_execution_open is not None and pd.notna(observed_return):
+        next_execution_open = (
+            _safe_lookup(execution_open_df, next_dt, ticker)
+            if has_next_session
+            else None
+        )
+        terminal_date = dt
+        if next_execution_open is not None:
+            missing_start = row_no
+            while (
+                missing_start > 0
+                and pd.isna(adjusted.iat[missing_start - 1, col_no])
+            ):
+                missing_start -= 1
+            base_date = dates[missing_start]
+            base_total_open = _safe_lookup(
+                total_return_open_df,
+                base_date,
+                ticker,
+            )
+            next_total_open = _safe_lookup(
+                total_return_open_df,
+                next_dt,
+                ticker,
+            )
+            if base_total_open is None or next_total_open is None:
+                raise ValueError(
+                    "Membership exit has executable next-open prices but lacks "
+                    "the matching total-return open needed for dividend-aware PnL: "
+                    f"ticker={ticker} base={base_date.date()} next={next_dt.date()}"
+                )
+            if missing_start < row_no:
+                assignment = held.iat[missing_start, col_no]
+                if pd.isna(assignment):
+                    raise ValueError(
+                        "Halted membership exit has no modeled owner at its last "
+                        f"observable open: date={base_date.date()} ticker={ticker}"
+                    )
+                group_size = int(held.loc[base_date].eq(assignment).sum())
+                if group_size <= 0:
+                    raise ValueError(
+                        "Invalid held group size at the last observable open: "
+                        f"date={base_date.date()} ticker={ticker}"
+                    )
+                stale_sessions = row_no - missing_start
+                adjusted.iloc[missing_start:row_no, col_no] = 0.0
+            adjusted.iat[row_no, col_no] = (
+                next_total_open / base_total_open - 1.0
+            )
             execution_date = next_dt
             decision_date = dt
             raw_price = next_execution_open
@@ -183,70 +235,53 @@ def apply_membership_exit_policy_v2(
             current_total_open = _safe_lookup(
                 total_return_open_df, terminal_date, ticker
             )
-
-            if next_execution_open is not None:
-                next_total_open = _safe_lookup(total_return_open_df, next_dt, ticker)
-                if current_total_open is None or next_total_open is None:
-                    raise ValueError(
-                        "Membership exit has executable next-open prices but lacks "
-                        "the matching total-return open needed for dividend-aware PnL: "
-                        f"ticker={ticker} terminal={terminal_date.date()} next={next_dt.date()}"
-                    )
-                adjusted.iat[terminal_row, col_no] = (
-                    next_total_open / current_total_open - 1.0
+            if final_execution_close is None:
+                raise ValueError(
+                    "Membership exit has no final tradable close: "
+                    f"date={terminal_date.date()} ticker={ticker}"
                 )
-                execution_date = next_dt
-                decision_date = terminal_date
-                raw_price = next_execution_open
-                pricing_method = "NEXT_OPEN"
-            else:
-                if final_execution_close is None:
-                    raise ValueError(
-                        "Membership exit has no final tradable close: "
-                        f"date={terminal_date.date()} ticker={ticker}"
-                    )
-                pricing_method = "LAST_TRADABLE_CLOSE"
-                if stale_sessions > 0:
-                    pricing_method, reason = settlement_reason(ticker, next_dt)
-                if pricing_method == "TOTAL_LOSS_WRITE_OFF":
-                    adjusted.iat[terminal_row, col_no] = -1.0
-                    raw_price = 0.0
-                else:
-                    final_total_close = _safe_lookup(
-                        total_return_close_df, terminal_date, ticker
-                    )
-                    if current_total_open is None or final_total_close is None:
-                        raise ValueError(
-                            "Membership exit final-close settlement lacks matching "
-                            "total-return prices; refusing a raw-price PnL fallback: "
-                            f"ticker={ticker} date={terminal_date.date()}"
-                        )
-                    adjusted.iat[terminal_row, col_no] = (
-                        final_total_close / current_total_open - 1.0
-                    )
-                    # Execution accounting still uses the actual raw/split-adjusted
-                    # close, never the dividend-adjusted attribution price.
-                    raw_price = final_execution_close
-                execution_date = terminal_date
-                decision_date = terminal_date
+            pricing_method = "LAST_TRADABLE_CLOSE"
+            if stale_sessions > 0:
+                pricing_method, reason = settlement_reason(ticker, dt)
 
-            segment_finish = min(value for value in ordered if value > row_no)
-            if terminal_row + 1 < segment_finish:
-                cash_mask.iloc[terminal_row + 1 : segment_finish, col_no] = True
-                adjusted.iloc[terminal_row + 1 : segment_finish, col_no] = 0.0
-            dt = terminal_date
+            # The final tradable price is historical settlement evidence. It
+            # becomes actionable only when the False membership state is
+            # observed on dt, so the cumulative outcome is booked on dt and is
+            # never backdated into an earlier NAV.
+            adjusted.iloc[terminal_row:row_no, col_no] = 0.0
+            if pricing_method == "TOTAL_LOSS_WRITE_OFF":
+                adjusted.iat[row_no, col_no] = -1.0
+                raw_price = 0.0
+            else:
+                final_total_close = _safe_lookup(
+                    total_return_close_df, terminal_date, ticker
+                )
+                if current_total_open is None or final_total_close is None:
+                    raise ValueError(
+                        "Membership exit final-close settlement lacks matching "
+                        "total-return prices; refusing a raw-price PnL fallback: "
+                        f"ticker={ticker} date={terminal_date.date()}"
+                    )
+                adjusted.iat[row_no, col_no] = (
+                    final_total_close / current_total_open - 1.0
+                )
+                # Execution accounting still uses the actual raw/split-adjusted
+                # close, never the dividend-adjusted attribution price.
+                raw_price = final_execution_close
+            execution_date = dt
+            decision_date = dt
 
         event_rows.append(
             {
                 "decision_date": decision_date,
                 "execution_date": execution_date,
-                "terminal_date": dt,
+                "terminal_date": terminal_date,
                 "ticker": ticker,
                 "assignment": float(assignment),
                 "target_weight": 1.0 / group_size,
                 "raw_price": float(raw_price),
                 "pricing_method": pricing_method,
-                "effective_exit_date": next_dt,
+                "effective_exit_date": dt,
                 "reason": reason,
                 "stale_sessions": stale_sessions,
             }

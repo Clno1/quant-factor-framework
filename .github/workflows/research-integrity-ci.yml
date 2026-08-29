@@ -4,17 +4,19 @@ on:
   pull_request:
   push:
     branches:
+      - main
+      - master
       - fix/research-integrity-20260822
 
 jobs:
-  test:
+  research-integrity:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
           cache: pip
       - name: Install dependencies
         run: python -m pip install -r requirements-dev.txt
@@ -27,14 +29,23 @@ jobs:
           tests/test_benchmark_contract_integration.py
           tests/test_membership_exit_price_semantics.py
           tests/test_ic_hac_confidence.py
-      - name: Existing trading integrity tests
-        run: python -m pytest -q tests/test_trading_integrity.py
-      - name: Related regression suite
+      - name: Stateful portfolio and knowledge-time contracts
+        run: >-
+          python -m pytest -q
+          tests/test_trading_integrity.py
+          tests/test_double_sort_integrity.py
+          tests/test_decision_replay.py
+          tests/test_decision_replay_store_integrity.py
+          tests/test_paper_trading_integrity.py
+      - name: Data and preprocessing contracts
         run: >-
           python -m pytest -q
           tests/test_preprocessing_audit.py
           tests/test_data_foundation.py
           tests/test_strategy_composition_integrity.py
           tests/test_run_mvp_cli.py
+      - name: Web backtest contracts
+        run: >-
+          python -m pytest -q
           tests/test_web_backtest_detail.py
-          tests/test_decision_replay.py
+          tests/test_web_startup.py

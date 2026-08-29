@@ -34,6 +34,55 @@ def build_signal_discord_payload(
     dashboard_base_url: str = "",
 ) -> dict[str, Any]:
     """Build one bounded Discord message for one exact minute-bar signal."""
+    if signal.trigger_family == "CUP_HANDLE_BREAKOUT":
+        pattern = signal.pattern or {}
+        payload: dict[str, Any] = {
+            "username": "Momentum Alerts",
+            "content": "",
+            "allowed_mentions": {"parse": []},
+            "embeds": [{
+                "title": "茶杯柄突破 · 5 分钟确认",
+                "description": (
+                    f"`{signal.ticker}` 的日线杯体与盘中柄已由完整 5 分钟 K 线确认。\n"
+                    f"触发价 **{_price(signal.price)}** · 杯沿 **{_price(signal.breakout_level)}**"
+                ),
+                "color": 0x00A86B,
+                "fields": [
+                    {
+                        "name": "杯体",
+                        "value": (
+                            f"深度 {float(pattern.get('cup_depth_pct') or 0):.1f}% · "
+                            f"宽度 {int(pattern.get('cup_width_sessions') or 0)} 个交易日"
+                        ),
+                        "inline": False,
+                    },
+                    {
+                        "name": "柄与量能",
+                        "value": (
+                            f"柄深 {float(pattern.get('handle_depth_pct') or 0):.1f}% · "
+                            f"柄长 {int(pattern.get('handle_length_bars') or 0)} 根 · "
+                            f"缩量比 {float(pattern.get('handle_volume_ratio') or 0):.2f}x · "
+                            f"突破量比 {float(pattern.get('breakout_volume_ratio') or 0):.2f}x"
+                        ),
+                        "inline": False,
+                    },
+                    {
+                        "name": "审计信息",
+                        "value": (
+                            f"Bar `{signal.bar_timestamp.isoformat(timespec='minutes')}` · "
+                            f"算法 `{signal.algorithm_version}` · 参数 `{signal.parameter_version}`"
+                        )[:1024],
+                        "inline": False,
+                    },
+                ],
+                "footer": {"text": "独立茶杯柄检测；研究提醒，不构成交易建议"},
+                "timestamp": signal.triggered_at.isoformat(timespec="seconds"),
+            }],
+        }
+        if role_id.isascii() and role_id.isdigit():
+            payload["content"] = f"<@&{role_id}> 新的分钟级茶杯柄突破信号"
+            payload["allowed_mentions"] = {"parse": [], "roles": [role_id]}
+        return payload
     opening_range = (
         "n/a"
         if signal.opening_range_minutes is None

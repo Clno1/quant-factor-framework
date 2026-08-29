@@ -360,3 +360,67 @@ def test_intraday_requires_an_eod_observation_after_market_close(
         [job], now=now, observed_at="2026-08-12T21:31:00+00:00"
     )
     assert complete.snapshots[0].status == JobStatus.SUCCESS
+
+
+def test_intraday_exposes_cup_handle_shadow_metrics(monkeypatch, tmp_path: Path):
+    database = tmp_path / "intraday-cup.sqlite3"
+    heartbeat = {
+        "session_date": "2026-08-12",
+        "updated_at": "2026-08-12T16:00:00+00:00",
+        "phase": "completed",
+        "mode": "shadow",
+        "errors": [],
+        "cup_handle": {
+            "mode": "shadow",
+            "algorithm_version": "daily-cup-5m-handle-shadow-v1",
+            "error_count": 0,
+        },
+    }
+    with sqlite3.connect(database) as connection:
+        connection.executescript("""
+            CREATE TABLE heartbeat (
+                singleton INTEGER PRIMARY KEY, updated_at TEXT NOT NULL,
+                payload_json TEXT NOT NULL
+            );
+            CREATE TABLE cup_handle_cycles (
+                session_date TEXT, observed_at TEXT
+            );
+            CREATE TABLE cup_handle_evaluations (
+                session_date TEXT, outcome TEXT, rejection_reason TEXT,
+                latency_ms REAL, bar_count INTEGER
+            );
+            CREATE TABLE cup_handle_session_observations (
+                session_date TEXT, algorithm_version TEXT, status TEXT
+            );
+        """)
+        connection.execute(
+            "INSERT INTO heartbeat VALUES (1, ?, ?)",
+            (heartbeat["updated_at"], json.dumps(heartbeat)),
+        )
+        connection.execute(
+            "INSERT INTO cup_handle_cycles VALUES (?, ?)",
+            ("2026-08-12", "2026-08-12T16:00:00+00:00"),
+        )
+        connection.executemany(
+            "INSERT INTO cup_handle_evaluations VALUES (?, ?, ?, ?, ?)",
+            [
+                ("2026-08-12", "MATCH", "MATCH", 1.0, 20),
+                ("2026-08-12", "REJECTED", "RIM_NOT_BROKEN", 2.0, 20),
+                ("2026-08-12", "REJECTED", "RIM_NOT_BROKEN", 3.0, 20),
+            ],
+        )
+    monkeypatch.setattr("src.operations.adapters.delivery.INTRADAY_DB", database)
+    registry = OperationsRegistry("configs/operations.yaml")
+
+    result = collect_delivery_evidence(
+        [registry.get("intraday_momentum")],
+        now=datetime(2026, 8, 12, 16, 0, tzinfo=timezone.utc),
+        observed_at="2026-08-12T16:00:00+00:00",
+    )
+
+    metrics = result.snapshots[0].metrics
+    assert metrics["茶杯柄命中数"] == 1
+    assert metrics["茶杯柄拒绝数"] == 2
+    assert metrics["茶杯柄主要拒绝原因"] == {"RIM_NOT_BROKEN": 2}
+    assert metrics["茶杯柄检测延迟P95毫秒"] == 2.9
+    assert metrics["茶杯柄最大序列长度"] == 20

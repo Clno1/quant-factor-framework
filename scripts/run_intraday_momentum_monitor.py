@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
 
 from src.alerts.discord import DiscordNotifier  # noqa: E402
 from src.breakouts.live.service import IntradayMomentumMonitor  # noqa: E402
+from src.breakouts.live.cup_handle import CUP_HANDLE_ALGORITHM_VERSION  # noqa: E402
 from src.breakouts.live.session import previous_xnys_sessions  # noqa: E402
 from src.breakouts.live.settings import IntradayMonitorSettings  # noqa: E402
 from src.breakouts.live.state import IntradayMonitorState  # noqa: E402
@@ -65,14 +66,32 @@ def main() -> int:
         settings.required_shadow_sessions,
     )
     promotion = state.promotion_status(expected_sessions)
+    cup_expected_sessions = previous_xnys_sessions(
+        reference_date,
+        settings.cup_required_shadow_sessions,
+    )
+    cup_promotion = state.cup_handle_promotion_status(
+        cup_expected_sessions,
+        algorithm_version=CUP_HANDLE_ALGORITHM_VERSION,
+    )
     if args.status:
         status = state.status()
         status["promotion"] = promotion
+        status["cup_handle_promotion"] = cup_promotion
         status["configured_mode"] = "auto"
         status["delivery_armed"] = settings.delivery_enabled
         status["effective_auto_mode"] = (
             "live"
             if settings.delivery_enabled and promotion["eligible"]
+            else "shadow"
+        )
+        status["effective_cup_handle_mode"] = (
+            "live"
+            if (
+                settings.cup_handle_delivery_enabled
+                and settings.delivery_enabled
+                and cup_promotion["eligible"]
+            )
             else "shadow"
         )
         print(json.dumps(status, ensure_ascii=False, indent=2, sort_keys=True))
@@ -111,6 +130,15 @@ def main() -> int:
         settings,
         state=state,
         delivery_mode=delivery_mode,
+        cup_delivery_mode=(
+            "live"
+            if (
+                wants_live
+                and settings.cup_handle_delivery_enabled
+                and cup_promotion["eligible"]
+            )
+            else "shadow"
+        ),
         notifier=notifier,
     )
     if args.prepare_candidates:

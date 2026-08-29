@@ -84,6 +84,7 @@ quant-operations-web.service（SG: 0.0.0.0:18825）
 - group analytics 的 `latest_success.json` 和 `last_attempt.json`；
 - `outputs/quant_app.sqlite3` 的 data requests、paper accounts 和运行 frame；
 - premarket、hourly momentum、intraday monitor 三个专属 SQLite；
+- intraday monitor 内的茶杯柄使用独立算法版本、评估/周期/交易日三张表和独立 `5/5`，运维任务详情展示命中、拒绝原因、P95 延迟与有界序列长度；
 - 全美宽基 pipeline report、factor publication、readiness 和 shadow ledger；
 - Linux systemd 的 service/timer 状态；
 - 可用磁盘和内存。

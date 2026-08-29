@@ -18,6 +18,10 @@ from src.breakouts.live.detector import (
     PARAMETER_VERSION,
     BreakoutDetector,
 )
+from src.breakouts.live.cup_handle import (
+    CUP_HANDLE_ALGORITHM_VERSION,
+    CUP_HANDLE_PARAMETER_VERSION,
+)
 from src.breakouts.live.candidates import build_daily_candidate_snapshot
 from src.breakouts.live.delivery import build_signal_discord_payload
 from src.breakouts.live.models import (
@@ -171,6 +175,7 @@ class SettingsAndSelectorTests(unittest.TestCase):
         self.assertEqual(settings.bars_interval_minutes, 1)
         self.assertFalse(settings.delivery_enabled)
         self.assertEqual(settings.required_shadow_sessions, 5)
+        self.assertEqual(settings.cup_required_shadow_sessions, 5)
 
     def test_process_environment_can_control_monitor_and_delivery(self):
         with patch.dict(
@@ -501,6 +506,12 @@ class StateAndServiceTests(unittest.TestCase):
             "source_data_date": "2026-07-27",
             "data_contract": _FakeContract().to_dict(),
             "candidate_count": 1,
+            "cup_handle_daily": {
+                "algorithm_version": CUP_HANDLE_ALGORITHM_VERSION,
+                "parameter_version": CUP_HANDLE_PARAMETER_VERSION,
+                "evaluated_count": 1,
+                "qualified_count": 0,
+            },
             "rows": [_candidate().to_dict()],
         }
 
@@ -778,6 +789,12 @@ class StateAndServiceTests(unittest.TestCase):
             "source_data_date": "2026-07-27",
             "data_contract": _FakeContract().to_dict(),
             "candidate_count": 1,
+            "cup_handle_daily": {
+                "algorithm_version": CUP_HANDLE_ALGORITHM_VERSION,
+                "parameter_version": CUP_HANDLE_PARAMETER_VERSION,
+                "evaluated_count": 1,
+                "qualified_count": 0,
+            },
             "rows": [_candidate().to_dict()],
         }
 

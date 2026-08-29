@@ -2632,6 +2632,8 @@ class MarketDataReader:
                 metadata,
                 "market_cap_policy",
             )
+            market_cap.attrs["layout"] = "ticker_snapshot"
+            market_cap.attrs["is_point_in_time"] = False
             out["market_cap"] = market_cap
         if require_open and (
             out["open"].empty or out["open"].isna().all(axis=None)

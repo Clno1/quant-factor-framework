@@ -1,6 +1,6 @@
 # 文档导航
 
-更新日期：2026-08-20
+更新日期：2026-08-29
 
 不要按文件名字母顺序硬读。建议按下面路径进入。
 
@@ -47,6 +47,7 @@
 - [`momentum_breakout_data_flow.md`](momentum_breakout_data_flow.md)：从定时入口到版本日线、分钟确认和 SQLite 的完整代码线路。
 - [`premarket_discord.md`](premarket_discord.md)：盘前摘要数据闸门和 outbox。
 - [`intraday_momentum_monitor_design.md`](intraday_momentum_monitor_design.md)：分钟 shadow 监控设计。
+- [`cup_handle_monitoring.md`](cup_handle_monitoring.md)：日线杯体、五分钟柄、历史回放、SQLite 与独立五日影子验收。
 - [`market_turning_signals_research.md`](market_turning_signals_research.md)：大盘顶底研究方案。
 - [`market_regime_research_implementation.md`](market_regime_research_implementation.md)：大盘研究实现。
 - [`market_regime_effectiveness_screening.md`](market_regime_effectiveness_screening.md)：有效性筛选。

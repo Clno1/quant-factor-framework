@@ -34,6 +34,7 @@ from src.operations.models import (
     RunStage,
 )
 from src.utils.market_calendar import is_xnys_session
+from src.breakouts.live.session import previous_xnys_sessions
 
 
 PREMARKET_DB = PROJECT_ROOT / "outputs" / "premarket_digest" / "state.sqlite3"
@@ -45,7 +46,19 @@ _CHANNEL_LABELS = {
     "sector-rotation": "盘前板块轮动",
     "hourly-momentum": "每小时动量摘要",
     "intraday-breakout": "盘中动量突破",
+    "cup-handle-breakout": "盘中茶杯柄突破",
 }
+
+
+def _p95(values: Iterable[float]) -> float | None:
+    ordered = sorted(float(value) for value in values)
+    if not ordered:
+        return None
+    position = (len(ordered) - 1) * 0.95
+    lower = int(position)
+    upper = min(len(ordered) - 1, lower + 1)
+    weight = position - lower
+    return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
 
 
 def _delivery_state(status: JobStatus) -> str:
@@ -701,6 +714,20 @@ def _collect_intraday(
         ),
         None,
     )
+    cup_observations: list[dict[str, Any]] = []
+    if "cup_handle_session_observations" in tables:
+        cup_observations = sqlite_rows(
+            INTRADAY_DB,
+            """SELECT * FROM cup_handle_session_observations
+               ORDER BY session_date DESC LIMIT 20""",
+        )
+    current_cup_observation = next(
+        (
+            row for row in cup_observations
+            if str(row.get("session_date") or "") == expected
+        ),
+        None,
+    )
     timeout = int(job.schedule.get("heartbeat_timeout_seconds") or 120)
     if not heartbeat:
         status = (
@@ -757,6 +784,22 @@ def _collect_intraday(
         status = JobStatus.SCHEDULED
         reason = "等待下一个交易时段启动"
 
+    cup_heartbeat = heartbeat.get("cup_handle") or {}
+    if (
+        int(cup_heartbeat.get("error_count") or 0) > 0
+        and status in {JobStatus.RUNNING, JobStatus.SUCCESS}
+    ):
+        status = JobStatus.DEGRADED
+        reason = "茶杯柄检测最近周期存在错误"
+    if (
+        market_phase == "AFTER"
+        and current_cup_observation
+        and str(current_cup_observation.get("status") or "") != "PASS"
+        and status == JobStatus.SUCCESS
+    ):
+        status = JobStatus.DEGRADED
+        reason = "盘中动量通过，但茶杯柄独立影子验收未通过"
+
     cycles: list[dict[str, Any]] = []
     if "monitor_cycles" in tables:
         cycles = sqlite_rows(
@@ -764,6 +807,48 @@ def _collect_intraday(
             "SELECT * FROM monitor_cycles WHERE session_date=? ORDER BY observed_at DESC LIMIT 500",
             (expected,),
         )
+    cup_cycles: list[dict[str, Any]] = []
+    cup_evaluations: list[dict[str, Any]] = []
+    if "cup_handle_cycles" in tables:
+        cup_cycles = sqlite_rows(
+            INTRADAY_DB,
+            """SELECT * FROM cup_handle_cycles
+               WHERE session_date=? ORDER BY observed_at DESC LIMIT 500""",
+            (expected,),
+        )
+    if "cup_handle_evaluations" in tables:
+        cup_evaluations = sqlite_rows(
+            INTRADAY_DB,
+            """SELECT outcome, rejection_reason, latency_ms, bar_count
+               FROM cup_handle_evaluations WHERE session_date=?""",
+            (expected,),
+        )
+    cup_outcome_counts: dict[str, int] = {}
+    cup_rejection_counts: dict[str, int] = {}
+    for row in cup_evaluations:
+        outcome = str(row.get("outcome") or "ERROR")
+        cup_outcome_counts[outcome] = cup_outcome_counts.get(outcome, 0) + 1
+        if outcome != "MATCH":
+            rejection = str(row.get("rejection_reason") or "UNKNOWN")
+            cup_rejection_counts[rejection] = cup_rejection_counts.get(rejection, 0) + 1
+    cup_latency_p95 = _p95(
+        float(row.get("latency_ms") or 0.0) for row in cup_evaluations
+    )
+    cup_algorithm_version = str(cup_heartbeat.get("algorithm_version") or "")
+    cup_observations_for_version = [
+        row for row in cup_observations
+        if not cup_algorithm_version
+        or str(row.get("algorithm_version") or "") == cup_algorithm_version
+    ]
+    cup_expected_shadow = previous_xnys_sessions(expected, 5)
+    cup_by_session = {
+        str(row.get("session_date") or ""): row
+        for row in cup_observations_for_version
+    }
+    cup_shadow_passed = sum(
+        str((cup_by_session.get(session) or {}).get("status") or "") == "PASS"
+        for session in cup_expected_shadow
+    )
     sent_count = 0
     failed_count = 0
     outbox_rows: list[dict[str, Any]] = []
@@ -817,6 +902,12 @@ def _collect_intraday(
                 "active_count": heartbeat.get("active_count"),
                 "cycle_count": len(cycles),
                 "signal_sent_count": sent_count,
+                "cup_handle": {
+                    "algorithm_version": cup_algorithm_version,
+                    "mode": cup_heartbeat.get("mode"),
+                    "outcome_counts": cup_outcome_counts,
+                    "detection_p95_ms": cup_latency_p95,
+                },
             },
         ))
     for row in outbox_rows:
@@ -829,7 +920,11 @@ def _collect_intraday(
                 row.get("trigger_family"),
             ),
             job_id=job.job_id,
-            channel=f"{_CHANNEL_LABELS['intraday-breakout']} · {row.get('ticker')}",
+            channel=(
+                f"{_CHANNEL_LABELS['cup-handle-breakout']} · {row.get('ticker')}"
+                if str(row.get("trigger_family") or "") == "CUP_HANDLE_BREAKOUT"
+                else f"{_CHANNEL_LABELS['intraday-breakout']} · {row.get('ticker')}"
+            ),
             status=str(row.get("status") or "UNKNOWN"),
             observed_at=observed_at,
             target_session=expected,
@@ -895,6 +990,40 @@ def _collect_intraday(
             "signals_failed": failed_count,
             "mode": heartbeat.get("mode"),
             "latest_observation": observations[0] if observations else None,
+            "茶杯柄算法版本": cup_heartbeat.get("algorithm_version"),
+            "茶杯柄模式": cup_heartbeat.get("mode"),
+            "茶杯柄评估周期": len(cup_cycles),
+            "茶杯柄命中数": cup_outcome_counts.get("MATCH", 0),
+            "茶杯柄拒绝数": cup_outcome_counts.get("REJECTED", 0),
+            "茶杯柄等待数": cup_outcome_counts.get("NOT_READY", 0),
+            "茶杯柄错误数": cup_outcome_counts.get("ERROR", 0),
+            "茶杯柄检测延迟P95毫秒": (
+                round(cup_latency_p95, 3) if cup_latency_p95 is not None else None
+            ),
+            "茶杯柄最大序列长度": max(
+                (int(row.get("bar_count") or 0) for row in cup_evaluations),
+                default=0,
+            ),
+            "茶杯柄主要拒绝原因": dict(
+                sorted(
+                    cup_rejection_counts.items(),
+                    key=lambda item: (-item[1], item[0]),
+                )[:8]
+            ),
+            "茶杯柄影子验收进度": f"{cup_shadow_passed}/5",
+            "茶杯柄影子缺失交易日": [
+                session for session in cup_expected_shadow
+                if session not in cup_by_session
+            ],
+            "茶杯柄影子失败交易日": [
+                session for session in cup_expected_shadow
+                if session in cup_by_session
+                and str(cup_by_session[session].get("status") or "") != "PASS"
+            ],
+            "茶杯柄独立影子验收": (
+                current_cup_observation
+                or (cup_observations[0] if cup_observations else None)
+            ),
         },
     ))
     return result

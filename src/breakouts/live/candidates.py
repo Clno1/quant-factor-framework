@@ -11,6 +11,12 @@ from src.breakouts.daily_data import (
     load_breakout_daily_dataset,
 )
 from src.breakouts.live.detector import ALGORITHM_VERSION, PARAMETER_VERSION
+from src.breakouts.live.cup_handle import (
+    CUP_HANDLE_ALGORITHM_VERSION,
+    CUP_HANDLE_PARAMETER_VERSION,
+    DailyCupSetup,
+    detect_daily_cup,
+)
 from src.breakouts.live.models import DailyCandidate
 from src.breakouts.live.settings import IntradayMonitorSettings
 from src.breakouts.scanner import (
@@ -59,6 +65,7 @@ def _candidate_from_row(
     forced: bool,
     asof: str,
     frame: pd.DataFrame,
+    cup_setup: DailyCupSetup | None = None,
 ) -> DailyCandidate | None:
     ticker = str(row.get("ticker") or "").strip().upper()
     if frame.empty:
@@ -79,6 +86,7 @@ def _candidate_from_row(
     if len(data) < 21:
         return None
     adr = (high / low - 1.0) * 100.0
+    cup = cup_setup or DailyCupSetup(False, "NOT_EVALUATED")
     return DailyCandidate(
         ticker=ticker,
         name=str(row.get("name") or ""),
@@ -94,6 +102,19 @@ def _candidate_from_row(
         return_reference_close=float(close.iloc[-20]),
         adr_sum_19=float(adr.tail(19).sum()),
         forced_watch=forced,
+        cup_qualified=cup.qualified,
+        cup_rejection_reason=cup.rejection_reason,
+        cup_left_rim_date=cup.left_rim_date,
+        cup_right_rim_date=cup.right_rim_date,
+        cup_bottom_date=cup.bottom_date,
+        cup_left_rim=cup.left_rim,
+        cup_right_rim=cup.right_rim,
+        cup_bottom=cup.bottom,
+        cup_depth_pct=cup.depth_pct,
+        cup_width_sessions=cup.width_sessions,
+        cup_rim_tolerance_pct=cup.rim_tolerance_pct,
+        cup_volume_contraction_ratio=cup.volume_contraction_ratio,
+        cup_score=cup.score,
     )
 
 
@@ -170,6 +191,20 @@ def build_daily_candidate_snapshot(
         for row in scan.get("rows") or []
     }
 
+    cup_by_ticker: dict[str, DailyCupSetup] = {}
+    cup_rejections: dict[str, int] = {}
+    for ticker in exact_tickers:
+        setup = detect_daily_cup(
+            dataset.frame(ticker),
+            settings=settings,
+            asof=asof,
+        )
+        cup_by_ticker[ticker] = setup
+        if not setup.qualified:
+            cup_rejections[setup.rejection_reason] = (
+                cup_rejections.get(setup.rejection_reason, 0) + 1
+            )
+
     # Existing hourly behavior lets configured exceptions bypass only the broad
     # stage. They must still pass the strict screen before a live signal.
     permissive = BreakoutFilters(
@@ -191,10 +226,52 @@ def build_daily_candidate_snapshot(
         if row is not None:
             rows_by_ticker[ticker] = row
 
+    cup_only = sorted(
+        (
+            ticker
+            for ticker, setup in cup_by_ticker.items()
+            if setup.qualified and ticker not in rows_by_ticker
+        ),
+        key=lambda ticker: (
+            -cup_by_ticker[ticker].score,
+            ticker,
+        ),
+    )
+    for ticker in cup_only:
+        row = evaluate_daily_setup(
+            dataset.frame(ticker),
+            ticker=ticker,
+            filters=permissive,
+            asof=asof,
+            name=str(names.get(ticker) or ""),
+            sector=str(sectors.get(ticker) or ""),
+        )
+        if row is None:
+            row = {
+                "ticker": ticker,
+                "name": str(names.get(ticker) or ""),
+                "sector": str(sectors.get(ticker) or ""),
+                "score": int(round(cup_by_ticker[ticker].score)),
+                "adr_20d": 0.0,
+                "avg_dollar_volume_20d": 0.0,
+                "setup_qualified": False,
+                "status": "READY",
+            }
+        rows_by_ticker[ticker] = row
+
     ordered_rows = list(scan.get("rows") or [])
     ordered_tickers = [str(row["ticker"]).upper() for row in ordered_rows]
+    qualified_cups = sorted(
+        (
+            ticker
+            for ticker, setup in cup_by_ticker.items()
+            if setup.qualified and ticker in rows_by_ticker
+        ),
+        key=lambda ticker: (-cup_by_ticker[ticker].score, ticker),
+    )
     ordered_tickers = [
         *sorted(ticker for ticker in forced if ticker in rows_by_ticker),
+        *[ticker for ticker in qualified_cups if ticker not in forced],
         *[ticker for ticker in ordered_tickers if ticker not in forced],
     ]
     ordered_tickers = list(dict.fromkeys(ordered_tickers))[: settings.max_symbols]
@@ -207,6 +284,7 @@ def build_daily_candidate_snapshot(
                 forced=ticker in forced,
                 asof=asof,
                 frame=dataset.frame(ticker),
+                cup_setup=cup_by_ticker.get(ticker),
             )
         ) is not None
     ]
@@ -226,6 +304,16 @@ def build_daily_candidate_snapshot(
         "exact_daily_count": len(exact_tickers),
         "exact_daily_coverage": exact_coverage,
         "candidate_count": len(candidates),
+        "cup_handle_daily": {
+            "algorithm_version": CUP_HANDLE_ALGORITHM_VERSION,
+            "parameter_version": CUP_HANDLE_PARAMETER_VERSION,
+            "evaluated_count": len(cup_by_ticker),
+            "qualified_count": sum(
+                setup.qualified for setup in cup_by_ticker.values()
+            ),
+            "selected_count": sum(candidate.cup_qualified for candidate in candidates),
+            "rejection_counts": dict(sorted(cup_rejections.items())),
+        },
         "rows": [candidate.to_dict() for candidate in candidates],
     }
 

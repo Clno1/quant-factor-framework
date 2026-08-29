@@ -23,7 +23,7 @@ class RollingIntradayBars:
         self._derived_end = 0
         self._aggregated: list[dict[str, Any]] = []
         self._sessions: dict[str, dict[str, Any]] = {}
-        self._cached_key: tuple[str, int, int] | None = None
+        self._cached_key: tuple[str, int, int, int] | None = None
         self._cached_metrics: dict[str, Any] | None = None
 
     def _reset_derived(self, interval: int) -> None:
@@ -143,6 +143,7 @@ class RollingIntradayBars:
             aggregate["low"] = min(float(aggregate["low"]), low)
             aggregate["close"] = close
             aggregate["volume"] = float(aggregate["volume"]) + volume
+            aggregate["source_count"] = int(aggregate["source_count"]) + 1
         else:
             self._aggregated.append({
                 "timestamp": bucket,
@@ -151,6 +152,7 @@ class RollingIntradayBars:
                 "low": low,
                 "close": close,
                 "volume": volume,
+                "source_count": 1,
             })
 
     def _advance(self, completed_end: int, interval: int) -> None:
@@ -169,10 +171,11 @@ class RollingIntradayBars:
         now: datetime,
         session_date: str,
         interval: int = 5,
+        max_bars: int = 96,
     ) -> dict[str, Any]:
         interval = max(1, int(interval))
         completed_end = self._completed_end(now)
-        key = (session_date, interval, completed_end)
+        key = (session_date, interval, completed_end, max(1, int(max_bars)))
         if self._cached_key == key and self._cached_metrics is not None:
             return dict(self._cached_metrics)
         self._advance(completed_end, interval)
@@ -236,6 +239,12 @@ class RollingIntradayBars:
             if historical_cumulative
             else 0.0
         )
+        bounded_bars = self.bounded_ohlcv(
+            now=now,
+            session_date=session_date,
+            interval=interval,
+            max_bars=max_bars,
+        )
         metrics = {
             "session_date": session_date,
             "interval": interval,
@@ -244,7 +253,7 @@ class RollingIntradayBars:
             "day_low": float(session["day_low"]),
             "day_high": float(session["day_high"]),
             "opening_ranges": opening_ranges,
-            "bars": [],
+            "bars": bounded_bars,
             "vwap": (
                 float(session["vwap_numerator"]) / total_volume
                 if total_volume > 0
@@ -264,6 +273,45 @@ class RollingIntradayBars:
         self._cached_key = key
         self._cached_metrics = dict(metrics)
         return metrics
+
+    def bounded_ohlcv(
+        self,
+        *,
+        now: datetime,
+        session_date: str,
+        interval: int = 5,
+        max_bars: int = 96,
+    ) -> list[dict[str, Any]]:
+        """Return only complete regular-session aggregates with a hard row cap."""
+        interval = max(1, int(interval))
+        limit = max(1, int(max_bars))
+        completed_end = self._completed_end(now)
+        self._advance(completed_end, interval)
+        aware = now if now.tzinfo is not None else now.replace(tzinfo=self.timezone)
+        current_minute = pd.Timestamp(
+            aware.astimezone(self.timezone).replace(tzinfo=None)
+        ).floor("min")
+        eligible = [
+            row
+            for row in self._aggregated
+            if pd.Timestamp(row["timestamp"]).strftime("%Y-%m-%d") == session_date
+            and int(row.get("source_count") or 0) >= interval
+            and pd.Timestamp(row["timestamp"]) + pd.Timedelta(minutes=interval)
+            <= current_minute
+        ][-limit:]
+        return [
+            {
+                "timestamp": pd.Timestamp(row["timestamp"]).strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                ),
+                "open": float(row["open"]),
+                "high": float(row["high"]),
+                "low": float(row["low"]),
+                "close": float(row["close"]),
+                "volume": float(row["volume"]),
+            }
+            for row in eligible
+        ]
 
     def latest_completed_timestamp(self, now: datetime) -> datetime | None:
         end = self._completed_end(now)

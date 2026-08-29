@@ -17,6 +17,11 @@ from src.breakouts.live.detector import (
     PARAMETER_VERSION,
     BreakoutDetector,
 )
+from src.breakouts.live.cup_handle import (
+    CUP_HANDLE_ALGORITHM_VERSION,
+    CUP_HANDLE_PARAMETER_VERSION,
+    CupHandleDetector,
+)
 from src.breakouts.live.delivery import (
     SignalNotifier,
     build_signal_discord_payload,
@@ -55,6 +60,7 @@ class IntradayMomentumMonitor:
         source_session_resolver: SourceSessionResolver = expected_source_session,
         contract_validator: ContractValidator = validate_breakout_daily_data_contract,
         delivery_mode: str = "shadow",
+        cup_delivery_mode: str = "shadow",
         notifier: SignalNotifier | None = None,
     ) -> None:
         self.settings = settings.validate()
@@ -62,6 +68,10 @@ class IntradayMomentumMonitor:
             raise ValueError("delivery_mode must be shadow or live")
         if delivery_mode == "live" and notifier is None:
             raise ValueError("live delivery requires a notifier")
+        if cup_delivery_mode not in {"shadow", "live"}:
+            raise ValueError("cup_delivery_mode must be shadow or live")
+        if cup_delivery_mode == "live" and notifier is None:
+            raise ValueError("live cup-handle delivery requires a notifier")
         self.feed = feed or FmpRestFeed(
             quote_chunk_size=settings.quote_chunk_size,
             max_concurrent_requests=settings.max_concurrent_requests,
@@ -71,8 +81,10 @@ class IntradayMomentumMonitor:
         self.source_session_resolver = source_session_resolver
         self.contract_validator = contract_validator
         self.delivery_mode = delivery_mode
+        self.cup_delivery_mode = cup_delivery_mode
         self.notifier = notifier
         self.detector = BreakoutDetector(settings)
+        self.cup_detector = CupHandleDetector(settings)
         self.timezone = ZoneInfo(settings.timezone)
         self.candidate_snapshot: dict[str, Any] | None = None
         self.candidates: list[DailyCandidate] = []
@@ -85,6 +97,7 @@ class IntradayMomentumMonitor:
         self.last_exact_confirm: dict[str, datetime] = {}
         self.started_at = datetime.now(self.timezone)
         self.cycle_count = 0
+        self.last_cup_summary: dict[str, Any] = {}
 
     async def _snapshot_is_valid(
         self,
@@ -98,6 +111,13 @@ class IntradayMomentumMonitor:
             or not isinstance(snapshot.get("data_contract"), dict)
         ):
             return False
+        if self.settings.cup_handle_enabled:
+            cup = snapshot.get("cup_handle_daily") or {}
+            if (
+                cup.get("algorithm_version") != CUP_HANDLE_ALGORITHM_VERSION
+                or cup.get("parameter_version") != CUP_HANDLE_PARAMETER_VERSION
+            ):
+                return False
         try:
             await asyncio.to_thread(
                 self.contract_validator,
@@ -179,6 +199,7 @@ class IntradayMomentumMonitor:
             "data_universe": contract.get("data_universe"),
             "dataset_version_id": contract.get("dataset_version_id"),
             "bars_sha256": contract.get("bars_sha256"),
+            "cup_handle_daily": snapshot.get("cup_handle_daily") or {},
             "cycle_seconds": round(
                 monotonic_time.perf_counter() - started,
                 3,
@@ -273,8 +294,116 @@ class IntradayMomentumMonitor:
             "cycle_seconds": cycle_seconds,
             "feed_counters": self.feed.counters(),
             "errors": list(errors or []),
+            "cup_handle": {
+                "enabled": self.settings.cup_handle_enabled,
+                "mode": self.cup_delivery_mode,
+                "algorithm_version": CUP_HANDLE_ALGORITHM_VERSION,
+                "parameter_version": CUP_HANDLE_PARAMETER_VERSION,
+                **self.last_cup_summary,
+            },
             "observed_at": now.isoformat(timespec="seconds"),
         }
+
+    def _evaluate_cup_handle(
+        self,
+        *,
+        candidate_map: dict[str, DailyCandidate],
+        now: datetime,
+        session_date: str,
+        market_open: bool,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+        evaluations: list[dict[str, Any]] = []
+        new_signals: list[dict[str, Any]] = []
+        state_rows: list[tuple[str, MonitorSymbolState, dict[str, Any]]] = []
+        for ticker in self.active_tickers:
+            candidate = candidate_map.get(ticker)
+            quote = self.quotes.get(ticker)
+            rolling = self.rolling.get(ticker)
+            if candidate is None or quote is None or rolling is None:
+                continue
+            metrics = rolling.metrics(
+                now=now,
+                session_date=session_date,
+                interval=self.settings.cup_intraday_interval_minutes,
+                max_bars=self.settings.cup_max_output_bars,
+            )
+            try:
+                evaluation = self.cup_detector.evaluate(
+                    candidate,
+                    quote,
+                    metrics,
+                    now=now,
+                    session_date=session_date,
+                    market_open=market_open,
+                )
+                payload = evaluation.to_dict()
+            except Exception as exc:  # detector exceptions remain visible and fail shadow
+                payload = {
+                    "ticker": ticker,
+                    "session_date": session_date,
+                    "outcome": "ERROR",
+                    "rejection_reason": f"DETECTOR_EXCEPTION_{type(exc).__name__}",
+                    "evaluated_at": now.isoformat(timespec="seconds"),
+                    "latency_ms": 0.0,
+                    "bar_count": len(metrics.get("bars") or []),
+                    "details": {},
+                    "signal": None,
+                }
+                evaluation = None
+            evaluations.append(payload)
+            outcome = str(payload["outcome"])
+            state = (
+                MonitorSymbolState.TRIGGERED
+                if outcome == "MATCH"
+                else MonitorSymbolState.ARMED
+                if candidate.cup_qualified and outcome in {"NOT_READY", "REJECTED"}
+                else MonitorSymbolState.WATCHING
+            )
+            state_rows.append((ticker, state, {
+                "outcome": outcome,
+                "rejection_reason": payload["rejection_reason"],
+                "bar_count": payload["bar_count"],
+                "latency_ms": payload["latency_ms"],
+            }))
+            signal = evaluation.signal if evaluation is not None else None
+            if signal is None:
+                continue
+            shadow = self.cup_delivery_mode == "shadow"
+            inserted = self.state.record_signal(
+                signal,
+                delivery_state="SHADOW" if shadow else "PENDING",
+            )
+            self.state.stage_signal_delivery(
+                signal,
+                build_signal_discord_payload(
+                    signal,
+                    role_id=self.settings.discord_role_id,
+                    dashboard_base_url=self.settings.dashboard_base_url,
+                ),
+                shadow=shadow,
+            )
+            if inserted:
+                new_signals.append(signal.to_dict())
+        self.state.set_symbol_states(
+            session_date=session_date,
+            algorithm_version=CUP_HANDLE_ALGORITHM_VERSION,
+            rows=state_rows,
+        )
+        daily = (self.candidate_snapshot or {}).get("cup_handle_daily") or {}
+        contract = (self.candidate_snapshot or {}).get("data_contract") or {}
+        cycle_summary = self.state.record_cup_handle_cycle({
+            "session_date": session_date,
+            "observed_at": now.isoformat(timespec="seconds"),
+            "algorithm_version": CUP_HANDLE_ALGORITHM_VERSION,
+            "parameter_version": CUP_HANDLE_PARAMETER_VERSION,
+            "daily_evaluated_count": daily.get("evaluated_count"),
+            "daily_candidate_count": daily.get("qualified_count"),
+            "data_contract_complete": all(
+                contract.get(key)
+                for key in ("data_universe", "dataset_version_id", "bars_sha256")
+            ),
+        }, evaluations)
+        return evaluations, new_signals, cycle_summary
 
     def _save_cycle_snapshot(
         self,
@@ -425,6 +554,7 @@ class IntradayMomentumMonitor:
                 now=aware_now,
                 session_date=session_date,
                 interval=self.settings.detector_interval_minutes,
+                max_bars=self.settings.cup_max_output_bars,
             )
             metrics_by_ticker[ticker] = metrics
             armed = self.detector.should_confirm(
@@ -496,6 +626,7 @@ class IntradayMomentumMonitor:
                 now=aware_now,
                 session_date=session_date,
                 interval=self.settings.detector_interval_minutes,
+                max_bars=self.settings.cup_max_output_bars,
             )
             signal = self.detector.evaluate(
                 candidate,
@@ -541,6 +672,30 @@ class IntradayMomentumMonitor:
             if inserted:
                 new_signals.append(signal.to_dict())
 
+        cup_evaluations: list[dict[str, Any]] = []
+        if self.settings.cup_handle_enabled and market_open and broad_due:
+            cup_evaluations, cup_signals, cup_summary = self._evaluate_cup_handle(
+                candidate_map=candidate_map,
+                now=aware_now,
+                session_date=session_date,
+                market_open=market_open,
+            )
+            new_signals.extend(cup_signals)
+            self.last_cup_summary = {
+                key: cup_summary[key]
+                for key in (
+                    "evaluation_count",
+                    "match_count",
+                    "rejected_count",
+                    "not_ready_count",
+                    "error_count",
+                    "p95_latency_ms",
+                    "max_bar_count",
+                    "daily_evaluated_count",
+                    "daily_candidate_count",
+                )
+            }
+
         delivery_results = await self._drain_outbox(
             session_date=session_date,
             now=aware_now,
@@ -557,6 +712,7 @@ class IntradayMomentumMonitor:
         )
         payload["new_signals"] = new_signals
         payload["new_signal_count"] = len(new_signals)
+        payload["cup_handle_evaluation_count"] = len(cup_evaluations)
         payload["broad_refreshed"] = broad_due
         payload["exact_confirmed"] = len(loaded) + len(fresh_exact)
         payload["delivery_results"] = delivery_results
@@ -596,12 +752,36 @@ class IntradayMomentumMonitor:
                         self.settings.observation_max_cycle_p95_seconds
                     ),
                 )
+                cup_observation = None
+                if self.settings.cup_handle_enabled:
+                    cup_observation = self.state.finalize_cup_handle_observation(
+                        session_date=session_date,
+                        algorithm_version=CUP_HANDLE_ALGORITHM_VERSION,
+                        parameter_version=CUP_HANDLE_PARAMETER_VERSION,
+                        expected_open_cycles=(
+                            schedule.expected_minutes
+                            + self.settings.broad_refresh_minutes
+                            - 1
+                        ) // self.settings.broad_refresh_minutes,
+                        min_cycle_coverage=self.settings.observation_min_cycle_coverage,
+                        max_error_cycle_ratio=(
+                            self.settings.observation_max_error_cycle_ratio
+                        ),
+                        max_detection_p95_ms=(
+                            self.settings.cup_observation_max_detection_p95_ms
+                        ),
+                        max_bar_count=self.settings.cup_max_output_bars,
+                    )
+                    cup_observation["retention"] = self.state.prune_cup_handle_detail(
+                        keep_sessions=self.settings.cup_detail_retention_sessions
+                    )
                 payload = self._heartbeat_payload(
                     now=now,
                     session_date=session_date,
                     phase="completed_session",
                 )
                 payload["session_observation"] = observation
+                payload["cup_handle_session_observation"] = cup_observation
                 self.state.heartbeat(payload)
                 return
             if now < schedule.opens_at:

@@ -92,13 +92,18 @@ decision_replay/
 - `held_group`：从最近一次调仓延续下来的实际持有分组。
 - `eligible`：同时满足 PIT 股票池、因子非空和可交易规则。
 - `decision_target_weights`：调仓日的目标权重；普通观察日为空。
-- `daily_weights`：当天持仓权重。
+- `daily_weights`：当天开盘完成真实订单后的持仓权重；会随历史收益自然漂移。
 - `return_weights`：计算当日组合收益时使用的逐票权重。
 - `daily_contributions`：逐票收益贡献，等于 `return_weights × effective_return`。
 
 因此，“今天排名靠前”不等于“今天一定交易”。普通观察日只更新信号；实际是否交易以调仓日、目标权重和订单/成交记录为准。
 
-回测能够完整冻结日初持仓与持有期收益，因此会生成并校验逐票收益贡献。模拟盘当前只有运行时的日末持仓和账户权益；当日开盘发生过成交时，使用日末权重乘收盘到收盘收益并不能得到真实逐票 P&L。系统因此把模拟盘的 `daily_contributions` 保持为空，并在 manifest 中写入 `portfolio_contribution_available: false`，避免展示伪精确结果。后续只有在引入日初持仓和现金流 P&L 台账后才应打开该字段。
+回测从 `position_daily.parquet` 冻结真实日初权重与持有期收益，因此会生成并校验逐票收益贡献，
+不会再用每日等权矩阵反推。模拟盘当前只有运行时的日末持仓和账户权益；当日开盘发生过成交时，
+使用日末权重乘收盘到收盘收益并不能得到真实逐票 P&L。系统因此把模拟盘的
+`daily_contributions` 保持为空，并在 manifest 中写入
+`portfolio_contribution_available: false`，避免展示伪精确结果。后续只有在引入日初持仓和
+现金流 P&L 台账后才应打开该字段。
 
 ## 强制审计
 

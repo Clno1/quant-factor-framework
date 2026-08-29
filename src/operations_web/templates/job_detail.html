@@ -28,6 +28,41 @@
     <div class="detail-cell"><span>进度</span><strong>{% if snapshot.progress_total %}{{ snapshot.progress_current or 0 }} / {{ snapshot.progress_total }}{% else %}-{% endif %}</strong></div>
 </section>
 
+{% if job.job_id == 'intraday_momentum' %}
+{% set metrics = snapshot.metrics or {} %}
+<section class="section-block">
+    <div class="section-heading">
+        <div>
+            <h2>茶杯柄独立影子监控</h2>
+            <p>日线杯体与完整 5 分钟柄独立评估；这里不复用旧动量突破的五日验收结果。</p>
+        </div>
+        <span class="status status-disabled">{{ metrics.get('茶杯柄模式') or 'shadow' }}</span>
+    </div>
+    <div class="detail-grid">
+        <div class="detail-cell"><span>影子验收</span><strong>{{ metrics.get('茶杯柄影子验收进度') or '0/5' }}</strong></div>
+        <div class="detail-cell"><span>当日命中</span><strong>{{ metrics.get('茶杯柄命中数') or 0 }}</strong></div>
+        <div class="detail-cell"><span>当日拒绝</span><strong>{{ metrics.get('茶杯柄拒绝数') or 0 }}</strong></div>
+        <div class="detail-cell"><span>等待成形</span><strong>{{ metrics.get('茶杯柄等待数') or 0 }}</strong></div>
+        <div class="detail-cell"><span>检测错误</span><strong>{{ metrics.get('茶杯柄错误数') or 0 }}</strong></div>
+        <div class="detail-cell"><span>P95 延迟</span><strong class="mono">{{ metrics.get('茶杯柄检测延迟P95毫秒') if metrics.get('茶杯柄检测延迟P95毫秒') is not none else '-' }} ms</strong></div>
+        <div class="detail-cell"><span>最长 5 分钟序列</span><strong>{{ metrics.get('茶杯柄最大序列长度') or 0 }} / 96</strong></div>
+        <div class="detail-cell"><span>算法版本</span><strong class="mono compact-hash" title="{{ metrics.get('茶杯柄算法版本') or '' }}">{{ metrics.get('茶杯柄算法版本') or '-' }}</strong></div>
+    </div>
+    <div class="table-wrap">
+        <table class="ops-table">
+            <thead><tr><th>主要拒绝原因</th><th>次数</th></tr></thead>
+            <tbody>
+            {% for reason, count in (metrics.get('茶杯柄主要拒绝原因') or {}).items() %}
+                <tr><td class="mono">{{ reason }}</td><td>{{ count }}</td></tr>
+            {% else %}
+                <tr><td colspan="2" class="table-empty">当前交易日尚无茶杯柄评估记录。</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endif %}
+
 <section class="section-block">
     <div class="section-heading"><div><h2>近期运行</h2><p>耗时来自持久化的开始和结束时间，不随页面刷新重新计时。</p></div></div>
     <div class="table-wrap">

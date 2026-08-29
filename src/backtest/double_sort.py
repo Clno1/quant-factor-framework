@@ -9,9 +9,11 @@ import pandas as pd
 from src.backtest.metrics import performance_summary
 from src.backtest.membership_exit_v2 import apply_membership_exit_policy_v2
 from src.backtest.quintile import (
+    BacktestCapacityError,
     _resolve_execution,
     build_tradable_mask,
 )
+from src.backtest.portfolio import simulate_group_portfolios
 from src.backtest.rebalance import get_rebalance_dates
 from src.config import CONFIG
 
@@ -24,6 +26,11 @@ class DoubleSortResult:
     metrics: dict
     assignment_control: pd.DataFrame = field(default_factory=pd.DataFrame)
     assignment_factor: pd.DataFrame = field(default_factory=pd.DataFrame)
+    holdings_detail: pd.DataFrame = field(default_factory=pd.DataFrame)
+    trades_detail: pd.DataFrame = field(default_factory=pd.DataFrame)
+    costs_detail: pd.DataFrame = field(default_factory=pd.DataFrame)
+    portfolio_daily: pd.DataFrame = field(default_factory=pd.DataFrame)
+    position_daily: pd.DataFrame = field(default_factory=pd.DataFrame)
     config: dict = field(default_factory=dict)
 
 
@@ -155,6 +162,11 @@ def double_sort_backtest(
         raise ValueError(
             "factor_direction must be fixed ex ante as +1 or -1"
         )
+    if not isinstance(control_df.index, pd.DatetimeIndex):
+        raise ValueError(
+            "double_sort_backtest requires a PIT date x ticker control matrix; "
+            "a ticker x current-value snapshot is not valid historical exposure data."
+        )
 
     explicit_semantics = all(
         value is not None and not value.empty
@@ -191,6 +203,11 @@ def double_sort_backtest(
     common_cols = factor_df.columns.intersection(control_df.columns).intersection(
         held_returns.columns
     )
+    if common_dates.empty or common_cols.empty:
+        raise ValueError(
+            "double_sort_backtest has no date x ticker overlap between factor, "
+            "control and return matrices."
+        )
     f = factor_df.loc[common_dates, common_cols]
     c = control_df.loc[common_dates, common_cols]
     r = held_returns.loc[common_dates, common_cols]
@@ -219,10 +236,9 @@ def double_sort_backtest(
         rebalance_days=rebalance_days,
         tradable_mask=tradable_mask,
     )
-    control_held = control_assign.shift(1)
-    factor_held = factor_assign.shift(1)
-    held_cell = control_held * 100.0 + factor_held
-    r, _ = apply_membership_exit_policy_v2(
+    cell_assign = control_assign * 100.0 + factor_assign
+    held_cell = cell_assign.shift(1)
+    r, forced_exit_events = apply_membership_exit_policy_v2(
         r,
         held_cell,
         membership_mask=membership_mask,
@@ -235,23 +251,54 @@ def double_sort_backtest(
         policy=exec_cfg["membership_exit_policy"],
     )
 
+    group_names = {
+        i * 100 + j: f"C{i}_F{j}"
+        for i in range(1, n_control + 1)
+        for j in range(1, n_factor + 1)
+    }
+    simulation = simulate_group_portfolios(
+        cell_assign,
+        r,
+        rebal_dates,
+        group_names=group_names,
+        execution=exec_cfg,
+        execution_prices=open_df,
+        volume=volume_df,
+        forced_exit_events=forced_exit_events,
+    )
+    if simulation.capacity_breaches:
+        raise BacktestCapacityError(simulation.capacity_breaches)
+
     cell_returns: dict[str, pd.Series] = {}
     for i in range(1, n_control + 1):
         for j in range(1, n_factor + 1):
             name = f"C{i}_F{j}"
-            mask = (control_held == i) & (factor_held == j)
-            cell_returns[name] = _strict_cell_return(
-                r,
-                mask,
-                label=name,
-            )
+            cell_returns[name] = simulation.net_returns.get(
+                name,
+                pd.Series(dtype="float64"),
+            ).dropna()
 
     spreads = []
+    spread_costs = []
     for i in range(1, n_control + 1):
-        hi = cell_returns.get(f"C{i}_F{n_factor}", pd.Series(dtype="float64"))
-        lo = cell_returns.get(f"C{i}_F1", pd.Series(dtype="float64"))
-        spreads.append((hi - lo).rename(f"C{i}_spread"))
+        hi_name = f"C{i}_F{n_factor}"
+        lo_name = f"C{i}_F1"
+        hi_gross = simulation.gross_returns.get(
+            hi_name, pd.Series(dtype="float64")
+        )
+        lo_gross = simulation.gross_returns.get(
+            lo_name, pd.Series(dtype="float64")
+        )
+        hi_cost = simulation.cost_returns.get(
+            hi_name, pd.Series(dtype="float64")
+        )
+        lo_cost = simulation.cost_returns.get(
+            lo_name, pd.Series(dtype="float64")
+        )
+        spreads.append((hi_gross - lo_gross).rename(f"C{i}_spread"))
+        spread_costs.append((hi_cost + lo_cost).rename(f"C{i}_cost"))
     spread_frame = pd.concat(spreads, axis=1)
+    spread_cost_frame = pd.concat(spread_costs, axis=1)
     available_spreads = spread_frame.notna().sum(axis=1)
     partial_spreads = (available_spreads > 0) & (
         available_spreads < n_control
@@ -262,9 +309,13 @@ def double_sort_backtest(
             "Double-sort control-bucket spread is partially missing; "
             f"refusing renormalization: date={bad_date.date()}"
         )
-    factor_returns = spread_frame.mean(axis=1).where(
+    gross_factor_returns = spread_frame.mean(axis=1).where(
         available_spreads == n_control
     ).dropna() * int(factor_direction)
+    factor_cost_returns = spread_cost_frame.mean(axis=1).reindex(
+        gross_factor_returns.index
+    ).fillna(0.0)
+    factor_returns = gross_factor_returns - factor_cost_returns
     factor_returns.name = "DoubleSortOrientedSpread"
     factor_nav = (1.0 + factor_returns.fillna(0)).cumprod()
     factor_nav.name = "DoubleSortNAV"
@@ -276,6 +327,11 @@ def double_sort_backtest(
         metrics=performance_summary(factor_returns),
         assignment_control=control_assign,
         assignment_factor=factor_assign,
+        holdings_detail=simulation.holdings_detail,
+        trades_detail=simulation.trades_detail,
+        costs_detail=simulation.costs_detail,
+        portfolio_daily=simulation.daily_state,
+        position_daily=simulation.position_daily,
         config={
             "n_control": n_control,
             "n_factor": n_factor,

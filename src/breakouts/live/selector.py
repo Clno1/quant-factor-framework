@@ -45,6 +45,7 @@ def select_active_pool(
         touched = level > 0 and quote.day_high >= level
         priority = (
             float(candidate.forced_watch),
+            float(candidate.cup_qualified),
             float(candidate.setup_qualified),
             float(touched),
             float(near_or_through),
