@@ -829,3 +829,31 @@ Web 消费者却仍把缓存缺失解释为“现场重算”。修复 `46aa2f0`
 `19 passed`。研究、策略、回测、模拟盘、股票池和茶杯柄六个入口全部 HTTP 200，最慢为茶杯柄
 1.325 秒；整组验收后 cgroup 峰值约 383 MB。今后主站巡检必须同时检查 HTTP 延迟、
 `MemoryCurrent/Peak`、DuckDB 等待栈和未完成请求，不能只检查 systemd active。
+
+## 27. 2026-08-30 模拟盘周末交易日边界修复
+
+`quant-paper-trading.service` 在 2026-08-29（周六）连续失败三次并触发 systemd start limit。
+失败发生在策略计算和成交之前：配置中的 `date_range.end=today` 传入周六日期后，公共 XNYS
+辅助函数创建的日历恰好以 2026-08-28（周五）为最后一个 session，再用 2026-08-29 调用
+`date_to_session(..., direction="previous")`，触发 `DateOutOfBounds`。这不是 FMP、服务器资源、
+手续费、滑点或账户账本损坏。
+
+提交 `d62bfb3` 将动态 XNYS 日历扩展到查询日之后 14 天，并为查询窗口预留左边界；模拟盘显式
+`asof` 也统一复用公共 session 解析。生产文件备份位于：
+
+```text
+/home/projects/quant-backups/paper-calendar-boundary-20260830T1600CST
+```
+
+本地完整回归为 `644 passed`，SG 定向回归为 `40 passed`。修复后的真实账户
+`ba277a68-fa45-4d5c-b3df-7b6e596da0bb` 成功处理 2026-08-28：行情版本
+`c18ef8024a494896860fb5ade7783ecb`，首次恢复运行成交 2 笔、新建订单 0、剩余 pending 1，权益
+9,287.71 美元。第二次同日运行成交 0、订单 0，订单和成交 ID 均无重复。
+
+SQLite `integrity_check=ok`；全部成交满足 `fill_date > decision_date`，没有当天收盘成交；模型为
+`ibkr_us_pro_fixed` 和 `volume_share`，累计手续费 8.009688 美元、滑点成本 3.864387 美元、总成本
+11.874075 美元。剩余 ECHO 1 股订单只会在 2026-08-28 之后的下一条真实开盘行情继续评估，不会
+重复消费同一日 bar。主站重启后模拟盘详情页与公网研究页均为 HTTP 200。
+
+该账户是迁移前旧记录，缺少创建时 research publication 和 Watchlist revision 快照；页面继续
+按 fail-closed 显示血缘不完整。这个历史审计缺口不等于本次运行失败，也不得事后伪造快照。

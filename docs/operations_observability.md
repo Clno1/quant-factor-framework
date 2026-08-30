@@ -586,3 +586,20 @@ cgroup 峰值约 383 MB，未再次越过 420 MB 高水位。部署备份：
 ```text
 /home/projects/quant-backups/web-broad-scan-guard-20260830T1544CST
 ```
+
+## 24. 2026-08-30 模拟盘周末日历边界事故
+
+模拟盘任务在周六进入 `failed`，根因是 XNYS 动态日历的右边界停在前一交易日，周六日期无法执行
+`direction=previous`。观测上应把这种错误标记为 `CALENDAR_SESSION_BOUNDARY`，因为服务在行情读取、
+因子计算和订单执行之前失败；不得归类为 FMP、成本模型或策略失败。systemd 的三次自动重试使用
+相同输入，因此只会重复同一确定性错误，随后触发 start limit。
+
+修复后生产验收证据：service exit 0，decision/expected/mark 均为 2026-08-28，`last_error=null`，
+dataset version 为 `c18ef8024a494896860fb5ade7783ecb`。首次恢复产生 2 个 next-open fill；紧接着
+同 session 重跑产生 0 fill、0 order，持久账本计数保持 orders=7、fills=7、equity rows=5，仅新增
+一条运行审计记录。SQLite integrity、ID 唯一性、成交日期、滑点方向和费用模型全部通过。
+
+运维适配器以后判断模拟盘健康时至少应同时展示：最新 service 退出状态、账户 `last_error`、
+expected/decision/mark session、输入 dataset version、当次 fill/order/pending 数，以及最近一次成功
+时间。旧账户的 research/Watchlist 创建时快照缺失属于 provenance warning，应与 runtime failure
+分开展示。
