@@ -604,3 +604,14 @@ dataset version 为 `c18ef8024a494896860fb5ade7783ecb`。首次恢复产生 2 �
 expected/decision/mark session、输入 dataset version、当次 fill/order/pending 数，以及最近一次成功
 时间。旧账户的 research/Watchlist 创建时快照缺失属于 provenance warning，应与 runtime failure
 分开展示。
+
+## 25. 2026-08-30 模拟盘通知可观测性合同
+
+模拟盘外发不再依赖 journal 文本判断，而使用独立 SQLite outbox。每个真实 fill 以 `fill_id` 形成唯一
+`FILL` delivery；每日交易状态以 XNYS `target_session` 形成唯一 `DAILY_SUMMARY` delivery。运维站
+分别展示 `BASELINED/PENDING/SENDING/SENT/FAILED/UNKNOWN` 数量、最近目标日、尝试次数和错误码。
+
+`UNKNOWN` 表示进程在发送后、提交 Discord message ID 前中断，存在已经送达的可能，必须冻结并
+人工核对，不能自动重试。明确失败最多尝试 3 次；测试消息、角色 mention 和真实 Webhook 均不进入
+运维数据库或日志。当前 SG 仅完成预部署：7 笔历史 fill 已 baseline，两个 timer 与运维期望均关闭。
+频道配置并人工验收后才切换为 enabled；该关闭状态不应产生 incident。

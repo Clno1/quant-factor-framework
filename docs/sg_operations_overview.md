@@ -859,3 +859,21 @@ SQLite `integrity_check=ok`；全部成交满足 `fill_date > decision_date`，�
 
 该账户是迁移前旧记录，缺少创建时 research publication 和 Watchlist revision 快照；页面继续
 按 fail-closed 显示血缘不完整。这个历史审计缺口不等于本次运行失败，也不得事后伪造快照。
+
+## 28. 2026-08-30 模拟盘 Discord 通知预部署
+
+模拟成交即时通知与每日账户日结已以提交 `74defad` 部署。独立 outbox 位于
+`outputs/paper_notifications/state.sqlite3`，现有 7 笔历史 fill 全部为 `BASELINED`，不会补发。
+SG 定向测试 `11 passed`，watchdog 新快照运行成功且 collector error 为 0；主站、模拟盘 timer、
+watchdog 和独立运维站保持 active。
+
+生产备份为：
+
+```text
+/home/projects/quant-backups/paper-discord-notifications-20260830T2350CST
+```
+
+当前没有保存 Discord Webhook，环境开关为 false，两个新 timer 均保持 disabled，运维注册也标记为
+`enabled_expected=false`。频道管理员完成独立“模拟交易”频道和不回显 Webhook 配置后，先验收测试
+消息，再启用每两分钟成交 worker 与 Tue-Sat 11:00 SGT 日结 timer；启用时同步将两项运维期望改为
+true。不得复用盘前、板块轮动或茶杯柄频道的 Webhook。

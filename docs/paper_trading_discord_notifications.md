@@ -120,3 +120,23 @@ baseline 数量。历史 `FAILED` 可以保留审计，但当前最新 `SENT` �
 若出现 `UNKNOWN`，先在 Discord 频道人工确认是否已有相同成交或日结消息；不得直接删除 SQLite
 记录或无限重试。Webhook 泄露时应立即在 Discord 删除旧 Webhook、创建新 Webhook并重新运行安全
 配置脚本。
+
+## 7. 2026-08-30 SG 预部署记录
+
+提交 `74defad` 已部署到 `/home/projects/quant`，生产备份位于：
+
+```text
+/home/projects/quant-backups/paper-discord-notifications-20260830T2350CST
+```
+
+四个 systemd unit 已安装并通过 `systemd-analyze verify`；唯一输出是腾讯云 `tat_agent.service`
+使用旧 `/var/run` 路径的既有警告，与本功能无关。SG 定向回归为 `11 passed`。
+
+生产通知 SQLite 为 `outputs/paper_notifications/state.sqlite3`，`integrity_check=ok`。上线前已有的
+7 笔 fill 已按不可变 `fill_id` 登记为 `FILL:BASELINED`，不会在正式启用后补发。当前环境文件权限
+为 `0600`，但 Webhook 为空且 `PAPER_DISCORD_DELIVERY_ENABLED=false`；事件与日结 timer 均为
+`disabled`。这是有意的安全状态，不是任务故障。
+
+剩余人工门槛只有：Discord 管理员创建独立“模拟交易”文字频道和 Incoming Webhook，并在 SG 终端
+运行第 4 节的不回显配置命令。测试消息成功后才能启用两个 timer，并把 `configs/operations.yaml`
+中的两个通知任务 `enabled_expected` 改为 `true`。真实 Webhook 不得写入本文档或 Git。
