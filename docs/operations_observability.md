@@ -562,3 +562,27 @@ MDB、AEVA 的真实 MOM_12M 查询均返回 6 个交易日并通过版本绑定
 数值指标还必须区分“零”和“缺失”。`remaining_sessions=0` 表示五日门槛已完成，不能通过
 `value or default` 被替换成默认值 5。适配器现在只在值为 `None` 时回退；现网最终指标为
 `shadow_passed=6`、`shadow_required=5`、`shadow_remaining=0`。
+
+## 23. 2026-08-30 主站宽基扫描阻塞事故
+
+主站出现“进程 active、所有页面持续转圈”的假健康。根因不是界面改名、FMP、网络或整机内存
+耗尽，而是旧 `quant-us-daily-refresh` 归档后不再预热 `data/cache/momentum_scans/`；Web 仍保留
+“缓存缺失就在 HTTP 请求内构建扫描”的旧合同。一次 `/breakouts` 请求因此读取约 2,780 只 PIT
+成员、每票约 400 个日历日，并在 DuckDB 内执行全量排序。
+
+现网证据包括：主站 RSS 约 565 MB、cgroup `MemoryHigh=420M` 被越过、多个请求线程分别等待
+DuckDB 实例锁和 SQLite；GDB 原生栈明确停在 DuckDB `PhysicalOrder`、`SortedRunMerger` 和 catalog
+checkpoint 读取。后续点击继续进入线程池并等待数据库锁，所以静态资源已加载、页面主体却一直没有
+响应。服务状态 `active` 在此场景不能代表 HTTP 健康。
+
+永久修复提交为 `46aa2f0`。后台脚本继续允许在独立资源边界内生成扫描缓存；Web 页面和 JSON API
+统一传入 `allow_build=false`。缓存不存在时，页面立即显示等待后台发布，API 返回 503，禁止在 Web
+进程内退化为全美现场扫描。新增测试固定验证 cache miss 不会调用 `build_breakout_scan()`。
+
+SG 定向回归为 `19 passed`。部署后六个入口的实测响应为：研究 0.994 秒、策略 0.416 秒、回测
+0.405 秒、模拟盘 0.405 秒、股票池 0.423 秒、茶杯柄 1.325 秒，均为 HTTP 200。整组请求后 Web
+cgroup 峰值约 383 MB，未再次越过 420 MB 高水位。部署备份：
+
+```text
+/home/projects/quant-backups/web-broad-scan-guard-20260830T1544CST
+```

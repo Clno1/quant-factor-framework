@@ -812,3 +812,20 @@ source session、行数和 SHA，禁止把未来可知股票清单写入历史�
 0，误报代理仍为 null；这表示尚无可评估信号，不是 0% 误报。2026-08-28 的候选准备 TERM 记录发生
 在茶杯柄部署之前，只保留为历史服务证据，不得计入或判定新 shadow。后续每日必须以
 `daily-cup-5m-handle-shadow-v1` 的完整 XNYS 交易日和真实评估行计数。
+
+## 26. 2026-08-30 主站请求内全量扫描事故
+
+15:33 CST 后主站曾出现所有业务页面持续等待，但 `quant-web.service` 仍显示 active。现网线程栈
+确认 `/breakouts` 在缓存缺失时同步读取约 2,780 只股票、400 日宽基行情并执行 DuckDB 排序；Web
+RSS 升至约 565 MB，越过 `MemoryHigh=420M`，其他请求阻塞在 DuckDB 实例锁。这不是 SG 网络、FMP
+或页面文案导致的故障。
+
+事故合同缺口是：旧 `quant-us-daily-refresh` 已按统一宽基迁移计划归档，因此不再预热旧扫描缓存；
+Web 消费者却仍把缓存缺失解释为“现场重算”。修复 `46aa2f0` 后，Web 只读后台发布结果，cache miss
+快速显示等待状态，JSON API 返回 503；只有资源受限的后台任务可以执行扫描构建。
+
+生产文件备份位于
+`/home/projects/quant-backups/web-broad-scan-guard-20260830T1544CST`。SG 定向测试为
+`19 passed`。研究、策略、回测、模拟盘、股票池和茶杯柄六个入口全部 HTTP 200，最慢为茶杯柄
+1.325 秒；整组验收后 cgroup 峰值约 383 MB。今后主站巡检必须同时检查 HTTP 延迟、
+`MemoryCurrent/Peak`、DuckDB 等待栈和未完成请求，不能只检查 systemd active。
