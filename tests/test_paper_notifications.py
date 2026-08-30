@@ -111,6 +111,8 @@ def test_outbox_is_immutable_and_exactly_once(tmp_path):
     state.mark_sent(claim, message_id="discord-1")
     assert state.claim_next(kinds={KIND_FILL}, max_attempts=3) is None
     assert state.status()["counts"] == {f"{KIND_FILL}:{DELIVERY_SENT}": 1}
+    assert len(state.status()["recent"]) == 1
+    assert "recent" not in state.status(include_recent=False)
 
 
 def test_interrupted_sending_becomes_unknown_and_is_not_retried(tmp_path):

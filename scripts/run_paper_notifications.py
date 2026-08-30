@@ -68,7 +68,7 @@ def main(argv: list[str] | None = None) -> int:
             output = {
                 "mode": "initialize_baseline",
                 "baselined": service.reconcile_fills(baseline=True),
-                "status": service.state.status(),
+                "status": service.state.status(include_recent=False),
             }
         elif args.events:
             staged = service.reconcile_fills()
@@ -77,7 +77,7 @@ def main(argv: list[str] | None = None) -> int:
                 "staged": staged,
                 "delivery_enabled": settings.delivery_enabled,
                 **service.drain(kinds={KIND_FILL, KIND_DAILY_SUMMARY}),
-                "status": service.state.status(),
+                "status": service.state.status(include_recent=False),
             }
         else:
             staged = service.stage_daily_summary(
@@ -88,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
                 "staged": int(staged),
                 "delivery_enabled": settings.delivery_enabled,
                 **service.drain(kinds={KIND_DAILY_SUMMARY}),
-                "status": service.state.status(),
+                "status": service.state.status(include_recent=False),
             }
     print(json.dumps(output, ensure_ascii=False, indent=2, default=str))
     return 0

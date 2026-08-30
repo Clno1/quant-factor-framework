@@ -332,7 +332,7 @@ class PaperNotificationState:
                 ),
             )
 
-    def status(self) -> dict[str, Any]:
+    def status(self, *, include_recent: bool = True) -> dict[str, Any]:
         with self._connection() as connection:
             integrity = str(connection.execute("PRAGMA integrity_check").fetchone()[0])
             counts = connection.execute(
@@ -343,25 +343,29 @@ class PaperNotificationState:
                 ORDER BY kind, status
                 """
             ).fetchall()
-            recent = connection.execute(
-                """
-                SELECT delivery_id, kind, account_id, target_session, source_id,
-                       status, attempts, message_id, last_error_code, created_at,
-                       updated_at, sent_at
-                FROM paper_notification_outbox
-                ORDER BY created_at DESC, delivery_id DESC
-                LIMIT 20
-                """
-            ).fetchall()
-        return {
+            recent = []
+            if include_recent:
+                recent = connection.execute(
+                    """
+                    SELECT delivery_id, kind, account_id, target_session, source_id,
+                           status, attempts, message_id, last_error_code, created_at,
+                           updated_at, sent_at
+                    FROM paper_notification_outbox
+                    ORDER BY created_at DESC, delivery_id DESC
+                    LIMIT 20
+                    """
+                ).fetchall()
+        output = {
             "database": str(self.path),
             "integrity": integrity,
             "counts": {
                 f"{row['kind']}:{row['status']}": int(row["count"])
                 for row in counts
             },
-            "recent": [dict(row) for row in recent],
         }
+        if include_recent:
+            output["recent"] = [dict(row) for row in recent]
+        return output
 
 
 __all__ = [
