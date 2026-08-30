@@ -45,7 +45,11 @@ _COLLECTOR_ADAPTERS = {
         "intraday_candidate_prepare",
         "intraday_momentum",
     },
-    "application": {"data_requests", "paper_trading"},
+    "application": {
+        "data_requests",
+        "paper_trading",
+        "paper_notifications",
+    },
     "broad": {"broad_pipeline"},
 }
 

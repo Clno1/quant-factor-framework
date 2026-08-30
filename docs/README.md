@@ -32,6 +32,7 @@
 ## 模拟盘
 
 - [`paper_trading_operations.md`](paper_trading_operations.md)：账户运行、账本和 fail-closed 条件。
+- [`paper_trading_discord_notifications.md`](paper_trading_discord_notifications.md)：独立模拟交易频道、成交即时通知、11:00 SGT 日结、SQLite outbox 和安全配置。
 - [`trading_costs.md`](trading_costs.md)：成交成本模型。
 
 ## 运维

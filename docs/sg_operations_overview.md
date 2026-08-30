@@ -69,6 +69,8 @@ flowchart TD
 | `quant-factor-research.timer` | enabled | 两个核心池研究、MAG7 参考结果和跨池发布 |
 | `quant-group-analytics-eod.timer` | enabled | 13:15 读取同日 SP500 与全美 coverage benchmark 的板块研究 |
 | `quant-paper-trading.timer` | enabled | active 模拟盘账户 |
+| `quant-paper-discord-events.timer` | Webhook 配置后 enabled | 每两分钟对账新 fill，幂等发送模拟成交通知 |
+| `quant-paper-discord-daily.timer` | Webhook 配置后 enabled | Tue-Sat 11:00 SGT 发送模拟盘账户日结 |
 | `quant-data-requests.timer` | enabled | Watchlist 缺数队列 |
 | `quant-intraday-candidate-prepare.timer` | enabled | 06:30 ET 预计算全美宽基盘中候选 |
 | `quant-premarket-prepare.timer` | enabled | 07:00 ET 冻结双频道 payload，不连接 Discord |

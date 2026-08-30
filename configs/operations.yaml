@@ -112,6 +112,41 @@ jobs:
       target_policy: latest_publishable_xnys
     description: 对所有启用账户运行一次版本绑定的模拟决策、成交和记账。
 
+  - job_id: paper_fill_notifications
+    display_name: 模拟盘成交通知
+    category: delivery
+    run_type: interval_worker
+    adapter: paper_notifications
+    service_unit: quant-paper-discord-events.service
+    timer_unit: quant-paper-discord-events.timer
+    enabled_expected: false
+    order: 52
+    schedule:
+      interval_minutes: 2
+      target_policy: latest_publishable_xnys
+    evidence:
+      kind: FILL
+    description: 对账不可变 fill 账本，以 fill_id 幂等发送模拟成交，不发送挂单或无成交轮次。
+
+  - job_id: paper_daily_summary
+    display_name: 模拟盘每日账户日结
+    category: delivery
+    run_type: scheduled_batch
+    adapter: paper_notifications
+    service_unit: quant-paper-discord-daily.service
+    timer_unit: quant-paper-discord-daily.timer
+    enabled_expected: false
+    order: 54
+    schedule:
+      timezone: Asia/Singapore
+      weekdays: [TU, WE, TH, FR, SA]
+      time: "11:00"
+      deadline_minutes: 20
+      target_policy: latest_publishable_xnys
+    evidence:
+      kind: DAILY_SUMMARY
+    description: 在 10:30 模拟盘完成后、11:30 宽基任务开始前，发送账户净值、盈亏、成交、成本和错误状态。
+
   - job_id: broad_us_pipeline
     display_name: 全美宽基每日生产链
     category: migration
