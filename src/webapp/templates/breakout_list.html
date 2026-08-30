@@ -4,6 +4,11 @@
 <h1 class="page-title">茶杯柄监控</h1>
 <div class="page-sub">日线候选筛选、杯体结构观察与盘中五分钟柄部检测</div>
 
+<div class="breakout-notice">
+    本页只读取后台任务已经发布的候选结果，不会在网页请求中现场扫描全美股票。
+    调整筛选条件后若尚无对应结果，页面会立即提示等待后台生成。
+</div>
+
 <section class="form-panel breakout-filter-panel">
     <form method="get" action="/breakouts">
         <div class="breakout-filter-grid">
@@ -69,7 +74,7 @@
             </div>
             <div class="form-field breakout-submit-field">
                 <label class="form-label">&nbsp;</label>
-                <button class="btn primary" type="submit">运行扫描</button>
+                <button class="btn primary" type="submit">读取后台结果</button>
             </div>
         </div>
     </form>

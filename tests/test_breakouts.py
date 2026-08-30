@@ -10,6 +10,10 @@ import pandas as pd
 
 from src.breakouts import BreakoutFilters, build_intraday_snapshot, evaluate_daily_setup
 from src.breakouts import scan_cache
+from src.breakouts.application import (
+    BreakoutScanNotReadyError,
+    get_breakout_scan,
+)
 from src.data.fmp import get_intraday_ohlcv, get_us_active_equities
 
 
@@ -121,6 +125,39 @@ class DailyBreakoutScannerTests(unittest.TestCase):
                 self.assertIsNone(scan_cache.load_scan_cache(next_version))
                 self.assertEqual(scan_cache.clear_scan_cache(), 1)
                 self.assertIsNone(scan_cache.load_scan_cache(parameters))
+
+    @patch("src.breakouts.application.build_breakout_scan")
+    @patch("src.breakouts.application.load_scan_cache", return_value=None)
+    @patch("src.breakouts.application.resolve_breakout_universe")
+    def test_web_cache_miss_never_builds_broad_scan(
+        self,
+        resolve_mock,
+        _cache_mock,
+        build_mock,
+    ):
+        resolve_mock.return_value = {
+            "data_universe": "US_LIQUID_5M",
+            "dataset_version_id": "version-1",
+        }
+
+        with self.assertRaises(BreakoutScanNotReadyError):
+            get_breakout_scan(
+                universe="US_ACTIVE",
+                enabled_universes=("US_ACTIVE",),
+                asof=None,
+                min_return_20d=20.0,
+                min_adr_20d=6.0,
+                min_dollar_volume_m=10.0,
+                min_avg_dollar_volume_m=10.0,
+                min_consolidation_days=9,
+                max_distance_ma50=35.0,
+                pivot_proximity=3.0,
+                market_symbol="QQQ",
+                view="all",
+                allow_build=False,
+            )
+
+        build_mock.assert_not_called()
 
 
 class IntradayBreakoutTests(unittest.TestCase):
