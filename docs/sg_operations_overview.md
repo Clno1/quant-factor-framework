@@ -887,3 +887,8 @@ true。不得复用盘前、板块轮动或茶杯柄频道的 Webhook。
 最近交易日 `2026-08-28` 的正式日结一次发送成功，outbox 记录为 `DAILY_SUMMARY:SENT`、
 `attempts=1` 且持有 Discord message ID；SQLite 完整性正常，没有待发送、失败或不确定消息。日常
 合同为每两分钟对账新 fill、Tue-Sat 11:00 SGT 发送日结，继续使用独立 Webhook。
+
+日志降噪提交 `6951bf4` 部署期间，分钟 timer 在新脚本与依赖模块逐文件替换的数秒窗口触发过一次
+`TypeError`；下一轮完整代码运行成功，`staged/sent/failed/unknown` 均为 0，watchdog 最终仍将
+两个通知任务判定为 `SUCCESS`。该事件没有影响 outbox 或 Discord。以后通知代码在线部署必须先停
+事件 timer、整体替换并测试，再恢复 timer；不能依赖下一轮自动恢复掩盖非原子部署。

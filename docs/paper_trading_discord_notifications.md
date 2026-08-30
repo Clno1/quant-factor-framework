@@ -151,3 +151,9 @@ baseline 数量。历史 `FAILED` 可以保留审计，但当前最新 `SENT` �
 一次尝试即取得 Discord message ID 并提交为 `DAILY_SUMMARY:SENT`；outbox
 `integrity_check=ok`，没有 `PENDING/FAILED/UNKNOWN`。此后新 fill 最长约两分钟通知，日结按
 Tue-Sat 11:00 SGT 自动发送。
+
+提交 `6951bf4` 将周期 worker 日志缩减为计数摘要，显式 `--status` 才输出最近 delivery 明细。
+部署该提交时，事件 timer 恰好在“新脚本已替换、依赖模块尚未替换”的数秒窗口触发一次，产生一次
+`TypeError`；下一轮在完整文件到位后自动成功，未新建 delivery、未发送消息且 outbox 未变化。
+后续在线升级必须先停止事件 timer，整体替换脚本和模块并通过定向测试后再恢复 timer，禁止逐文件
+热替换正在被分钟级任务读取的代码。
