@@ -119,7 +119,7 @@ jobs:
     adapter: paper_notifications
     service_unit: quant-paper-discord-events.service
     timer_unit: quant-paper-discord-events.timer
-    enabled_expected: false
+    enabled_expected: true
     order: 52
     schedule:
       interval_minutes: 2
@@ -135,7 +135,7 @@ jobs:
     adapter: paper_notifications
     service_unit: quant-paper-discord-daily.service
     timer_unit: quant-paper-discord-daily.timer
-    enabled_expected: false
+    enabled_expected: true
     order: 54
     schedule:
       timezone: Asia/Singapore

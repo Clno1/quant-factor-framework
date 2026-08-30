@@ -877,3 +877,13 @@ watchdog 和独立运维站保持 active。
 `enabled_expected=false`。频道管理员完成独立“模拟交易”频道和不回显 Webhook 配置后，先验收测试
 消息，再启用每两分钟成交 worker 与 Tue-Sat 11:00 SGT 日结 timer；启用时同步将两项运维期望改为
 true。不得复用盘前、板块轮动或茶杯柄频道的 Webhook。
+
+## 29. 2026-08-31 模拟盘 Discord 通知正式启用
+
+独立“模拟交易”频道测试通过，生产密钥文件保持 `0600`。事件和日结 timer 已 enabled + active，
+运维注册中的 `paper_fill_notifications` 与 `paper_daily_summary` 同步改为
+`enabled_expected=true`。首次事件 worker 没有补发 7 笔 baseline 成交。
+
+最近交易日 `2026-08-28` 的正式日结一次发送成功，outbox 记录为 `DAILY_SUMMARY:SENT`、
+`attempts=1` 且持有 Discord message ID；SQLite 完整性正常，没有待发送、失败或不确定消息。日常
+合同为每两分钟对账新 fill、Tue-Sat 11:00 SGT 发送日结，继续使用独立 Webhook。

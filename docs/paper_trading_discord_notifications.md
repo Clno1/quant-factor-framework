@@ -140,3 +140,14 @@ baseline 数量。历史 `FAILED` 可以保留审计，但当前最新 `SENT` �
 剩余人工门槛只有：Discord 管理员创建独立“模拟交易”文字频道和 Incoming Webhook，并在 SG 终端
 运行第 4 节的不回显配置命令。测试消息成功后才能启用两个 timer，并把 `configs/operations.yaml`
 中的两个通知任务 `enabled_expected` 改为 `true`。真实 Webhook 不得写入本文档或 Git。
+
+## 8. 2026-08-31 正式激活
+
+独立 Webhook 测试消息已成功送达。生产配置显示 `delivery_enabled=true` 和
+`discord_configured=true`，但不会暴露 Webhook URL。`quant-paper-discord-events.timer` 与
+`quant-paper-discord-daily.timer` 已正式 enabled + active，运维期望同步切换为 true。
+
+首次事件 worker 运行成功，没有补发 7 笔历史成交。随后手工执行最近交易日 `2026-08-28` 日结，
+一次尝试即取得 Discord message ID 并提交为 `DAILY_SUMMARY:SENT`；outbox
+`integrity_check=ok`，没有 `PENDING/FAILED/UNKNOWN`。此后新 fill 最长约两分钟通知，日结按
+Tue-Sat 11:00 SGT 自动发送。

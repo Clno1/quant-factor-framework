@@ -615,3 +615,10 @@ expected/decision/mark session、输入 dataset version、当次 fill/order/pend
 人工核对，不能自动重试。明确失败最多尝试 3 次；测试消息、角色 mention 和真实 Webhook 均不进入
 运维数据库或日志。当前 SG 仅完成预部署：7 笔历史 fill 已 baseline，两个 timer 与运维期望均关闭。
 频道配置并人工验收后才切换为 enabled；该关闭状态不应产生 incident。
+
+## 26. 2026-08-31 模拟盘通知激活证据
+
+频道测试与 `2026-08-28` 正式日结均成功。当前 outbox 为 `FILL:BASELINED=7`、
+`DAILY_SUMMARY:SENT=1`，没有 pending、failed 或 unknown；日结一次尝试即取得 message ID。两个
+timer 与 `enabled_expected` 已同时切换为 true，后续 watchdog 应将 timer、应用证据和 Discord
+delivery 三层分开判断，不能只凭 systemd active 宣告发送成功。
