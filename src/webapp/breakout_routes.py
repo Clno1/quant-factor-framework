@@ -217,7 +217,7 @@ def breakouts_page(
         request,
         "breakout_list.html",
         {
-            "title": "动量交易",
+            "title": "茶杯柄监控",
             "scan": scan,
             "error": error,
             "preset_universes": preset_universes,
@@ -473,7 +473,7 @@ def breakout_detail_page(
         request,
         "breakout_detail.html",
         {
-            "title": f"{ticker} · 动量诊断",
+            "title": f"{ticker} · 茶杯柄诊断",
             "ticker": ticker,
             "universe": context["universe"],
             "universe_label": context["label"],
