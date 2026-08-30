@@ -800,3 +800,15 @@ source session、行数和 SHA，禁止把未来可知股票清单写入历史�
 该时点宽基影子为 2/5，readiness 仅保留 `PIT_CLASSIFICATION_POLICY`、
 `PIT_INDUSTRY_COVERAGE` 预期阻断。后续 5/5 和网页启用结果记录在第 19 节；本节保留的是不可覆盖的
 历史验收证据，不代表当前 freshness。
+
+## 25. 2026-08-30 茶杯柄首个交易日前巡检
+
+茶杯柄独立 shadow 当前为 `0/5`，三张专属 SQLite 表均为 0 行。由于部署发生在周末，这不是任务
+中断；首个可计数交易日为 2026-08-31，最早完成日期为 2026-09-05 SGT。候选准备和盘中监控 timer
+均为 enabled，下一次触发分别为 18:30 和 21:20 SGT；运维 watchdog 与独立运维站正常，运维 Web
+`NRestarts=0`、峰值约 43.1 MiB。
+
+配置保持 `delivery_enabled=false`，P95 上限 250 ms、五分钟序列上限 96 根。MDB 两日回放信号数为
+0，误报代理仍为 null；这表示尚无可评估信号，不是 0% 误报。2026-08-28 的候选准备 TERM 记录发生
+在茶杯柄部署之前，只保留为历史服务证据，不得计入或判定新 shadow。后续每日必须以
+`daily-cup-5m-handle-shadow-v1` 的完整 XNYS 交易日和真实评估行计数。
