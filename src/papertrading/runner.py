@@ -43,7 +43,10 @@ from src.execution import (
     resolve_execution_config,
 )
 from src.utils.logger import get_logger
-from src.utils.market_calendar import latest_completed_xnys_session
+from src.utils.market_calendar import (
+    latest_completed_xnys_session,
+    xnys_session_on_or_before,
+)
 from src.utils.date_utils import resolve_date_range
 
 log = get_logger(__name__)
@@ -435,24 +438,7 @@ def _expected_target_session(asof: str | None) -> pd.Timestamp:
     """Resolve the XNYS session a paper run is required to have processed."""
     if asof is None:
         return latest_completed_xnys_session()
-    try:
-        import exchange_calendars as xcals
-    except ImportError as exc:
-        raise RuntimeError(
-            "exchange-calendars is required for paper-trading freshness checks"
-        ) from exc
-    cutoff = pd.Timestamp(asof).tz_localize(None).normalize()
-    calendar = xcals.get_calendar("XNYS")
-    sessions = calendar.sessions_in_range(
-        (cutoff - pd.Timedelta(days=14)).strftime("%Y-%m-%d"),
-        cutoff.strftime("%Y-%m-%d"),
-    )
-    if len(sessions) == 0:
-        raise ValueError(f"No XNYS session exists at or before asof={asof}")
-    expected = pd.Timestamp(sessions[-1])
-    if expected.tzinfo is not None:
-        expected = expected.tz_localize(None)
-    return expected.normalize()
+    return xnys_session_on_or_before(pd.Timestamp(asof))
 
 
 def _mark_equity(

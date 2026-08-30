@@ -44,8 +44,12 @@ def latest_completed_xnys_session(
     calendar: Any | None = None,
 ) -> pd.Timestamp:
     """Return the latest XNYS session whose official close has passed."""
-    exchange = _calendar(calendar)
     now_utc = _utc_timestamp(now)
+    exchange = _calendar(
+        calendar,
+        start=(now_utc - pd.Timedelta(days=28)).date().isoformat(),
+        end=(now_utc + pd.Timedelta(days=14)).date().isoformat(),
+    )
     sessions = exchange.sessions_in_range(
         (now_utc - pd.Timedelta(days=14)).date().isoformat(),
         (now_utc + pd.Timedelta(days=1)).date().isoformat(),
@@ -79,8 +83,12 @@ def latest_publishable_xnys_session(
     """
     if int(delay_minutes) < 0:
         raise ValueError("delay_minutes must be non-negative")
-    exchange = _calendar(calendar)
     now_utc = _utc_timestamp(now)
+    exchange = _calendar(
+        calendar,
+        start=(now_utc - pd.Timedelta(days=28)).date().isoformat(),
+        end=(now_utc + pd.Timedelta(days=14)).date().isoformat(),
+    )
     sessions = exchange.sessions_in_range(
         (now_utc - pd.Timedelta(days=14)).date().isoformat(),
         (now_utc + pd.Timedelta(days=1)).date().isoformat(),
@@ -127,7 +135,7 @@ def xnys_session_on_or_before(
     exchange = _calendar(
         calendar,
         start=(timestamp - pd.Timedelta(days=14)).date().isoformat(),
-        end=(timestamp + pd.Timedelta(days=1)).date().isoformat(),
+        end=(timestamp + pd.Timedelta(days=14)).date().isoformat(),
     )
     session = pd.Timestamp(
         exchange.date_to_session(timestamp.normalize(), direction="previous")

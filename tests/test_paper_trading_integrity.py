@@ -272,3 +272,9 @@ def test_historical_asof_resolves_previous_xnys_session():
     assert runner._expected_target_session("2026-01-04") == pd.Timestamp(
         "2026-01-02"
     )
+
+
+def test_historical_asof_after_latest_session_resolves_previous_session():
+    assert runner._expected_target_session("2026-08-29") == pd.Timestamp(
+        "2026-08-28"
+    )
