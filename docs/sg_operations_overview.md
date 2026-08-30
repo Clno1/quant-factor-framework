@@ -1,18 +1,17 @@
 # SG 生产运维总览
 
-更新日期：2026-08-26
+更新日期：2026-08-29
 
 ## 1. 当前部署状态
 
 | 范围 | 状态 |
 |---|---|
-| 本地 `/Users/huozhihong/Documents/Quant` | 全美宽基、可恢复首次链与独立运维站代码完成，待提交共享仓库 |
-| SG `/home/projects/quant` | 宽基代码和独立运维站已部署；主 Web、双核心研究池、既有调度与运维采集均已验收 |
-| 全美宽基 v1 | Security Master、coverage、PIT 和八因子已连续通过 2026-08-20/21/24/25 影子验收，当前 4/5；日常 timer 已启用，网页默认开关仍关闭 |
+| 本地 `/Users/huozhihong/Documents/Quant` | 全美宽基、严格回测、茶杯柄 shadow 与独立运维站代码已完成集成 |
+| SG `/home/projects/quant` | 宽基代码和独立运维站已部署；主 Web、双核心研究池、既有调度、运维采集和茶杯柄 shadow 均已验收 |
+| 全美宽基 v1 | 五交易日上线门槛已完成，网页默认开关已启用；正式置信研究仍由 PIT 行业历史门禁独立阻断 |
 
-SG 发布使用精确白名单 rsync，不从未推送的本地 `main` 做远端 `git pull`。当前部署标记
-`/home/projects/quant/.deploy-commit` 为 `3a52611`，服务器仓库 HEAD 为 `026ae89fad53`；
-2026-08-11 NASDAQ100 修复和 2026-08-12 全美宽基代码均作为审核热修复部署，仍需提交共享仓库。
+SG 发布使用隔离 worktree 生成的精确白名单包，不从有未提交改动的本地工作目录直接部署。生产
+`.deploy-commit` 必须在下一次 SG 部署时更新到实际验收的共享提交，不能用文档中的历史提交号代替。
 部署始终排除 `.git`、项目根目录的 `data/outputs/logs`、虚拟环境和密钥文件。rsync 排除项必须写成
 `/data/`、`/outputs/` 等根锚定形式；非锚定 `data/` 会误排除代码目录 `src/data/`。
 
@@ -771,3 +770,33 @@ timer 均已启用，下一次分别为 2026-08-31 18:30、21:20 SGT。
 信号 0，误报率保持 null；报告保存于
 `outputs/data_audits/cup_handle_replay_mdb_20260810_20260811.json`。这只能证明生产链可运行，
 不能替代五个完整交易日或更长历史样本的参数判断。
+
+## 24. 2026-08-24/25 研究完整性强制重建补充记录
+
+发布前备份为：
+
+```text
+/home/projects/quant-backups/research-integrity-20260824T210149+0800
+```
+
+备份约 7.9 GB，包含项目、`/etc/quant` 环境文件、systemd unit 和维护前 11 个 timer 清单。代码包
+没有覆盖 `.git`、`data`、`outputs`、`logs`、虚拟环境或密钥。
+
+本次正式重建不再信任只有列名、但没有来源语义认证的旧行情。验收对象包括 SP500、NASDAQ100、
+MAG7、全美 coverage、PIT `US_LIQUID_5M`、宽基八因子和业务 `US_LIQUID_5M`；三池研究均绑定同目标日
+的新行情版本，并通过 schema 3、价格语义、HAC 和 confidence 文件哈希校验。
+
+重建业务 `US_LIQUID_5M` 时，旧命令曾在 2026-08-24 美股盘中刷新 live universe。候选在发布前
+被停止并标记 `FAILED`，证据保存在 `outputs/data_audits/research_integrity_20260825/`。正式重建改用
+target 2026-08-21、9,786 票、SHA-256 为
+`acb44911c0725d4d084725ed724dde7bdf2d09fb3ac871e199f45be4d3c5249a` 的冻结清单；代码强制校验
+source session、行数和 SHA，禁止把未来可知股票清单写入历史目标日。
+
+真实业务验收使用 Watchlist `36d324f4-4391-42b3-855b-3f9c91cfae80`：v3 缺数请求经历
+`pending -> running -> success`，回测从 `WAITING_FOR_DATA` 自动恢复并生成逐票交易与成本，模拟盘按
+`next_open` 创建 pending order；同日重跑和冷启动均没有重复订单。下一交易日日线尚未发布时保持
+0 fill，禁止用当日收盘价替代下一开盘价。
+
+该时点宽基影子为 2/5，readiness 仅保留 `PIT_CLASSIFICATION_POLICY`、
+`PIT_INDUSTRY_COVERAGE` 预期阻断。后续 5/5 和网页启用结果记录在第 19 节；本节保留的是不可覆盖的
+历史验收证据，不代表当前 freshness。
