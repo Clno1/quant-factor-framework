@@ -275,4 +275,20 @@ def test_market_regime_page_and_api_are_explicitly_research_only(
             )
             assert corrupt.status_code == 409
 
+            degraded_payload = _status_payload()
+            degraded_payload["research_status"] = "NO_STAGE_1_CANDIDATE"
+            degraded_payload["candidate"] = None
+            degraded_payload["message"] = (
+                "当前没有通过完整性校验的 Stage 1 底部候选。"
+            )
+            monkeypatch.setattr(
+                research_routes,
+                "market_regime_status_payload",
+                lambda: degraded_payload,
+            )
+            degraded = await client.get("/research/market-regime")
+            assert degraded.status_code == 200
+            assert "当前没有可验证的底部候选" in degraded.text
+            assert "已有阶段性底部候选，还不能判断" not in degraded.text
+
     asyncio.run(exercise())

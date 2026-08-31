@@ -27,10 +27,12 @@
 
 <section class="market-research-notice" aria-labelledby="market-research-notice-title">
     <div>
-        <span class="market-notice-label">当前结论</span>
-        <h2 id="market-research-notice-title">已有阶段性底部候选，还不能判断“今日见底”</h2>
+        <span class="market-notice-label">{{ '当前结论' if mr.research_status == 'STAGE_1_CANDIDATE' else '证据状态' }}</span>
+        <h2 id="market-research-notice-title">
+            {{ '已有阶段性底部候选，还不能判断“今日见底”' if mr.research_status == 'STAGE_1_CANDIDATE' else '当前没有可验证的底部候选' }}
+        </h2>
     </div>
-    <p>{{ mr.current_signal.note }}</p>
+    <p>{{ mr.current_signal.note if mr.research_status == 'STAGE_1_CANDIDATE' else mr.message }}</p>
 </section>
 
 {% if mr.data_status != 'CURRENT' %}

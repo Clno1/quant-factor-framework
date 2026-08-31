@@ -713,10 +713,15 @@ def market_regime_status_payload(
         if candidate and candidate["screening_status"] == "STAGE_1_PASS"
         else "NO_STAGE_1_CANDIDATE"
     )
+    message = (
+        "已有阶段性底部候选，但当前没有获准生产的实时信号。"
+        if research_status == "STAGE_1_CANDIDATE"
+        else "当前没有通过完整性校验的 Stage 1 底部候选。"
+    )
     return {
         "status": "RESEARCH_ONLY",
         "research_status": research_status,
-        "message": "已有阶段性底部候选，但当前没有获准生产的实时信号。",
+        "message": message,
         "expected_session": expected,
         "observed_session": observed,
         "data_delay_sessions": delay,
