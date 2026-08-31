@@ -189,3 +189,26 @@ SGT 和每分钟。运维 Web 持续运行且 `NRestarts=0`。上一个盘中监
 96 根。MDB 回放仍是 0 个信号、误报代理 null；拒绝原因为 `HANDLE_TOO_SHALLOW=92` 和
 `INSUFFICIENT_COMPLETED_5M_BARS=18`，不能写成 0% 误报。若 2026-08-31 至 2026-09-04 均满足
 完整周期、实际评估、版本合同和延迟门槛，最早在 2026-09-05 SGT 进入人工验收，发送不会自动开启。
+
+## 12. 2026-08-31 首个交易日盘前检查
+
+12:01 SGT 检查时，`daily-cup-5m-handle-shadow-v1` 仍为 `0/5`，通过日期为空，剩余 5 个完整
+XNYS 交易日。三张专属表 `cup_handle_cycles`、`cup_handle_evaluations`、
+`cup_handle_session_observations` 行数均为 0；这是美股开盘前的正确状态，不得复用旧动量台账，也
+不得把 2026-08-24 至 2026-08-28 补记为新算法观察。
+
+2026-08-31 候选快照已提前就绪：source 为 2026-08-28，绑定数据版本
+`d4c85d16084143ecbccda73497465a7c`；日线杯体评估 2,772 只、通过 1,343 只，最终选择 600 只进入
+分钟 shadow。日线前五拒绝原因为 `RIGHT_RIM_RECOVERY_INCOMPLETE=386`、`RIM_MISMATCH=380`、
+`CUP_DEPTH_OUT_OF_RANGE=309`、`CUP_VOLUME_NOT_CONTRACTING=179`、
+`BOTTOM_POSITION_INVALID=175`。盘中命中、拒绝、等待、错误仍均为 0，P95 和最大 bar 数尚不存在，
+不能写成 0 ms 或 0 根。
+
+候选 timer 与监控 timer 均 enabled，下一次分别为 18:30 和 21:20 SGT。上一个 legacy 监控交易日
+退出成功，峰值约 606.2 MiB；候选准备的 534.8 MiB/TERM 是 8 月 28 日茶杯柄部署前人工停止记录，
+不计入新 shadow。当前系统可用内存约 1,176 MiB，运维 Web 峰值约 43.1 MiB，watchdog 最近峰值
+约 100.9 MiB。发送开关继续为 false。
+
+MDB 两日回放仍为 110 根完整五分钟 bar、0 信号，误报代理为 null；这表示没有可评估信号，不是
+0% 误报。首个可计数结果将在 2026-09-01 约 04:05 SGT 完整收盘后产生；若 8 月 31 日至 9 月 4 日
+五日全部通过，最早 9 月 5 日仅进入人工验收，仍不会自动开启推送。

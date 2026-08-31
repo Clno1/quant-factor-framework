@@ -622,3 +622,13 @@ expected/decision/mark session、输入 dataset version、当次 fill/order/pend
 `DAILY_SUMMARY:SENT=1`，没有 pending、failed 或 unknown；日结一次尝试即取得 message ID。两个
 timer 与 `enabled_expected` 已同时切换为 true，后续 watchdog 应将 timer、应用证据和 Discord
 delivery 三层分开判断，不能只凭 systemd active 宣告发送成功。
+
+## 27. 2026-08-31 茶杯柄零值语义
+
+首个交易日盘前，茶杯柄三张专属表为 0 行、进度为 `0/5`。运维站必须解释为“等待首个完整交易日”，
+不能把旧动量 PASS 迁入，也不能把尚未产生的 P95、最大 bar 数或误报率显示为 0。候选快照中的日线
+评估与盘中 `cup_handle_evaluations` 是两层证据：前者已完成 2,772 只筛选并选出 600 只，后者只有
+开盘后实际运行才可满足每日门槛。
+
+MDB 回放 `signal_count=0` 时 `false_positive_rate_proxy=null`，页面和告警必须继续显示“暂无可评估
+信号”，不能显示“误报率 0%”。发送开关在 5/5 前保持 false，5/5 后也只报告待人工验收。
