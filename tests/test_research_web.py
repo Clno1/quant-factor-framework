@@ -168,6 +168,7 @@ def test_research_information_architecture_and_target_pages(
             assert 'href="/factors"' not in overview
             assert "研究股票池" in overview
             assert "因子数据" in overview
+            assert "大盘状态" in overview
             assert "目标股票池" in overview
             assert ">跨池稳健性<" not in overview
             assert ">股票排名<" not in overview

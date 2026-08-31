@@ -30,12 +30,16 @@
                     <summary class="side-group-title">研究</summary>
                     <div class="side-subnav">
                         <a href="/research"
-                           class="side-link {% if request.url.path == '/' or (request.url.path.startswith('/research') and not request.url.path.startswith('/research/factor-data')) or request.url.path.startswith('/factors') or request.url.path.startswith('/factor/') %}active{% endif %}">
+                           class="side-link {% if request.url.path == '/' or request.url.path == '/research' or request.url.path.startswith('/research/universes') or request.url.path.startswith('/research/factors') or request.url.path.startswith('/factors') or request.url.path.startswith('/factor/') %}active{% endif %}">
                             <span>研究总览</span>
                         </a>
                         <a href="/research/factor-data"
                            class="side-link {% if request.url.path.startswith('/research/factor-data') %}active{% endif %}">
                             <span>因子数据</span>
+                        </a>
+                        <a href="/research/market-regime"
+                           class="side-link {% if request.url.path.startswith('/research/market-regime') %}active{% endif %}">
+                            <span>大盘状态</span>
                         </a>
                     </div>
                 </details>
@@ -91,7 +95,7 @@
         </aside>
 
         <div class="app-main">
-            {% if research_status is defined %}
+            {% if research_status is defined and not request.url.path.startswith('/research/market-regime') %}
             {% set rs = research_status() %}
             {% set sp500_status = rs.universes.get('SP500', {}).get('status', 'MISSING') %}
             {% set nasdaq100_status = rs.universes.get('NASDAQ100', {}).get('status', 'MISSING') %}

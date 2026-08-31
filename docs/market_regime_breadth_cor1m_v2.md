@@ -165,7 +165,13 @@ DuckDB 也没有对应的完整历史 DatasetVersion。因此可以完成 COR1M 
 但不能运行包含市场宽度的正式 v2 Stage A/B；系统应继续失败关闭，不能借用当前成分股
 或主因子 SP500 股票池绕过。
 
-## 七、主要来源
+## 七、页面状态
+
+`/research/market-regime` 已展示 COR1M 的最近校验值和 v2 门禁状态，但不会展示一个
+未经筛选的 COR1M 或市场宽度买卖信号。由于 PIT 仍为 FAIL，页面将 v2 标记为阻断；
+当前 K 线报警只来自旧版 core-only Stage 1 候选。
+
+## 八、主要来源
 
 - [Cboe Implied Correlation](https://www.cboe.com/us/indices/implied/)
 - [Cboe Implied Correlation Methodology](https://cdn.cboe.com/resources/indices/documents/Implied_Correlation-WhitePaper.pdf)

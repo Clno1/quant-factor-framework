@@ -1,7 +1,7 @@
 # 大盘顶底研究系统：第一阶段实现说明
 
-> 实现日期：2026-08-01；数据契约修订：2026-08-20
-> 当前状态：市场核心数据、标签和 P0 特征已经可运行；完整 PIT 横截面研究仍被数据质量门禁阻止；尚未接入页面或交易。
+> 实现日期：2026-08-01；数据契约修订：2026-08-20；研究状态页：2026-08-31
+> 当前状态：市场核心数据、标签和 P0 特征已经可运行；完整 PIT 横截面研究仍被数据质量门禁阻止；只读研究状态页已经接入，但实时评分和交易仍未启用。
 
 第二轮独立代码复审、修复项和剩余风险见：
 
@@ -39,6 +39,9 @@ Parquet/JSON 研究产物。当前研究没有可变订单或账户状态，因�
 | `src/market_regime_research/artifacts.py` | 原子发布、哈希和不可变 run |
 | `src/market_regime_research/pipeline.py` | 数据门禁和计算编排 |
 | `scripts/run_market_regime_research.py` | prepare / pit / run / all 命令 |
+| `src/webapp/market_regime_status.py` | 校验研究产物并生成只读页面/API 数据 |
+| `src/webapp/templates/market_regime_status.html` | 市场研究状态、历史证据和门禁进度 |
+| `src/webapp/static/js/market_regime_status.js` | K 线、候选报警和事后标签交互 |
 
 这里的 `market_regime_research` 和
 `src.breakouts.scanner.load_market_regime()` 不是同一个系统。后者只是动量告警使用的
@@ -360,9 +363,42 @@ algorithm_version: 0.1.1
 - 非成员不能进入 breadth；
 - 动量使用前一日排名；
 - 特征注册表与矩阵一一对应；
-- 不可变产物和 latest 指针。
+- 不可变产物和 latest 指针；
+- 页面读取前的 manifest SHA256、路径越界和 OHLC 关系校验；
+- 历史报警 episode 按交易日聚类，封存集不会进入图表接口；
+- 非法图表参数返回 400，研究产物校验失败返回 409。
 
-## 九、尚未完成
+## 九、只读研究状态页
+
+页面入口：
+
+```text
+/research/market-regime
+```
+
+对应接口：
+
+```text
+/api/research/market-regime/status
+/api/research/market-regime/chart?instrument=spx&period=wf_2020_2021
+```
+
+页面当前展示三种不同时间语义，不能混为一谈：
+
+1. 最近市场观察只读取 source manifest 中经过 SHA256 校验的 SPX、NDX、VIX 和
+   COR1M；它不是模型评分；
+2. K 线上的黄色标记是 2022 年前开发样本中的 Stage 1 样本外候选报警；
+3. 青色事后标签使用未来 first-touch 路径，只用于评估，默认关闭。
+
+图表接口固定返回 `holdout_included=false`。页面不会读取 2022 年后的封存集，也不会把
+历史候选外推成今天的底部概率。只要 G7-G9 和每日影子评分尚未完成，“今日底部概率”
+固定显示“未运行”，生产批准数固定读取正式 scorecard，当前为 0。
+
+截至 2026-08-31，经过校验的行情源只到 2026-08-19，比最近应发布的 XNYS session
+2026-08-28 落后 7 个交易日；PIT 诊断仍有 25 个不一致。因此页面可以用于查看当前研究
+进度和历史证据，不能用于生成实时交易决策。
+
+## 十、尚未完成
 
 以下内容故意没有提前接入生产：
 
@@ -373,7 +409,7 @@ algorithm_version: 0.1.1
 5. G9 含 next-open、滑点和费用的经济价值；
 6. 60 个交易日影子运行；
 7. 最终封存集评估；
-8. 研究页面 K 线、顶底标记和解释面板。
+8. 获得生产批准后再接入实时概率、正式信号标记和交易动作。
 
 市场核心特征的第一轮 univariate event study、walk-forward、FDR 和 G1-G6
 scorecard 已于 2026-08-02 完成。834 个测试中只有
@@ -381,5 +417,5 @@ scorecard 已于 2026-08-02 完成。834 个测试中只有
 
 [大盘顶底信号：第一轮有效性筛选报告](market_regime_effectiveness_screening.md)
 
-PIT 修复和市场核心候选的 G7-G10 可以并行推进；页面仍应排在最终 scorecard 和
-影子验证之后。
+PIT 修复和市场核心候选的 G7-G10 可以并行推进。现有页面只承担研究状态和历史证据
+审计；实时概率、生产信号和交易提示仍必须排在最终 scorecard 与影子验证之后。
