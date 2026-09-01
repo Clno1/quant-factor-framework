@@ -490,3 +490,14 @@ def test_intraday_keeps_latest_failed_cup_session_visible(monkeypatch, tmp_path:
         incident.code == "CUP_HANDLE_SHADOW_SESSION_FAILED"
         for incident in result.incidents
     )
+
+    stale = collect_delivery_evidence(
+        [registry.get("intraday_momentum")],
+        now=datetime(2026, 9, 1, 14, 0, tzinfo=timezone.utc),
+        observed_at="2026-09-01T14:00:00+00:00",
+    )
+    assert stale.snapshots[0].status == JobStatus.STALE
+    assert any(
+        incident.code == "CUP_HANDLE_SHADOW_SESSION_FAILED"
+        for incident in stale.incidents
+    )

@@ -825,23 +825,25 @@ def _collect_intraday(
         latest_cup_observation
         and str(latest_cup_observation.get("status") or "") != "PASS"
     )
-    if latest_cup_failed and status not in {
-        JobStatus.FAILED,
-        JobStatus.MISSED,
-        JobStatus.STALE,
-        JobStatus.BLOCKED,
-    }:
-        status = JobStatus.DEGRADED
+    if latest_cup_failed:
         latest_session = str(
             latest_cup_observation.get("session_date") or "未知交易日"
         )
         failures = _json_list(
             latest_cup_observation.get("failure_reasons_json")
         )
-        reason = (
+        cup_reason = (
             f"最近完整交易日 {latest_session} 的茶杯柄影子验收未通过"
             + (f"：{', '.join(map(str, failures))}" if failures else "")
         )
+        if status not in {
+            JobStatus.FAILED,
+            JobStatus.MISSED,
+            JobStatus.STALE,
+            JobStatus.BLOCKED,
+        }:
+            status = JobStatus.DEGRADED
+            reason = cup_reason
         result.incidents.append(IncidentCandidate(
             fingerprint=(
                 "intraday_momentum:cup_handle_latest_session_failed:"
@@ -850,7 +852,7 @@ def _collect_intraday(
             severity=IncidentSeverity.WARNING,
             code="CUP_HANDLE_SHADOW_SESSION_FAILED",
             title="茶杯柄最近完整交易日未通过",
-            detail=reason,
+            detail=cup_reason,
             job_id=job.job_id,
             target_session=latest_session,
             metadata={
