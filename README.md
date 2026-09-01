@@ -160,6 +160,12 @@ python scripts/run_mvp.py --no-web --only-universe MAG7 --universe 5
 6. [`docs/unified_data_storage.md`](docs/unified_data_storage.md)
 7. [`docs/project_architecture.md`](docs/project_architecture.md)
 
+## Git 协作约定
+
+- GitHub 以 `main` 作为唯一长期主线和默认分支，不再使用 `master`。
+- 日常修改从最新 `main` 创建短期功能分支，完成测试后通过 Pull Request 合入 `main`。
+- Mac 本地验证以最新 `main` 为基线；SG 只部署已经合入 `main` 且通过本地验证的明确 commit。
+
 ## SG 运维
 
 当前服务器的时间线、服务状态和检查命令见
