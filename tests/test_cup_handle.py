@@ -497,6 +497,13 @@ class CupHandleAlgorithmTests(unittest.TestCase):
                 "EXCESSIVE_MINUTE_DATA_GAPS",
                 summary["failure_reasons"],
             )
+            state.finalize_session_observation(
+                session_date="2026-04-09",
+                expected_open_cycles=1,
+                min_cycle_coverage=0.85,
+                max_error_cycle_ratio=0.05,
+                max_cycle_p95_seconds=30.0,
+            )
             gap_counts = state.status()["cup_handle"]["latest_gap_counts"]
             self.assertEqual(gap_counts[0]["event_count"], 1)
 

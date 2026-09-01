@@ -1311,9 +1311,6 @@ class IntradayMonitorState:
             value["failure_reasons"] = json.loads(
                 str(value.pop("failure_reasons_json") or "[]")
             )
-            value["gap_classification_counts"] = json.loads(
-                str(value.pop("gap_classification_counts_json") or "{}")
-            )
             observation_rows.append(value)
         cup_observation_rows = []
         for row in cup_observations:
@@ -1323,6 +1320,9 @@ class IntradayMonitorState:
             )
             value["failure_reasons"] = json.loads(
                 str(value.pop("failure_reasons_json") or "[]")
+            )
+            value["gap_classification_counts"] = json.loads(
+                str(value.pop("gap_classification_counts_json", "{}") or "{}")
             )
             cup_observation_rows.append(value)
         return {
