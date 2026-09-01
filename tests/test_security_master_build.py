@@ -497,9 +497,23 @@ def _reviewed_identifier_conflict_event() -> pd.DataFrame:
     }])
 
 
+def _only_identifier_conflict(registry: dict, correction_id: str) -> dict:
+    return {
+        **registry,
+        "reviewed_provider_identifier_conflicts": [
+            value
+            for value in registry["reviewed_provider_identifier_conflicts"]
+            if value["id"] == correction_id
+        ],
+    }
+
+
 def test_sec_reviewed_identifier_conflict_preserves_stable_security_id():
     registry, _path, _digest = load_security_master_corrections(
         "configs/security_master_corrections.yaml"
+    )
+    registry = _only_identifier_conflict(
+        registry, "klto_to_grml_sec_continuity"
     )
     current_profiles = _reviewed_identifier_conflict_profiles()
     changes = _reviewed_identifier_conflict_event()
@@ -579,6 +593,9 @@ def test_sec_reviewed_identifier_conflict_fails_on_new_provider_drift():
     registry, _path, _digest = load_security_master_corrections(
         "configs/security_master_corrections.yaml"
     )
+    registry = _only_identifier_conflict(
+        registry, "klto_to_grml_sec_continuity"
+    )
     drifted = _reviewed_identifier_conflict_profiles()
     drifted.loc[drifted["ticker"].eq("GRML"), "cusip"] = "DRIFTED"
     with pytest.raises(ValueError, match="GRML provider cusip drifted"):
@@ -588,3 +605,61 @@ def test_sec_reviewed_identifier_conflict_fails_on_new_provider_drift():
             registry,
             target_session=pd.Timestamp("2026-08-24"),
         )
+
+
+def test_albt_to_chga_sec_continuity_matches_frozen_provider_fields():
+    registry, _path, _digest = load_security_master_corrections(
+        "configs/security_master_corrections.yaml"
+    )
+    registry = _only_identifier_conflict(
+        registry, "albt_to_chga_sec_continuity"
+    )
+    common = {
+        "asset_type": "STOCK",
+        "exchange": "NASDAQ",
+        "country": "US",
+        "currency": "USD",
+        "cik": "0001630212",
+        "sector": "Technology",
+        "sub_industry": "Software - Application",
+    }
+    profiles = pd.DataFrame([
+        {
+            **common,
+            "ticker": "ALBT",
+            "name": "Avalon GloboCare Corp.",
+            "isin": "US05344R3021",
+            "cusip": "05344R302",
+            "listing_date": "2018-03-27",
+            "trading_status": "INACTIVE",
+            "is_active": False,
+        },
+        {
+            **common,
+            "ticker": "CHGA",
+            "name": "Change Agents Corp.",
+            "isin": "US05344R4011",
+            "cusip": "05344R401",
+            "listing_date": "2026-07-22",
+            "trading_status": "ACTIVE",
+            "is_active": True,
+        },
+    ])
+    changes = pd.DataFrame([{
+        "date": "2026-07-22",
+        "old_ticker": "ALBT",
+        "new_ticker": "CHGA",
+        "company_name": "Change Agents Corporation Common Stock",
+    }])
+
+    reviewed_edges, audit = apply_reviewed_provider_identifier_conflicts(
+        profiles,
+        changes,
+        registry,
+        target_session=pd.Timestamp("2026-08-31"),
+    )
+
+    assert reviewed_edges == {
+        ("ALBT", "CHGA", pd.Timestamp("2026-07-22"))
+    }
+    assert audit[0]["action"] == "SEC_CONTINUITY_APPROVED"

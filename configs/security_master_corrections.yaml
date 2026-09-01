@@ -10,6 +10,36 @@ universe: US_SECURITY_MASTER
 # filings establish continuity. These entries authorize only the exact dated
 # lineage edge; raw provider CUSIP/ISIN values remain unchanged and auditable.
 reviewed_provider_identifier_conflicts:
+  - id: albt_to_chga_sec_continuity
+    effective_date: "2026-07-22"
+    old_ticker: ALBT
+    new_ticker: CHGA
+    old_profile:
+      name_contains: "Avalon GloboCare"
+      asset_type: STOCK
+      exchange: NASDAQ
+      cik: "0001630212"
+      isin: US05344R3021
+      cusip: 05344R302
+      listing_date: "2018-03-27"
+      is_active: false
+    new_profile:
+      name_contains: "Change Agents"
+      asset_type: STOCK
+      exchange: NASDAQ
+      cik: "0001630212"
+      isin: US05344R4011
+      cusip: 05344R401
+      listing_date: "2026-07-22"
+      is_active: true
+    provider_event:
+      company_name_contains: "Change Agents Corporation Common Stock"
+    decision: SAME_LISTED_ISSUE
+    reason: "The SEC registrant history and 2026-07-21 Form 8-K establish an ALBT-to-CHGA company-name and ticker change effective 2026-07-22 and explicitly state that common-stock CUSIP 05344R302 remained unchanged; FMP nevertheless assigned conflicting new CUSIP/ISIN values."
+    sources:
+      - "https://www.sec.gov/Archives/edgar/data/1630212/000121390026079830/ea0298573-8k_change.htm"
+      - "https://www.sec.gov/Archives/edgar/data/1630212/000121390026090229/ea0301266-10q_change.htm"
+
   - id: klto_to_grml_sec_continuity
     effective_date: "2026-03-12"
     old_ticker: KLTO
