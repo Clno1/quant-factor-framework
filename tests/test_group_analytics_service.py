@@ -109,7 +109,7 @@ class _MemoryMarketProvider:
         self.calls = 0
         self.last_diagnostics = {"provider": "TEST_MEMORY"}
 
-    def snapshot(self, *, symbols, benchmark, force=False) -> EODMarketSnapshot:
+    def snapshot(self, *, symbols, benchmark, asof=None, force=False) -> EODMarketSnapshot:
         del force
         self.calls += 1
         sessions = pd.to_datetime(

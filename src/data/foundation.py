@@ -1027,6 +1027,18 @@ def _rebase_parent_to_fetched_scale(
     return parent, audit
 
 
+def _merge_candidate_bars(
+    previous: pd.DataFrame,
+    fetched: pd.DataFrame,
+) -> pd.DataFrame:
+    """Merge parent and fetched bars without object-coercing a full rebuild."""
+    if previous.empty:
+        return fetched.copy()
+    if fetched.empty:
+        return previous.copy()
+    return pd.concat([previous, fetched], ignore_index=True)
+
+
 def _filter_non_xnys_bars(
     bars: pd.DataFrame,
     *,
@@ -1823,7 +1835,7 @@ class MarketDataWriter:
                     previous,
                     fetched,
                 )
-                candidate = pd.concat([previous, fetched], ignore_index=True)
+                candidate = _merge_candidate_bars(previous, fetched)
                 candidate["date"] = pd.to_datetime(
                     candidate["date"], errors="coerce"
                 ).dt.normalize()
@@ -2343,7 +2355,11 @@ class MarketDataReader:
                     f"Data version {version.version_id} belongs to "
                     f"{version.universe}, not {universe}"
                 )
-            self.verify_version(version)
+            # Authenticate the immutable index and metadata here. Bounded bar
+            # readers hash the exact child partitions they consume in
+            # ``partition_paths``; re-hashing every historical child before a
+            # small query turns routine consumers into full-publication audits.
+            self.verify_version(version, verify_partition_children=False)
             return version
         if isinstance(version, str):
             return self.require_version(universe, version)
@@ -2522,7 +2538,13 @@ class MarketDataReader:
     ) -> dict[str, pd.DataFrame]:
         requested = list(tickers) if tickers is not None else None
         selected = self._resolve_version(universe, version)
-        manifest = self.verify_version(selected)
+        if selected.universe == "US_EQUITY_COVERAGE" and requested is None:
+            raise DataFoundationError(
+                f"[{universe}] partitioned broad coverage cannot be loaded as "
+                "an unrestricted Pandas wide table; provide an explicit ticker "
+                "subset or use BroadCoverageReader with date/column predicates"
+            )
+        manifest = self.verify_version(selected, require_price_semantics=True)
         if (
             manifest.get("bars_storage_type") == "PARTITIONED_PARQUET_V1"
             and requested is None
@@ -2610,6 +2632,8 @@ class MarketDataReader:
                 metadata,
                 "market_cap_policy",
             )
+            market_cap.attrs["layout"] = "ticker_snapshot"
+            market_cap.attrs["is_point_in_time"] = False
             out["market_cap"] = market_cap
         if require_open and (
             out["open"].empty or out["open"].isna().all(axis=None)

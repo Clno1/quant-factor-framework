@@ -492,6 +492,7 @@ class MomentumSourceTests(unittest.TestCase):
 
             self.assertEqual(len(calls), 1)
             self.assertEqual(calls[0]["end"], SOURCE)
+            self.assertEqual(calls[0]["ticker_selector"](universe), ["GOOD", "QQQ"])
             self.assertEqual(result["dataset_version_id"], "version-test")
             self.assertEqual(result["data_contract"], contract_payload)
 
@@ -1328,6 +1329,59 @@ class ServiceTests(unittest.TestCase):
                 momentum["metadata"]["universe_manifest_source_session"], SOURCE
             )
 
+    def test_prepare_freezes_payloads_without_delivery_or_preview(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            momentum_source = _Source(_momentum_report())
+            group_source = _Source(_group_report())
+            service, calls = self._service(
+                temporary,
+                {"momentum": [], "sector": []},
+                momentum=momentum_source,
+                groups=group_source,
+            )
+
+            first = service.run(prepare=True, requested_session=TARGET)
+            second = service.run(prepare=True, requested_session=TARGET)
+
+            self.assertEqual(first["mode"], "prepare")
+            self.assertEqual(first["exit_code"], 0)
+            self.assertEqual(
+                {result["status"] for result in first["results"]}, {"PREPARED"}
+            )
+            self.assertNotIn("preview_files", first)
+            self.assertEqual(
+                {result["status"] for result in second["results"]},
+                {"PREPARED_ALREADY_EXISTS"},
+            )
+            self.assertEqual(momentum_source.calls, 1)
+            self.assertEqual(group_source.calls, 1)
+            self.assertEqual(calls, {"momentum": [], "sector": []})
+            store = DigestStateStore(Path(temporary) / "state.sqlite3")
+            for channel in DigestChannel:
+                self.assertEqual(store.get(TARGET, channel)["status"], "PENDING")
+
+    def test_scheduled_send_requires_a_prepared_payload(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            momentum_source = _Source(_momentum_report())
+            service, calls = self._service(
+                temporary,
+                {"momentum": [], "sector": []},
+                momentum=momentum_source,
+            )
+
+            summary = service.run(
+                send=True,
+                scheduled=True,
+                channels=[DigestChannel.MOMENTUM],
+            )
+
+            self.assertEqual(summary["exit_code"], 1)
+            self.assertEqual(
+                summary["results"][0]["error_code"], "PREPARED_PAYLOAD_MISSING"
+            )
+            self.assertEqual(momentum_source.calls, 0)
+            self.assertEqual(calls["momentum"], [])
+
     def test_partial_failure_retries_only_failed_channel(self):
         with tempfile.TemporaryDirectory() as temporary:
             failure = DiscordDeliveryError(
@@ -1610,6 +1664,12 @@ class ServiceTests(unittest.TestCase):
             late = datetime(2026, 7, 16, 13, 29, 50, tzinfo=timezone.utc)
             calls = []
             store = DigestStateStore(Path(temporary) / "state.sqlite3")
+            store.stage(
+                TARGET,
+                DigestChannel.MOMENTUM,
+                SOURCE,
+                {"content": "prepared", "allowed_mentions": {"parse": []}},
+            )
             service = PremarketDigestService(
                 _settings(Path(temporary)),
                 state_store=store,

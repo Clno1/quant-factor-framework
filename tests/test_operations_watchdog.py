@@ -179,6 +179,94 @@ def test_missing_premarket_channels_are_visible_as_expected_deliveries(
     assert {row.status for row in result.deliveries} == {"MISSED"}
 
 
+def _write_premarket_deliveries(
+    path: Path,
+    *,
+    created_at: str,
+    status: str = "PENDING",
+) -> None:
+    with sqlite3.connect(path) as connection:
+        connection.executescript("""
+            CREATE TABLE deliveries (
+                target_session TEXT NOT NULL,
+                channel TEXT NOT NULL,
+                destination TEXT NOT NULL,
+                source_session TEXT NOT NULL,
+                payload_hash TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                message_id TEXT,
+                last_error_code TEXT,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                sent_at TEXT,
+                retryable INTEGER,
+                PRIMARY KEY (target_session, channel)
+            );
+        """)
+        for channel in ("momentum", "sector-rotation"):
+            connection.execute(
+                """INSERT INTO deliveries VALUES
+                   (?, ?, 'discord:test', '2026-08-11', 'sha256:test', '{}',
+                    ?, 0, NULL, NULL, NULL, ?, ?, NULL, 1)""",
+                ("2026-08-12", channel, status, created_at, created_at),
+            )
+
+
+def test_pending_premarket_rows_become_missed_after_delivery_deadline(
+    monkeypatch,
+    tmp_path: Path,
+):
+    database = tmp_path / "premarket.sqlite3"
+    _write_premarket_deliveries(
+        database,
+        created_at="2026-08-12T14:25:00+00:00",
+    )
+    monkeypatch.setattr("src.operations.adapters.delivery.PREMARKET_DB", database)
+    registry = OperationsRegistry("configs/operations.yaml")
+
+    result = collect_delivery_evidence(
+        [registry.get("premarket_digest")],
+        now=datetime(2026, 8, 12, 14, 35, tzinfo=timezone.utc),
+        observed_at="2026-08-12T14:35:00+00:00",
+    )
+
+    snapshot = result.snapshots[0]
+    assert snapshot.status == JobStatus.MISSED
+    assert snapshot.metrics["past_deadline"] is True
+    assert {row.status for row in result.deliveries} == {"MISSED"}
+    assert {row.metadata["source_status"] for row in result.deliveries} == {"PENDING"}
+    assert result.runs[0].status == JobStatus.MISSED
+
+
+def test_complete_premarket_payloads_are_degraded_when_prepared_late(
+    monkeypatch,
+    tmp_path: Path,
+):
+    database = tmp_path / "premarket.sqlite3"
+    _write_premarket_deliveries(
+        database,
+        created_at="2026-08-12T13:25:00+00:00",
+    )
+    monkeypatch.setattr("src.operations.adapters.delivery.PREMARKET_DB", database)
+    registry = OperationsRegistry("configs/operations.yaml")
+
+    result = collect_delivery_evidence(
+        [registry.get("premarket_digest_prepare")],
+        now=datetime(2026, 8, 12, 14, 0, tzinfo=timezone.utc),
+        observed_at="2026-08-12T14:00:00+00:00",
+    )
+
+    snapshot = result.snapshots[0]
+    assert snapshot.status == JobStatus.DEGRADED
+    assert snapshot.metrics["prepared_late"] is True
+    assert snapshot.last_success_at == "2026-08-12T13:25:00+00:00"
+    assert result.runs[0].status == JobStatus.DEGRADED
+    assert result.runs[0].metadata["prepared_late"] is True
+
+
 def test_hourly_retries_do_not_count_as_distinct_scheduled_hours(
     monkeypatch,
     tmp_path: Path,
@@ -272,3 +360,144 @@ def test_intraday_requires_an_eod_observation_after_market_close(
         [job], now=now, observed_at="2026-08-12T21:31:00+00:00"
     )
     assert complete.snapshots[0].status == JobStatus.SUCCESS
+
+
+def test_intraday_exposes_cup_handle_shadow_metrics(monkeypatch, tmp_path: Path):
+    database = tmp_path / "intraday-cup.sqlite3"
+    heartbeat = {
+        "session_date": "2026-08-12",
+        "updated_at": "2026-08-12T16:00:00+00:00",
+        "phase": "completed",
+        "mode": "shadow",
+        "errors": [],
+        "cup_handle": {
+            "mode": "shadow",
+            "algorithm_version": "daily-cup-5m-handle-shadow-v1",
+            "error_count": 0,
+        },
+    }
+    with sqlite3.connect(database) as connection:
+        connection.executescript("""
+            CREATE TABLE heartbeat (
+                singleton INTEGER PRIMARY KEY, updated_at TEXT NOT NULL,
+                payload_json TEXT NOT NULL
+            );
+            CREATE TABLE cup_handle_cycles (
+                session_date TEXT, observed_at TEXT
+            );
+            CREATE TABLE cup_handle_evaluations (
+                session_date TEXT, outcome TEXT, rejection_reason TEXT,
+                latency_ms REAL, bar_count INTEGER
+            );
+            CREATE TABLE cup_handle_session_observations (
+                session_date TEXT, algorithm_version TEXT, status TEXT
+            );
+        """)
+        connection.execute(
+            "INSERT INTO heartbeat VALUES (1, ?, ?)",
+            (heartbeat["updated_at"], json.dumps(heartbeat)),
+        )
+        connection.execute(
+            "INSERT INTO cup_handle_cycles VALUES (?, ?)",
+            ("2026-08-12", "2026-08-12T16:00:00+00:00"),
+        )
+        connection.executemany(
+            "INSERT INTO cup_handle_evaluations VALUES (?, ?, ?, ?, ?)",
+            [
+                ("2026-08-12", "MATCH", "MATCH", 1.0, 20),
+                ("2026-08-12", "REJECTED", "RIM_NOT_BROKEN", 2.0, 20),
+                ("2026-08-12", "REJECTED", "RIM_NOT_BROKEN", 3.0, 20),
+            ],
+        )
+    monkeypatch.setattr("src.operations.adapters.delivery.INTRADAY_DB", database)
+    registry = OperationsRegistry("configs/operations.yaml")
+
+    result = collect_delivery_evidence(
+        [registry.get("intraday_momentum")],
+        now=datetime(2026, 8, 12, 16, 0, tzinfo=timezone.utc),
+        observed_at="2026-08-12T16:00:00+00:00",
+    )
+
+    metrics = result.snapshots[0].metrics
+    assert metrics["茶杯柄命中数"] == 1
+    assert metrics["茶杯柄拒绝数"] == 2
+    assert metrics["茶杯柄主要拒绝原因"] == {"RIM_NOT_BROKEN": 2}
+    assert metrics["茶杯柄检测延迟P95毫秒"] == 2.9
+    assert metrics["茶杯柄最大序列长度"] == 20
+
+
+def test_intraday_keeps_latest_failed_cup_session_visible(monkeypatch, tmp_path: Path):
+    database = tmp_path / "intraday-cup-failed.sqlite3"
+    heartbeat = {
+        "session_date": "2026-08-31",
+        "updated_at": "2026-09-01T00:05:00+00:00",
+        "phase": "completed_session",
+        "mode": "shadow",
+        "errors": [],
+        "cup_handle": {
+            "mode": "shadow",
+            "algorithm_version": "daily-cup-5m-handle-shadow-v2",
+            "error_count": 0,
+        },
+    }
+    with sqlite3.connect(database) as connection:
+        connection.executescript("""
+            CREATE TABLE heartbeat (
+                singleton INTEGER PRIMARY KEY, updated_at TEXT NOT NULL,
+                payload_json TEXT NOT NULL
+            );
+            CREATE TABLE cup_handle_session_observations (
+                session_date TEXT, algorithm_version TEXT, status TEXT,
+                failure_reasons_json TEXT, evaluable_ticker_coverage REAL,
+                gap_ticker_count INTEGER, gap_ticker_ratio REAL,
+                gap_event_count INTEGER, gap_classification_counts_json TEXT
+            );
+        """)
+        connection.execute(
+            "INSERT INTO heartbeat VALUES (1, ?, ?)",
+            (heartbeat["updated_at"], json.dumps(heartbeat)),
+        )
+        connection.execute(
+            "INSERT INTO cup_handle_session_observations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "2026-08-31",
+                "daily-cup-5m-handle-shadow-v2",
+                "FAIL",
+                json.dumps(["EXCESSIVE_MINUTE_DATA_GAPS"]),
+                0.9,
+                4,
+                0.1,
+                5,
+                json.dumps({"UNRESOLVED_SOURCE_GAP": 5}),
+            ),
+        )
+    monkeypatch.setattr("src.operations.adapters.delivery.INTRADAY_DB", database)
+    registry = OperationsRegistry("configs/operations.yaml")
+
+    result = collect_delivery_evidence(
+        [registry.get("intraday_momentum")],
+        now=datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc),
+        observed_at="2026-09-01T12:00:00+00:00",
+    )
+
+    snapshot = result.snapshots[0]
+    assert snapshot.status == JobStatus.DEGRADED
+    assert "2026-08-31" in str(snapshot.status_reason)
+    assert snapshot.metrics["茶杯柄最近完整交易日状态"] == "FAIL"
+    assert snapshot.metrics["茶杯柄证据交易日"] == "2026-08-31"
+    assert snapshot.metrics["茶杯柄数据缺口股票数"] == 4
+    assert any(
+        incident.code == "CUP_HANDLE_SHADOW_SESSION_FAILED"
+        for incident in result.incidents
+    )
+
+    stale = collect_delivery_evidence(
+        [registry.get("intraday_momentum")],
+        now=datetime(2026, 9, 1, 14, 0, tzinfo=timezone.utc),
+        observed_at="2026-09-01T14:00:00+00:00",
+    )
+    assert stale.snapshots[0].status == JobStatus.STALE
+    assert any(
+        incident.code == "CUP_HANDLE_SHADOW_SESSION_FAILED"
+        for incident in stale.incidents
+    )

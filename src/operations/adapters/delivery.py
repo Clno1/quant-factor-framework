@@ -34,6 +34,7 @@ from src.operations.models import (
     RunStage,
 )
 from src.utils.market_calendar import is_xnys_session
+from src.breakouts.live.session import previous_xnys_sessions
 
 
 PREMARKET_DB = PROJECT_ROOT / "outputs" / "premarket_digest" / "state.sqlite3"
@@ -45,7 +46,39 @@ _CHANNEL_LABELS = {
     "sector-rotation": "盘前板块轮动",
     "hourly-momentum": "每小时动量摘要",
     "intraday-breakout": "盘中动量突破",
+    "cup-handle-breakout": "盘中茶杯柄突破",
 }
+
+
+def _p95(values: Iterable[float]) -> float | None:
+    ordered = sorted(float(value) for value in values)
+    if not ordered:
+        return None
+    position = (len(ordered) - 1) * 0.95
+    lower = int(position)
+    upper = min(len(ordered) - 1, lower + 1)
+    weight = position - lower
+    return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
+
+
+def _json_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    try:
+        parsed = json.loads(str(value or "[]"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def _json_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    try:
+        parsed = json.loads(str(value or "{}"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _delivery_state(status: JobStatus) -> str:
@@ -85,6 +118,8 @@ def _collect_premarket(
     target_rows = [row for row in rows if str(row.get("target_session")) == expected]
     required = [str(value) for value in job.evidence.get("required_channels", [])]
     by_channel = {str(row.get("channel")): row for row in target_rows}
+    deadline = parse_datetime(deadline_at)
+    past_deadline = bool(deadline and now > deadline)
     statuses: list[JobStatus] = []
     stages: list[RunStage] = []
     sent_times: list[str] = []
@@ -97,7 +132,7 @@ def _collect_premarket(
         elif source_status == "FAILED":
             status = JobStatus.FAILED
         elif source_status in {"PENDING", "SENDING"}:
-            status = JobStatus.RUNNING
+            status = JobStatus.MISSED if past_deadline else JobStatus.RUNNING
         statuses.append(status)
         sent_at = iso_utc((row or {}).get("sent_at"))
         if sent_at:
@@ -109,12 +144,21 @@ def _collect_premarket(
             started_at=iso_utc((row or {}).get("created_at")),
             completed_at=sent_at,
             detail=(
-                f"投递状态 {source_status}，尝试 {int(row.get('attempts') or 0)} 次"
-                if row else "未找到当日投递记录"
+                (
+                    f"已超过投递截止时间，源状态仍为 {source_status}，"
+                    f"尝试 {int(row.get('attempts') or 0)} 次"
+                )
+                if row and status == JobStatus.MISSED
+                else (
+                    f"投递状态 {source_status}，尝试 {int(row.get('attempts') or 0)} 次"
+                    if row else "未找到当日投递记录"
+                )
             ),
             metadata={
                 "message_id": (row or {}).get("message_id"),
                 "destination": (row or {}).get("destination"),
+                "source_status": source_status or None,
+                "past_deadline": past_deadline,
             },
         ))
     all_sent = bool(statuses) and all(value == JobStatus.SUCCESS for value in statuses)
@@ -122,6 +166,8 @@ def _collect_premarket(
         status = JobStatus.SUCCESS
     elif any(value == JobStatus.FAILED for value in statuses):
         status = JobStatus.FAILED
+    elif past_deadline and any(value == JobStatus.MISSED for value in statuses):
+        status = JobStatus.MISSED
     elif any(value == JobStatus.RUNNING for value in statuses):
         status = JobStatus.RUNNING
     else:
@@ -145,7 +191,9 @@ def _collect_premarket(
             job_id=job.job_id,
             channel=_CHANNEL_LABELS.get(channel, channel),
             status=(
-                str(row.get("status"))
+                _delivery_state(stage.status)
+                if row and stage.status == JobStatus.MISSED
+                else str(row.get("status"))
                 if row
                 else (
                     "SCHEDULED"
@@ -167,6 +215,8 @@ def _collect_premarket(
                 "channel_id": channel,
                 "destination": (row or {}).get("destination"),
                 "source_session": (row or {}).get("source_session"),
+                "source_status": str((row or {}).get("status") or "") or None,
+                "past_deadline": past_deadline,
                 "expected": True,
             },
         ))
@@ -192,9 +242,17 @@ def _collect_premarket(
             ),
             error_summary=next(
                 (safe_text(row.get("last_error")) for row in target_rows if row.get("last_error")),
-                None,
+                "投递窗口结束后仍有业务频道未发送"
+                if status == JobStatus.MISSED else None,
             ),
-            metadata={"channels": required},
+            metadata={
+                "channels": required,
+                "past_deadline": past_deadline,
+                "source_statuses": {
+                    channel: str((by_channel.get(channel) or {}).get("status") or "")
+                    for channel in required
+                },
+            },
             stages=tuple(stages),
         ))
     result.snapshots.append(JobSnapshot(
@@ -207,7 +265,11 @@ def _collect_premarket(
         status_reason=(
             "动量与板块轮动两个频道均已发送"
             if all_sent
-            else "当日两个业务频道尚未全部完成投递"
+            else (
+                "投递窗口已结束，存在未发送的业务频道"
+                if status == JobStatus.MISSED
+                else "当日两个业务频道尚未全部完成投递"
+            )
         ),
         scheduled_for=scheduled_for,
         deadline_at=deadline_at,
@@ -215,6 +277,108 @@ def _collect_premarket(
         metrics={
             "channels_required": len(required),
             "channels_sent": sum(value == JobStatus.SUCCESS for value in statuses),
+            "past_deadline": past_deadline,
+        },
+    ))
+    return result
+
+
+def _collect_premarket_prepare(
+    job: JobDefinition,
+    *,
+    now: datetime,
+    observed_at: str,
+) -> CollectionResult:
+    """Report payload preparation independently from the later delivery state."""
+    result = CollectionResult()
+    expected = expected_target_session(job, now=now)
+    scheduled_for, deadline_at = schedule_bounds(
+        job,
+        now=now,
+        target_session=expected,
+    )
+    rows = (
+        sqlite_rows(
+            PREMARKET_DB,
+            "SELECT * FROM deliveries ORDER BY target_session DESC, channel",
+        )
+        if "deliveries" in sqlite_tables(PREMARKET_DB)
+        else []
+    )
+    target_rows = [row for row in rows if str(row.get("target_session")) == expected]
+    required = [str(value) for value in job.evidence.get("required_channels", [])]
+    by_channel = {str(row.get("channel")): row for row in target_rows}
+    prepared = [channel for channel in required if by_channel.get(channel) is not None]
+    completed_at = max(
+        filter(None, [iso_utc(row.get("created_at")) for row in target_rows]),
+        default=None,
+    )
+    completed = parse_datetime(completed_at)
+    deadline = parse_datetime(deadline_at)
+    prepared_late = bool(completed and deadline and completed > deadline)
+    if required and len(prepared) == len(required):
+        if prepared_late:
+            status = JobStatus.DEGRADED
+            reason = "两个盘前频道的 payload 已生成，但晚于预计算截止时间"
+        else:
+            status = JobStatus.SUCCESS
+            reason = "两个盘前频道的不可变 payload 均已提前冻结"
+    else:
+        status = time_relative_status(
+            now=now,
+            scheduled_for=scheduled_for,
+            deadline_at=deadline_at,
+            has_older_evidence=bool(rows),
+        )
+        reason = (
+            "等待盘前摘要预计算时间"
+            if status == JobStatus.SCHEDULED
+            else f"当日仅准备 {len(prepared)}/{len(required)} 个频道"
+        )
+    run_id = stable_id("run_", job.job_id, expected)
+    if target_rows:
+        result.runs.append(OperationRun(
+            run_id=run_id,
+            source_run_id=expected,
+            job_id=job.job_id,
+            status=status,
+            source="premarket_digest.deliveries",
+            observed_at=observed_at,
+            target_session=expected,
+            stage="PAYLOADS_PREPARED",
+            started_at=min(
+                filter(None, [iso_utc(row.get("created_at")) for row in target_rows]),
+                default=None,
+            ),
+            completed_at=completed_at,
+            rows_processed=len(prepared),
+            metadata={
+                "required_channels": required,
+                "prepared_channels": prepared,
+                "delivery_states": {
+                    channel: str((by_channel.get(channel) or {}).get("status") or "")
+                    for channel in required
+                },
+                "prepared_late": prepared_late,
+            },
+        ))
+    result.snapshots.append(JobSnapshot(
+        job_id=job.job_id,
+        status=status,
+        observed_at=observed_at,
+        target_session=expected,
+        run_id=run_id if target_rows else None,
+        stage="盘前摘要预计算",
+        status_reason=reason,
+        scheduled_for=scheduled_for,
+        deadline_at=deadline_at,
+        last_success_at=completed_at if len(prepared) == len(required) else None,
+        progress_current=float(len(prepared)),
+        progress_total=float(len(required)),
+        metrics={
+            "channels_required": len(required),
+            "channels_prepared": len(prepared),
+            "prepared_late": prepared_late,
         },
     ))
     return result
@@ -440,6 +604,97 @@ def _parse_payload(row: dict[str, Any] | None) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _collect_intraday_candidate_prepare(
+    job: JobDefinition,
+    *,
+    now: datetime,
+    observed_at: str,
+) -> CollectionResult:
+    result = CollectionResult()
+    expected = expected_target_session(job, now=now)
+    scheduled_for, deadline_at = schedule_bounds(
+        job,
+        now=now,
+        target_session=expected,
+    )
+    rows = (
+        sqlite_rows(
+            INTRADAY_DB,
+            """SELECT * FROM candidate_snapshots
+               ORDER BY session_date DESC, created_at DESC LIMIT 20""",
+        )
+        if "candidate_snapshots" in sqlite_tables(INTRADAY_DB)
+        else []
+    )
+    row = next(
+        (item for item in rows if str(item.get("session_date") or "") == expected),
+        None,
+    )
+    payload = _parse_payload(row)
+    completed_at = iso_utc((row or {}).get("created_at"))
+    if row is not None:
+        status = JobStatus.SUCCESS
+        reason = "当日宽基动量候选快照已提前生成"
+    else:
+        status = time_relative_status(
+            now=now,
+            scheduled_for=scheduled_for,
+            deadline_at=deadline_at,
+            has_older_evidence=bool(rows),
+        )
+        reason = (
+            "等待盘前候选预计算时间"
+            if status == JobStatus.SCHEDULED
+            else "当前交易日尚未生成候选快照"
+        )
+    run_id = stable_id("run_", job.job_id, expected)
+    contract = payload.get("data_contract") or {}
+    if row is not None:
+        result.runs.append(OperationRun(
+            run_id=run_id,
+            source_run_id=expected,
+            job_id=job.job_id,
+            status=status,
+            source="intraday_momentum_monitor.candidate_snapshots",
+            observed_at=observed_at,
+            target_session=expected,
+            stage="CANDIDATES_PREPARED",
+            started_at=completed_at,
+            completed_at=completed_at,
+            rows_processed=int(payload.get("candidate_count") or 0),
+            input_versions={
+                "data_universe": contract.get("data_universe"),
+                "dataset_version_id": contract.get("dataset_version_id"),
+                "bars_sha256": contract.get("bars_sha256"),
+            },
+            metadata={
+                "source_data_date": payload.get("source_data_date"),
+                "candidate_count": payload.get("candidate_count"),
+            },
+        ))
+    result.snapshots.append(JobSnapshot(
+        job_id=job.job_id,
+        status=status,
+        observed_at=observed_at,
+        target_session=expected,
+        run_id=run_id if row is not None else None,
+        stage="盘中动量候选预计算",
+        status_reason=reason,
+        scheduled_for=scheduled_for,
+        deadline_at=deadline_at,
+        last_success_at=completed_at,
+        progress_current=(1.0 if row is not None else 0.0),
+        progress_total=1.0,
+        metrics={
+            "source_data_date": payload.get("source_data_date"),
+            "candidate_count": payload.get("candidate_count"),
+            "data_universe": contract.get("data_universe"),
+            "dataset_version_id": contract.get("dataset_version_id"),
+        },
+    ))
+    return result
+
+
 def _collect_intraday(
     job: JobDefinition,
     *,
@@ -455,6 +710,8 @@ def _collect_intraday(
     )
     heartbeat_row = heartbeat_rows[0] if heartbeat_rows else None
     heartbeat = _parse_payload(heartbeat_row)
+    cup_heartbeat = heartbeat.get("cup_handle") or {}
+    cup_algorithm_version = str(cup_heartbeat.get("algorithm_version") or "")
     heartbeat_at = iso_utc(
         heartbeat.get("updated_at") or (heartbeat_row or {}).get("updated_at")
     )
@@ -478,6 +735,29 @@ def _collect_intraday(
             if str(row.get("session_date") or "") == expected
         ),
         None,
+    )
+    cup_observations: list[dict[str, Any]] = []
+    if "cup_handle_session_observations" in tables:
+        cup_observations = sqlite_rows(
+            INTRADAY_DB,
+            """SELECT * FROM cup_handle_session_observations
+               ORDER BY session_date DESC LIMIT 20""",
+        )
+    current_cup_observation = next(
+        (
+            row for row in cup_observations
+            if str(row.get("session_date") or "") == expected
+        ),
+        None,
+    )
+    cup_observations_for_version = [
+        row for row in cup_observations
+        if not cup_algorithm_version
+        or str(row.get("algorithm_version") or "") == cup_algorithm_version
+    ]
+    latest_cup_observation = (
+        cup_observations_for_version[0]
+        if cup_observations_for_version else None
     )
     timeout = int(job.schedule.get("heartbeat_timeout_seconds") or 120)
     if not heartbeat:
@@ -535,6 +815,52 @@ def _collect_intraday(
         status = JobStatus.SCHEDULED
         reason = "等待下一个交易时段启动"
 
+    if (
+        int(cup_heartbeat.get("error_count") or 0) > 0
+        and status in {JobStatus.RUNNING, JobStatus.SUCCESS}
+    ):
+        status = JobStatus.DEGRADED
+        reason = "茶杯柄检测最近周期存在错误"
+    latest_cup_failed = bool(
+        latest_cup_observation
+        and str(latest_cup_observation.get("status") or "") != "PASS"
+    )
+    if latest_cup_failed:
+        latest_session = str(
+            latest_cup_observation.get("session_date") or "未知交易日"
+        )
+        failures = _json_list(
+            latest_cup_observation.get("failure_reasons_json")
+        )
+        cup_reason = (
+            f"最近完整交易日 {latest_session} 的茶杯柄影子验收未通过"
+            + (f"：{', '.join(map(str, failures))}" if failures else "")
+        )
+        if status not in {
+            JobStatus.FAILED,
+            JobStatus.MISSED,
+            JobStatus.STALE,
+            JobStatus.BLOCKED,
+        }:
+            status = JobStatus.DEGRADED
+            reason = cup_reason
+        result.incidents.append(IncidentCandidate(
+            fingerprint=(
+                "intraday_momentum:cup_handle_latest_session_failed:"
+                f"{cup_algorithm_version or 'unknown'}"
+            ),
+            severity=IncidentSeverity.WARNING,
+            code="CUP_HANDLE_SHADOW_SESSION_FAILED",
+            title="茶杯柄最近完整交易日未通过",
+            detail=cup_reason,
+            job_id=job.job_id,
+            target_session=latest_session,
+            metadata={
+                "algorithm_version": cup_algorithm_version,
+                "failure_reasons": failures,
+            },
+        ))
+
     cycles: list[dict[str, Any]] = []
     if "monitor_cycles" in tables:
         cycles = sqlite_rows(
@@ -542,6 +868,47 @@ def _collect_intraday(
             "SELECT * FROM monitor_cycles WHERE session_date=? ORDER BY observed_at DESC LIMIT 500",
             (expected,),
         )
+    cup_cycles: list[dict[str, Any]] = []
+    cup_evaluations: list[dict[str, Any]] = []
+    cup_evidence_session = (
+        expected
+        if heartbeat_session == expected
+        else str((latest_cup_observation or {}).get("session_date") or expected)
+    )
+    if "cup_handle_cycles" in tables:
+        cup_cycles = sqlite_rows(
+            INTRADAY_DB,
+            """SELECT * FROM cup_handle_cycles
+               WHERE session_date=? ORDER BY observed_at DESC LIMIT 500""",
+            (cup_evidence_session,),
+        )
+    if "cup_handle_evaluations" in tables:
+        cup_evaluations = sqlite_rows(
+            INTRADAY_DB,
+            """SELECT outcome, rejection_reason, latency_ms, bar_count
+               FROM cup_handle_evaluations WHERE session_date=?""",
+            (cup_evidence_session,),
+        )
+    cup_outcome_counts: dict[str, int] = {}
+    cup_rejection_counts: dict[str, int] = {}
+    for row in cup_evaluations:
+        outcome = str(row.get("outcome") or "ERROR")
+        cup_outcome_counts[outcome] = cup_outcome_counts.get(outcome, 0) + 1
+        if outcome != "MATCH":
+            rejection = str(row.get("rejection_reason") or "UNKNOWN")
+            cup_rejection_counts[rejection] = cup_rejection_counts.get(rejection, 0) + 1
+    cup_latency_p95 = _p95(
+        float(row.get("latency_ms") or 0.0) for row in cup_evaluations
+    )
+    cup_expected_shadow = previous_xnys_sessions(expected, 5)
+    cup_by_session = {
+        str(row.get("session_date") or ""): row
+        for row in cup_observations_for_version
+    }
+    cup_shadow_passed = sum(
+        str((cup_by_session.get(session) or {}).get("status") or "") == "PASS"
+        for session in cup_expected_shadow
+    )
     sent_count = 0
     failed_count = 0
     outbox_rows: list[dict[str, Any]] = []
@@ -595,6 +962,14 @@ def _collect_intraday(
                 "active_count": heartbeat.get("active_count"),
                 "cycle_count": len(cycles),
                 "signal_sent_count": sent_count,
+                "cup_handle": {
+                    "algorithm_version": cup_algorithm_version,
+                    "mode": cup_heartbeat.get("mode"),
+                    "evidence_session": cup_evidence_session,
+                    "outcome_counts": cup_outcome_counts,
+                    "detection_p95_ms": cup_latency_p95,
+                    "latest_completed_observation": latest_cup_observation,
+                },
             },
         ))
     for row in outbox_rows:
@@ -607,7 +982,11 @@ def _collect_intraday(
                 row.get("trigger_family"),
             ),
             job_id=job.job_id,
-            channel=f"{_CHANNEL_LABELS['intraday-breakout']} · {row.get('ticker')}",
+            channel=(
+                f"{_CHANNEL_LABELS['cup-handle-breakout']} · {row.get('ticker')}"
+                if str(row.get("trigger_family") or "") == "CUP_HANDLE_BREAKOUT"
+                else f"{_CHANNEL_LABELS['intraday-breakout']} · {row.get('ticker')}"
+            ),
             status=str(row.get("status") or "UNKNOWN"),
             observed_at=observed_at,
             target_session=expected,
@@ -673,6 +1052,72 @@ def _collect_intraday(
             "signals_failed": failed_count,
             "mode": heartbeat.get("mode"),
             "latest_observation": observations[0] if observations else None,
+            "茶杯柄算法版本": cup_heartbeat.get("algorithm_version"),
+            "茶杯柄模式": cup_heartbeat.get("mode"),
+            "茶杯柄证据交易日": cup_evidence_session,
+            "茶杯柄最近完整交易日状态": (
+                str((latest_cup_observation or {}).get("status") or "") or None
+            ),
+            "茶杯柄最近完整交易日": (
+                str((latest_cup_observation or {}).get("session_date") or "") or None
+            ),
+            "茶杯柄评估周期": len(cup_cycles),
+            "茶杯柄命中数": cup_outcome_counts.get("MATCH", 0),
+            "茶杯柄拒绝数": cup_outcome_counts.get("REJECTED", 0),
+            "茶杯柄等待数": cup_outcome_counts.get("NOT_READY", 0),
+            "茶杯柄不可评估数": cup_outcome_counts.get("UNEVALUABLE", 0),
+            "茶杯柄错误数": cup_outcome_counts.get("ERROR", 0),
+            "茶杯柄检测延迟P95毫秒": (
+                round(cup_latency_p95, 3) if cup_latency_p95 is not None else None
+            ),
+            "茶杯柄最大序列长度": max(
+                (int(row.get("bar_count") or 0) for row in cup_evaluations),
+                default=0,
+            ),
+            "茶杯柄主要拒绝原因": dict(
+                sorted(
+                    cup_rejection_counts.items(),
+                    key=lambda item: (-item[1], item[0]),
+                )[:8]
+            ),
+            "茶杯柄影子验收进度": f"{cup_shadow_passed}/5",
+            "茶杯柄影子缺失交易日": [
+                session for session in cup_expected_shadow
+                if session not in cup_by_session
+            ],
+            "茶杯柄影子失败交易日": [
+                session for session in cup_expected_shadow
+                if session in cup_by_session
+                and str(cup_by_session[session].get("status") or "") != "PASS"
+            ],
+            "茶杯柄可评估股票覆盖率": (
+                latest_cup_observation.get("evaluable_ticker_coverage")
+                if latest_cup_observation else None
+            ),
+            "茶杯柄数据缺口股票数": (
+                latest_cup_observation.get("gap_ticker_count")
+                if latest_cup_observation else None
+            ),
+            "茶杯柄数据缺口股票比例": (
+                latest_cup_observation.get("gap_ticker_ratio")
+                if latest_cup_observation else None
+            ),
+            "茶杯柄数据缺口事件数": (
+                latest_cup_observation.get("gap_event_count")
+                if latest_cup_observation else None
+            ),
+            "茶杯柄数据缺口分类": (
+                _json_dict(
+                    latest_cup_observation.get(
+                        "gap_classification_counts_json"
+                    )
+                )
+                if latest_cup_observation else {}
+            ),
+            "茶杯柄独立影子验收": (
+                current_cup_observation
+                or latest_cup_observation
+            ),
         },
     ))
     return result
@@ -688,8 +1133,20 @@ def collect_delivery_evidence(
     for job in jobs:
         if job.adapter == "premarket":
             result.extend(_collect_premarket(job, now=now, observed_at=observed_at))
+        elif job.adapter == "premarket_prepare":
+            result.extend(_collect_premarket_prepare(
+                job,
+                now=now,
+                observed_at=observed_at,
+            ))
         elif job.adapter == "hourly_momentum":
             result.extend(_collect_hourly(job, now=now, observed_at=observed_at))
+        elif job.adapter == "intraday_candidate_prepare":
+            result.extend(_collect_intraday_candidate_prepare(
+                job,
+                now=now,
+                observed_at=observed_at,
+            ))
         elif job.adapter == "intraday_momentum":
             result.extend(_collect_intraday(job, now=now, observed_at=observed_at))
     return result

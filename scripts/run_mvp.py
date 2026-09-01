@@ -507,10 +507,23 @@ def run_pipeline_for_universe(
             (bundle.contract.benchmark or {}).get("ticker")
         )
 
-        # If point-in-time market cap is available, persist a size-controlled
-        # independent double-sort diagnostic for robustness checks.
+        # Only a version-bound date x ticker PIT market-cap matrix may enter the
+        # historical double sort.  A latest-profile ticker snapshot is useful
+        # for today's display, but would inject today's size into the past.
         mcap = wide.get("market_cap")
-        if mcap is not None and not mcap.empty:
+        mcap_policy = str(
+            (mcap.attrs.get("market_cap_policy") if mcap is not None else "")
+            or ""
+        ).strip().upper()
+        mcap_is_pit = bool(
+            mcap is not None
+            and not mcap.empty
+            and isinstance(mcap.index, pd.DatetimeIndex)
+            and bool(mcap.columns.intersection(clean.columns).size)
+            and ("POINT_IN_TIME" in mcap_policy or mcap_policy.startswith("PIT"))
+        )
+        double_sort_status_path = fdir / "double_sort_status.json"
+        if mcap_is_pit:
             # 8) 如果有市值矩阵，额外做双重排序稳健性检验：
             #    先按市值分层，再在每个市值层内看因子是否仍然有效。
             #    这可以粗略判断因子是不是只在大/小市值股票里有效。
@@ -534,6 +547,40 @@ def run_pipeline_for_universe(
             )
             ds.factor_nav.to_frame("nav").to_parquet(
                 fdir / "double_sort_nav.parquet"
+            )
+            atomic_save_json(
+                {
+                    "status": "PUBLISHED",
+                    "market_cap_policy": mcap_policy,
+                    "rows": int(mcap.shape[0]),
+                    "tickers": int(mcap.shape[1]),
+                },
+                double_sort_status_path,
+            )
+        else:
+            atomic_save_json(
+                {
+                    "status": "BLOCKED_NO_PIT_MARKET_CAP",
+                    "market_cap_policy": mcap_policy or None,
+                    "observed_layout": (
+                        "date_x_ticker"
+                        if mcap is not None and isinstance(mcap.index, pd.DatetimeIndex)
+                        else "ticker_snapshot"
+                    ),
+                    "message": (
+                        "Double sort requires a version-bound historical "
+                        "date x ticker market-cap matrix. Current-profile market "
+                        "cap is never broadcast backward."
+                    ),
+                },
+                double_sort_status_path,
+            )
+            log.warning(
+                "[%s/%s] Double sort blocked: no PIT date x ticker market cap "
+                "(policy=%s)",
+                universe,
+                fname,
+                mcap_policy or "MISSING",
             )
 
         # 静态图（保留英文标题，避免 matplotlib 中文字体问题）

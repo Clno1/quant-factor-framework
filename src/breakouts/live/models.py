@@ -57,6 +57,19 @@ class DailyCandidate:
     return_reference_close: float
     adr_sum_19: float
     forced_watch: bool = False
+    cup_qualified: bool = False
+    cup_rejection_reason: str = "NOT_EVALUATED"
+    cup_left_rim_date: str = ""
+    cup_right_rim_date: str = ""
+    cup_bottom_date: str = ""
+    cup_left_rim: float = 0.0
+    cup_right_rim: float = 0.0
+    cup_bottom: float = 0.0
+    cup_depth_pct: float = 0.0
+    cup_width_sessions: int = 0
+    cup_rim_tolerance_pct: float = 0.0
+    cup_volume_contraction_ratio: float = 0.0
+    cup_score: float = 0.0
 
     @classmethod
     def from_mapping(cls, value: dict[str, Any]) -> "DailyCandidate":
@@ -81,6 +94,23 @@ class DailyCandidate:
             return_reference_close=_finite(value.get("return_reference_close")),
             adr_sum_19=_finite(value.get("adr_sum_19")),
             forced_watch=bool(value.get("forced_watch")),
+            cup_qualified=bool(value.get("cup_qualified")),
+            cup_rejection_reason=str(
+                value.get("cup_rejection_reason") or "NOT_EVALUATED"
+            ),
+            cup_left_rim_date=str(value.get("cup_left_rim_date") or ""),
+            cup_right_rim_date=str(value.get("cup_right_rim_date") or ""),
+            cup_bottom_date=str(value.get("cup_bottom_date") or ""),
+            cup_left_rim=_finite(value.get("cup_left_rim")),
+            cup_right_rim=_finite(value.get("cup_right_rim")),
+            cup_bottom=_finite(value.get("cup_bottom")),
+            cup_depth_pct=_finite(value.get("cup_depth_pct")),
+            cup_width_sessions=int(_finite(value.get("cup_width_sessions"))),
+            cup_rim_tolerance_pct=_finite(value.get("cup_rim_tolerance_pct")),
+            cup_volume_contraction_ratio=_finite(
+                value.get("cup_volume_contraction_ratio")
+            ),
+            cup_score=_finite(value.get("cup_score")),
         )
 
     @property
@@ -158,6 +188,7 @@ class BreakoutSignal:
     return20_live: float
     dollar_volume: float
     reasons: tuple[str, ...]
+    pattern: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)

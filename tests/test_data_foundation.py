@@ -16,6 +16,7 @@ from src.data.foundation import (
     MarketDataReader,
     MarketDataWriter,
     _filter_non_xnys_bars,
+    _merge_candidate_bars,
     _rebase_parent_to_fetched_scale,
     _single_metadata_policy,
     validate_pit_bar_coverage,
@@ -57,6 +58,28 @@ def _bars(ticker: str, dates: list[str]) -> pd.DataFrame:
             "volume": 1_000.0,
         },
         index=index,
+    )
+
+
+def test_full_rebuild_merge_preserves_numeric_bar_dtypes():
+    fetched = pd.DataFrame({
+        "date": pd.to_datetime(["2026-07-20", "2026-07-21"]),
+        "ticker": ["AAA", "AAA"],
+        "open": [100.0, 101.0],
+        "high": [102.0, 103.0],
+        "low": [99.0, 100.0],
+        "close": [101.0, 102.0],
+        "adj_close": [101.0, 102.0],
+        "volume": [1_000.0, 1_100.0],
+    })
+    empty_parent = pd.DataFrame(columns=fetched.columns)
+
+    candidate = _merge_candidate_bars(empty_parent, fetched)
+
+    assert candidate is not fetched
+    assert all(
+        pd.api.types.is_numeric_dtype(candidate[column])
+        for column in ("open", "high", "low", "close", "adj_close", "volume")
     )
 
 

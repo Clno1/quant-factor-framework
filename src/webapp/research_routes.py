@@ -37,6 +37,11 @@ from src.research_universes.registry import research_universe_registry
 from src.utils.identifiers import InvalidResourceId, safe_path_component
 from src.utils.io import load_json
 from src.utils.market_calendar import latest_publishable_xnys_session
+from src.webapp.market_regime_status import (
+    MarketRegimeViewError,
+    market_regime_chart_payload,
+    market_regime_status_payload,
+)
 from src.webapp.research_labels import research_label
 
 
@@ -830,6 +835,18 @@ def research_overview(
     )
 
 
+@router.get("/research/market-regime", response_class=HTMLResponse)
+def market_regime_page(request: Request):
+    return templates.TemplateResponse(
+        request,
+        "market_regime_status.html",
+        {
+            "title": "市场研究状态",
+            "market_regime": market_regime_status_payload(),
+        },
+    )
+
+
 @router.get("/research/cross-universe", response_class=HTMLResponse)
 def cross_universe_page(request: Request):
     del request
@@ -1137,6 +1154,27 @@ def api_factor_data_export(
 @router.get("/api/research/status")
 def api_research_status():
     return research_status_payload()
+
+
+@router.get("/api/research/market-regime/status")
+def api_market_regime_status():
+    return market_regime_status_payload()
+
+
+@router.get("/api/research/market-regime/chart")
+def api_market_regime_chart(
+    instrument: str = Query("spx"),
+    period: str = Query("recent"),
+):
+    try:
+        return market_regime_chart_payload(
+            instrument=instrument,
+            period=period,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except MarketRegimeViewError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/api/research/universes")

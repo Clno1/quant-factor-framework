@@ -331,6 +331,7 @@ class GroupAnalyticsService:
             market = self.market_provider.snapshot(
                 symbols=symbols,
                 benchmark=self.settings.benchmark,
+                asof=target,
                 force=request.force,
             )
             pair_index = pd.DatetimeIndex([prior, target], name="session")

@@ -765,6 +765,8 @@ def _run_task(task_id: str) -> None:
     holdings_detail = result.holdings_detail
     trades_detail = result.trades_detail
     costs_detail = result.costs_detail
+    portfolio_daily = result.portfolio_daily
+    position_daily = result.position_daily
     top_holdings_detail = holdings_detail.loc[
         holdings_detail["group"] == top_col
     ].copy() if not holdings_detail.empty else pd.DataFrame()
@@ -774,6 +776,12 @@ def _run_task(task_id: str) -> None:
     top_costs_detail = costs_detail.loc[
         costs_detail["group"] == top_col
     ].copy() if not costs_detail.empty else pd.DataFrame()
+    top_portfolio_daily = portfolio_daily.loc[
+        portfolio_daily["group"] == top_col
+    ].copy() if not portfolio_daily.empty else pd.DataFrame()
+    top_position_daily = position_daily.loc[
+        position_daily["group"] == top_col
+    ].copy() if not position_daily.empty else pd.DataFrame()
 
     holdings_rows: list[dict[str, Any]] = []
     if not top_holdings_detail.empty:
@@ -806,6 +814,10 @@ def _run_task(task_id: str) -> None:
         write_parquet(top_trades_detail, d / "trades.parquet")
     if not top_costs_detail.empty:
         write_parquet(top_costs_detail, d / "costs.parquet")
+    if not top_portfolio_daily.empty:
+        write_parquet(top_portfolio_daily, d / "portfolio_daily.parquet")
+    if not top_position_daily.empty:
+        write_parquet(top_position_daily, d / "position_daily.parquet")
 
     replay_snapshot = build_backtest_snapshot(
         source_id=task_id,
@@ -859,6 +871,14 @@ def _run_task(task_id: str) -> None:
         "total_cost": (
             float(top_costs_detail["cost"].sum())
             if not top_costs_detail.empty else 0.0
+        ),
+        "ending_nav": (
+            float(top_portfolio_daily.iloc[-1]["end_nav"])
+            if not top_portfolio_daily.empty else None
+        ),
+        "max_accounting_error": (
+            float(top_portfolio_daily["accounting_error"].abs().max())
+            if not top_portfolio_daily.empty else None
         ),
         "execution_used": result.config.get("execution") or exec_cfg,
         "cost_bps_per_year": result.execution_cost_bps_per_year.get(top_col),

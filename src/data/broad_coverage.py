@@ -30,7 +30,11 @@ from src.data.foundation import (
     MarketDataReader,
     QualityCheck,
 )
-from src.data.price_semantics import validate_price_semantics_contract
+from src.data.price_semantics import (
+    FMP_CANONICAL_SOURCE,
+    build_price_semantics_contract,
+    validate_price_semantics_contract,
+)
 from src.data.security_master_store import SecurityMasterGeneration
 from src.data.research_history_policy import (
     EXCLUDED_UNVERIFIABLE_HISTORY,
@@ -951,7 +955,7 @@ class BroadCoverageStore:
         security_universe: pd.DataFrame,
         target_session: str | pd.Timestamp,
         security_master: SecurityMasterGeneration,
-        price_semantics: Mapping[str, Any],
+        price_semantics: Mapping[str, Any] | None = None,
         price_semantics_parent_version_id: str | None = None,
         min_target_coverage: float = 0.98,
         external_checks: Iterable[QualityCheck] = (),
@@ -964,26 +968,45 @@ class BroadCoverageStore:
             raise DataFoundationError(
                 "formal coverage requires a published Security Master generation"
             )
-        semantic_contract = validate_price_semantics_contract(price_semantics)
-        history_mode = str(semantic_contract["history_mode"]).upper()
-        if history_mode == "FULL_REBUILD" and price_semantics_parent_version_id:
-            raise DataFoundationError(
-                "a full broad-coverage rebuild cannot declare a semantic parent"
-            )
-        if (
-            history_mode == "INCREMENTAL_FROM_AUTHENTICATED_PARENT"
-            and not price_semantics_parent_version_id
-        ):
-            raise DataFoundationError(
-                "incremental broad coverage requires an authenticated semantic parent"
-            )
         paths = [Path(path).resolve() for path in partition_paths]
         if not paths or any(not path.is_file() for path in paths):
             raise DataFoundationError("coverage partition list is empty or incomplete")
         target = pd.Timestamp(target_session).normalize()
+        run_id = run_id or uuid4().hex
+        lineage_parent = str(
+            (quality_lineage or {}).get("parent_dataset_version_id") or ""
+        ).strip() or None
+        semantics_parent = str(
+            price_semantics_parent_version_id or ""
+        ).strip() or lineage_parent
+        if lineage_parent and semantics_parent != lineage_parent:
+            raise DataFoundationError(
+                "price-semantics parent does not match quality lineage parent"
+            )
+        resolved_price_semantics = validate_price_semantics_contract(
+            price_semantics
+            or build_price_semantics_contract(
+                source=FMP_CANONICAL_SOURCE,
+                history_mode=(
+                    "INCREMENTAL_FROM_AUTHENTICATED_PARENT"
+                    if semantics_parent
+                    else "FULL_REBUILD"
+                ),
+            )
+        )
+        semantic_contract = resolved_price_semantics
+        history_mode = str(semantic_contract["history_mode"]).upper()
+        if history_mode == "INCREMENTAL_FROM_AUTHENTICATED_PARENT" and not semantics_parent:
+            raise DataFoundationError(
+                "incremental price semantics require an authenticated parent version"
+            )
+        if history_mode == "FULL_REBUILD" and semantics_parent:
+            raise DataFoundationError(
+                "full-rebuild price semantics cannot reference a parent version"
+            )
         if history_mode == "INCREMENTAL_FROM_AUTHENTICATED_PARENT":
             parent = self.catalog.get_version(
-                str(price_semantics_parent_version_id),
+                semantics_parent,
                 universe=US_EQUITY_COVERAGE,
             )
             if parent is None:
@@ -999,7 +1022,6 @@ class BroadCoverageStore:
                 raise DataFoundationError(
                     "incremental broad-coverage target predates its semantic parent"
                 )
-        run_id = run_id or uuid4().hex
         checks, stats = self._validate_partitions(
             paths,
             security_universe=security_universe,
@@ -1231,9 +1253,7 @@ class BroadCoverageStore:
                 "universe": US_EQUITY_COVERAGE,
                 "provider": "fmp",
                 "price_semantics": semantic_contract,
-                "price_semantics_parent_version_id": (
-                    price_semantics_parent_version_id
-                ),
+                "price_semantics_parent_version_id": semantics_parent,
                 "status": "PUBLISHED",
                 "target_session": target.date().isoformat(),
                 "created_at": created_at.isoformat(),

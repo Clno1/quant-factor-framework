@@ -1,0 +1,35 @@
+[Unit]
+Description=Prepare the daily broad-universe intraday momentum candidate snapshot
+Wants=network-online.target
+After=network-online.target quant-us-equity-coverage.service quant-group-analytics-eod.service
+StartLimitIntervalSec=4h
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+User=quant
+Group=quant
+WorkingDirectory=/opt/quant
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/quant
+Environment=OMP_NUM_THREADS=1
+Environment=OPENBLAS_NUM_THREADS=1
+Environment=MKL_NUM_THREADS=1
+EnvironmentFile=/etc/quant/intraday-momentum-monitor.env
+ExecStartPre=/opt/quant/.venv/bin/python -c "import exchange_calendars, sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
+ExecStart=/opt/quant/.venv/bin/python /opt/quant/scripts/run_intraday_momentum_monitor.py --env-file /etc/quant/intraday-momentum-monitor.env --prepare-candidates
+TimeoutStartSec=1h
+MemoryHigh=500M
+MemoryMax=700M
+MemorySwapMax=0
+CPUQuota=100%
+TasksMax=64
+Nice=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

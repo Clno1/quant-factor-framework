@@ -11,6 +11,7 @@ from src.data.foundation import (
     MarketDataReader,
     MarketDataWriter,
 )
+from src.data.semantic_recovery import is_recoverable_semantic_drift
 from src.config import CONFIG
 from src.storage import (
     DATA_REQUEST_SUCCESS,
@@ -95,19 +96,38 @@ def process_data_request(
             request,
             earliest_existing_date=(latest.min_date if latest is not None else None),
         )
-        result = writer.update_universe(
-            request.data_universe,
-            target_session=None,
+        update_kwargs = {
+            "target_session": None,
             # A request exists because the current version failed preflight.
-            force=True,
-            full_rebuild=full_rebuild,
-            universe_frame=universe_frame,
-            initial_start=payload["initial_start"],
-            membership_frame=membership,
-            membership_source=f"sqlite_data_request:{request.request_id}",
-            derive_membership_from_bars=True,
-            min_latest_coverage=1.0,
-        )
+            "force": True,
+            "universe_frame": universe_frame,
+            "initial_start": payload["initial_start"],
+            "membership_frame": membership,
+            "membership_source": f"sqlite_data_request:{request.request_id}",
+            "derive_membership_from_bars": True,
+            "min_latest_coverage": 1.0,
+        }
+        try:
+            result = writer.update_universe(
+                request.data_universe,
+                full_rebuild=full_rebuild,
+                **update_kwargs,
+            )
+        except DataFoundationError as exc:
+            if not is_recoverable_semantic_drift(exc):
+                raise
+            log.warning(
+                "Confirmed semantic drift; rebuilding requested universe: "
+                "request=%s universe=%s error=%s",
+                request.request_id,
+                request.data_universe,
+                exc,
+            )
+            result = writer.update_universe(
+                request.data_universe,
+                full_rebuild=True,
+                **update_kwargs,
+            )
         result_payload = result.to_dict()
         database.finish_data_request(
             request.request_id,

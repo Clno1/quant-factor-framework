@@ -1,6 +1,7 @@
 [Unit]
 Description=Publish version-bound US_LIQUID_5M factor data (root deployment)
 After=quant-us-equity-coverage.service
+Before=quant-group-analytics-eod.service
 OnSuccess=quant-broad-research-readiness.service
 StartLimitIntervalSec=12h
 StartLimitBurst=2

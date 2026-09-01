@@ -246,12 +246,34 @@ def build_backtest_snapshot(
     decision_group = _align(result.group_assignment, index, columns)
     held_group = _align(result.held_assignment, index, columns)
     effective_returns = _align(result.effective_returns, index, columns)
-    held_weights = _equal_weights(held_group, top_group)
-    return_weights = held_weights.copy()
-    daily_contributions = (
-        effective_returns.where(return_weights > 0) * return_weights
-    )
     top_label = f"Q{top_group}"
+    position_daily = result.position_daily
+    if position_daily is not None and not position_daily.empty:
+        top_positions = position_daily.loc[
+            position_daily["group"].astype(str).eq(top_label)
+        ].copy()
+        top_positions["date"] = pd.to_datetime(top_positions["date"])
+        held_weights = top_positions.pivot_table(
+            index="date",
+            columns="ticker",
+            values="start_weight",
+            aggfunc="last",
+        ).reindex(index=index, columns=columns, fill_value=0.0).fillna(0.0)
+        return_weights = held_weights.copy()
+        daily_contributions = top_positions.pivot_table(
+            index="date",
+            columns="ticker",
+            values="contribution_return",
+            aggfunc="sum",
+        ).reindex(index=index, columns=columns)
+    else:
+        # Compatibility for snapshots created before the stateful portfolio
+        # ledger existed. New formal backtests always take the branch above.
+        held_weights = _equal_weights(held_group, top_group)
+        return_weights = held_weights.copy()
+        daily_contributions = (
+            effective_returns.where(return_weights > 0) * return_weights
+        )
     cost_summary, cost_execution_dates = _cost_summary(
         result.costs_detail,
         index,
@@ -275,7 +297,7 @@ def build_backtest_snapshot(
     summary["universe_count"] = membership.sum(axis=1).astype(int)
     summary["eligible_count"] = eligible.sum(axis=1).astype(int)
     summary["signal_top_count"] = daily_group.eq(top_group).sum(axis=1).astype(int)
-    summary["held_count"] = held_group.eq(top_group).sum(axis=1).astype(int)
+    summary["held_count"] = (held_weights > 0).sum(axis=1).astype(int)
     summary["gross_return"] = (
         result.gross_group_returns.get(top_label, pd.Series(dtype=float))
         .reindex(index)

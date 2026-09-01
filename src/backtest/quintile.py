@@ -1,10 +1,10 @@
 """
 五分位分组回测（Quintile Analysis）。
 
-核心流程（向量化）：
+核心流程：
   1. 每隔 rebalance_days 取一个"调仓日"，在调仓日按因子值把股票分为 Q1..QN 组
-  2. 组合持仓在下一个调仓日前保持不变（等权）
-  3. 组合日收益 = 当日各持仓股票收益的等权平均
+  2. 调仓日建立等权目标，随后持仓市值随价格自然漂移
+  3. 组合日收益、现金、交易与成本由同一本有状态组合账生成
   4. Long-Short 组合 = QN - Q1（按因子方向自动调整）
   5. 计算换手率、累计净值、绩效指标
 
@@ -26,6 +26,7 @@ import numpy as np
 import pandas as pd
 
 from src.backtest.metrics import performance_summary, relative_performance_summary
+from src.backtest.portfolio import simulate_group_portfolios
 from src.backtest.rebalance import get_rebalance_dates
 from src.config import CONFIG
 from src.execution import (
@@ -91,6 +92,8 @@ class QuintileResult:
     holdings_detail: pd.DataFrame = field(default_factory=pd.DataFrame)
     trades_detail: pd.DataFrame = field(default_factory=pd.DataFrame)
     costs_detail: pd.DataFrame = field(default_factory=pd.DataFrame)
+    portfolio_daily: pd.DataFrame = field(default_factory=pd.DataFrame)
+    position_daily: pd.DataFrame = field(default_factory=pd.DataFrame)
     benchmark_returns: pd.Series = field(default_factory=pd.Series)
     benchmark_nav: pd.Series = field(default_factory=pd.Series)
     excess_returns: pd.Series = field(default_factory=pd.Series)
@@ -221,7 +224,11 @@ def _apply_membership_exit_policy(
         if begin >= finish:
             continue
         segment_membership = membership.iloc[begin:finish]
-        exited = (~segment_membership).cummax()
+        # Membership snapshots have effective-close semantics.  A False value
+        # observed on date T may only create an order for T+1 open, so cash
+        # starts on the following row.  Looking at membership.shift(-1) here
+        # would let the T row consume tomorrow's effective state.
+        exited = (~segment_membership).cummax().shift(1, fill_value=False)
         cash_mask.iloc[begin:finish] = (
             held.iloc[begin:finish].notna() & exited
         )
@@ -289,19 +296,18 @@ def _apply_membership_exit_policy(
             f"{ticker} {effective_date.date()} reason={reason!r}"
         )
 
-    next_membership = membership.shift(-1)
+    previous_membership = membership.shift(1, fill_value=False)
     terminal = (
         held.notna()
-        & membership
-        & next_membership.eq(False)
+        & previous_membership
+        & membership.eq(False)
         & ~cash_mask
     )
     event_rows: list[dict] = []
     for row_no, col_no in np.argwhere(terminal.to_numpy()):
-        if row_no + 1 >= len(dates):
-            continue
         dt = dates[row_no]
-        next_dt = dates[row_no + 1]
+        has_next_session = row_no + 1 < len(dates)
+        next_dt = dates[row_no + 1] if has_next_session else dt
         ticker = str(columns[col_no])
         assignment = held.iat[row_no, col_no]
         reason = ""
@@ -312,9 +318,42 @@ def _apply_membership_exit_policy(
                 f"Invalid held group size for membership exit: {dt.date()} {ticker}"
             )
 
-        next_open = _safe_lookup(open_df, next_dt, ticker)
+        next_open = (
+            _safe_lookup(open_df, next_dt, ticker)
+            if has_next_session
+            else None
+        )
         observed_return = adjusted.iat[row_no, col_no]
+        terminal_date = dt
         if next_open is not None and pd.notna(observed_return):
+            missing_start = row_no
+            while (
+                missing_start > 0
+                and pd.isna(adjusted.iat[missing_start - 1, col_no])
+            ):
+                missing_start -= 1
+            if missing_start < row_no:
+                # Carry the last observable position value through a halt and
+                # recognize the cumulative move only when a new executable
+                # open is observed. This prevents a later event from rewriting
+                # earlier NAV or changing an intervening rebalance.
+                base_open = _safe_lookup(
+                    open_df,
+                    dates[missing_start],
+                    ticker,
+                )
+                if base_open is None:
+                    raise ValueError(
+                        "Halted membership exit has no observable carry price: "
+                        f"date={dt.date()} ticker={ticker}"
+                    )
+                adjusted.iloc[missing_start:row_no, col_no] = 0.0
+                adjusted.iat[row_no, col_no] = next_open / base_open - 1.0
+                assignment = held.iat[missing_start, col_no]
+                group_size = int(
+                    held.loc[dates[missing_start]].eq(assignment).sum()
+                )
+                stale_sessions = row_no - missing_start
             execution_date = next_dt
             decision_date = dt
             raw_price = next_open
@@ -352,49 +391,37 @@ def _apply_membership_exit_policy(
             stale_sessions = row_no - terminal_row
             pricing_method = "LAST_TRADABLE_CLOSE"
             terminal_date = dates[terminal_row]
-            if next_open is not None:
-                adjusted.iat[terminal_row, col_no] = (
-                    next_open / current_open - 1.0
+            if final_close is None:
+                raise ValueError(
+                    "Membership exit has no final tradable close: "
+                    f"date={terminal_date.date()} ticker={ticker}"
                 )
-                execution_date = next_dt
-                decision_date = terminal_date
-                raw_price = next_open
-                pricing_method = "NEXT_OPEN"
+            if stale_sessions > 0:
+                pricing_method, reason = settlement_reason(ticker, dt)
+            # The settlement evidence becomes knowable on dt. Keep the stale
+            # position flat until then and recognize the cumulative terminal
+            # outcome on dt instead of backdating it to terminal_date.
+            adjusted.iloc[terminal_row:row_no, col_no] = 0.0
+            if pricing_method == "TOTAL_LOSS_WRITE_OFF":
+                adjusted.iat[row_no, col_no] = -1.0
+                raw_price = 0.0
             else:
-                if final_close is None:
-                    raise ValueError(
-                        "Membership exit has no final tradable close: "
-                        f"date={terminal_date.date()} ticker={ticker}"
-                    )
-                if stale_sessions > 0:
-                    pricing_method, reason = settlement_reason(ticker, next_dt)
-                if pricing_method == "TOTAL_LOSS_WRITE_OFF":
-                    adjusted.iat[terminal_row, col_no] = -1.0
-                    raw_price = 0.0
-                else:
-                    adjusted.iat[terminal_row, col_no] = (
-                        final_close / current_open - 1.0
-                    )
-                    raw_price = final_close
-                execution_date = terminal_date
-                decision_date = terminal_date
-            segment_finish = min(value for value in ordered if value > row_no)
-            if terminal_row + 1 < segment_finish:
-                cash_mask.iloc[terminal_row + 1:segment_finish, col_no] = True
-                adjusted.iloc[terminal_row + 1:segment_finish, col_no] = 0.0
-            dt = terminal_date
+                adjusted.iat[row_no, col_no] = final_close / current_open - 1.0
+                raw_price = final_close
+            execution_date = dt
+            decision_date = dt
 
         event_rows.append(
             {
                 "decision_date": decision_date,
                 "execution_date": execution_date,
-                "terminal_date": dt,
+                "terminal_date": terminal_date,
                 "ticker": ticker,
                 "assignment": float(assignment),
                 "target_weight": 1.0 / group_size,
                 "raw_price": float(raw_price),
                 "pricing_method": pricing_method,
-                "effective_exit_date": next_dt,
+                "effective_exit_date": dt,
                 "reason": reason,
                 "stale_sessions": stale_sessions,
             }
@@ -565,7 +592,11 @@ def _build_execution_details(
     membership_mask: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
-    Build per-stock target weights, trades, and costs for every rebalance.
+    Legacy target-weight ledger retained for old artifact compatibility tests.
+
+    Formal quintile and double-sort runs use ``simulate_group_portfolios``;
+    this helper must not be used to calculate published performance because it
+    does not receive held returns and therefore cannot mark positions to market.
 
     target_weight is the fully invested equal-weight portfolio inside each group.
     trade_weight is signed: positive means buy, negative means sell.
@@ -989,7 +1020,7 @@ def _compute_turnover(
     n_groups: int,
     rebal_dates: pd.DatetimeIndex,
 ) -> pd.DataFrame:
-    """计算每组每次调仓的双向换手率（对称差集 / 两期持仓合计）。展示用。"""
+    """旧产物兼容：按证券差集估算换手；正式结果不调用。"""
     rows = []
     prev_holdings: dict[int, set] = {g: set() for g in range(1, n_groups + 1)}
     for dt in rebal_dates:
@@ -1017,7 +1048,10 @@ def _strict_equal_weight_group_returns(
     timing: str,
 ) -> pd.DataFrame:
     """
-    Compute equal-weight returns without ex-post removal of missing holdings.
+    Legacy cross-sectional diagnostic; formal performance does not call this.
+
+    It remains available to read old artifacts and to test missing-return
+    rejection. Stateful published returns come from ``simulate_group_portfolios``.
 
     A partially missing held cross-section is an execution/data error, not an
     instruction to renormalize the remaining stocks. The final next-open row is
@@ -1241,38 +1275,33 @@ def quintile_backtest(
     )
     benchmark_base.name = "Benchmark"
 
-    # 各组日收益（严格等权，不因缺失收益事后重分配权重）
+    # 各组使用同一本有状态组合账：调仓后持仓随收益自然漂移，只有真实
+    # 订单才会改变权重；交易、成本、现金和 NAV 均来自同一状态转换。
     group_cols = [f"Q{g}" for g in range(1, n_groups + 1)]
-    gross_ret = _strict_equal_weight_group_returns(
-        r,
-        assign_held,
-        n_groups=n_groups,
-        timing=exec_cfg["timing"],
-    )
-    gross_ret = gross_ret.dropna(how="all")
-
-    # 摩擦扣减：逐票目标权重变化 × 单边成本，再汇总到组级收益。
-    holdings_detail, trades_detail, costs_detail = _build_execution_details(
+    simulation = simulate_group_portfolios(
         assign,
-        common_dates,
+        r,
         rebal_dates,
-        n_groups=n_groups,
+        group_names={group_no: f"Q{group_no}" for group_no in range(1, n_groups + 1)},
         execution=exec_cfg,
-        execution_price_df=open_df if exec_cfg["timing"] == "next_open" else price_df,
-        volume_df=volume_df,
+        execution_prices=open_df,
+        volume=volume_df,
         forced_exit_events=forced_exit_events,
-        membership_mask=membership_mask,
     )
-    cost_df = pd.DataFrame(0.0, index=gross_ret.index, columns=group_cols)
-    if not costs_detail.empty:
-        for row in costs_detail.itertuples(index=False):
-            dt = pd.Timestamp(row.date)
-            group = str(row.group)
-            if dt in cost_df.index and group in cost_df.columns:
-                cost_df.loc[dt, group] += float(row.cost)
+    if simulation.capacity_breaches:
+        raise BacktestCapacityError(simulation.capacity_breaches)
+    gross_ret = simulation.gross_returns.reindex(columns=group_cols)
+    group_ret = simulation.net_returns.reindex(columns=group_cols)
+    cost_df = simulation.cost_returns.reindex(
+        index=group_ret.index,
+        columns=group_cols,
+        fill_value=0.0,
+    )
+    holdings_detail = simulation.holdings_detail
+    trades_detail = simulation.trades_detail
+    costs_detail = simulation.costs_detail
 
-    group_ret = gross_ret - cost_df
-    # 给绩效汇总用：每组的年化总成本 bps（粗略）
+    # 每组年化总成本 bps，来自逐日真实 NAV 分母下的成本收益。
     days_total = max(len(group_ret.index), 1)
     cost_bps_per_year = {
         f"Q{g}": float(cost_df[f"Q{g}"].sum()) * (252.0 / days_total) * 10000.0
@@ -1281,9 +1310,10 @@ def quintile_backtest(
 
     # Long-Short
     top, bot = f"Q{n_groups}", "Q1"
-    raw_ls = group_ret[top] - group_ret[bot]
     direction = int(factor_direction)
-    ls = raw_ls * direction
+    oriented_gross_ls = (gross_ret[top] - gross_ret[bot]) * direction
+    long_short_cost = cost_df[top].fillna(0.0) + cost_df[bot].fillna(0.0)
+    ls = oriented_gross_ls - long_short_cost
     ls.name = "LongShort"
     top_returns = group_ret[top].rename(top)
     benchmark_aligned = benchmark_base.reindex(group_ret.index).dropna()
@@ -1296,8 +1326,8 @@ def quintile_backtest(
     benchmark_nav = (1.0 + benchmark_base.reindex(group_ret.index).fillna(0)).cumprod()
     benchmark_nav.name = "Benchmark"
 
-    # 展示用换手率（双向）
-    turnover = _compute_turnover(assign, n_groups=n_groups, rebal_dates=rebal_dates)
+    # 实际换手率来自调仓前漂移持仓与成交后目标持仓，不再使用证券差集近似。
+    turnover = simulation.turnover.reindex(columns=group_cols)
 
     # 每组 + Long-Short 绩效
     metrics_rows = {}
@@ -1342,6 +1372,8 @@ def quintile_backtest(
         holdings_detail=holdings_detail,
         trades_detail=trades_detail,
         costs_detail=costs_detail,
+        portfolio_daily=simulation.daily_state,
+        position_daily=simulation.position_daily,
         config={
             "n_groups": n_groups,
             "rebalance_days": rebalance_days,

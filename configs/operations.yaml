@@ -22,13 +22,13 @@ operations:
 
 jobs:
   - job_id: us_daily_refresh
-    display_name: 全美活跃股票行情缓存
-    category: data
-    run_type: scheduled_batch
-    adapter: market_data
+    display_name: 旧式短周期行情缓存（已归档）
+    category: migration
+    run_type: retired
+    adapter: retired
     service_unit: quant-us-daily-refresh.service
     timer_unit: quant-us-daily-refresh.timer
-    enabled_expected: true
+    enabled_expected: false
     order: 10
     schedule:
       timezone: Asia/Singapore
@@ -38,7 +38,7 @@ jobs:
       target_policy: latest_publishable_xnys
     evidence:
       universes: [US_LIQUID_5M]
-    description: 发布供动量扫描使用的短周期全美活跃股票日线版本。
+    description: 历史运行和版本保留只读；动量与板块任务已改读全美 coverage 和精确 PIT，不再运行此任务。
 
   - job_id: core_market_data
     display_name: 核心股票池行情
@@ -90,7 +90,7 @@ jobs:
     schedule:
       timezone: Asia/Singapore
       weekdays: [TU, WE, TH, FR, SA]
-      time: "09:15"
+      time: "13:15"
       deadline_minutes: 75
       target_policy: latest_publishable_xnys
     description: 使用正式标普500版本生成板块和子行业研究产物。
@@ -111,6 +111,41 @@ jobs:
       deadline_minutes: 75
       target_policy: latest_publishable_xnys
     description: 对所有启用账户运行一次版本绑定的模拟决策、成交和记账。
+
+  - job_id: paper_fill_notifications
+    display_name: 模拟盘成交通知
+    category: delivery
+    run_type: interval_worker
+    adapter: paper_notifications
+    service_unit: quant-paper-discord-events.service
+    timer_unit: quant-paper-discord-events.timer
+    enabled_expected: true
+    order: 52
+    schedule:
+      interval_minutes: 2
+      target_policy: latest_publishable_xnys
+    evidence:
+      kind: FILL
+    description: 对账不可变 fill 账本，以 fill_id 幂等发送模拟成交，不发送挂单或无成交轮次。
+
+  - job_id: paper_daily_summary
+    display_name: 模拟盘每日账户日结
+    category: delivery
+    run_type: scheduled_batch
+    adapter: paper_notifications
+    service_unit: quant-paper-discord-daily.service
+    timer_unit: quant-paper-discord-daily.timer
+    enabled_expected: true
+    order: 54
+    schedule:
+      timezone: Asia/Singapore
+      weekdays: [TU, WE, TH, FR, SA]
+      time: "11:00"
+      deadline_minutes: 20
+      target_policy: latest_publishable_xnys
+    evidence:
+      kind: DAILY_SUMMARY
+    description: 在 10:30 模拟盘完成后、11:30 宽基任务开始前，发送账户净值、盈亏、成交、成本和错误状态。
 
   - job_id: broad_us_pipeline
     display_name: 全美宽基每日生产链
@@ -162,6 +197,42 @@ jobs:
     evidence:
       required_channels: [momentum, sector-rotation]
     description: 分别向两个现有业务频道发送盘前动量和板块轮动摘要。
+
+  - job_id: premarket_digest_prepare
+    display_name: 盘前摘要预计算
+    category: delivery
+    run_type: scheduled_batch
+    adapter: premarket_prepare
+    service_unit: quant-premarket-prepare.service
+    timer_unit: quant-premarket-prepare.timer
+    enabled_expected: true
+    order: 78
+    schedule:
+      timezone: America/New_York
+      weekdays: [MO, TU, WE, TH, FR]
+      time: "07:00"
+      deadline_minutes: 90
+      target_policy: current_xnys
+    evidence:
+      required_channels: [momentum, sector-rotation]
+    description: 提前计算并冻结两个盘前频道的不可变 payload；不连接 Discord，到 09:20 只领取并发送。
+
+  - job_id: intraday_candidate_prepare
+    display_name: 盘中动量候选预计算
+    category: monitoring
+    run_type: scheduled_batch
+    adapter: intraday_candidate_prepare
+    service_unit: quant-intraday-candidate-prepare.service
+    timer_unit: quant-intraday-candidate-prepare.timer
+    enabled_expected: true
+    order: 75
+    schedule:
+      timezone: America/New_York
+      weekdays: [MO, TU, WE, TH, FR]
+      time: "06:30"
+      deadline_minutes: 120
+      target_policy: current_xnys
+    description: 在低负载窗口提前生成全美宽基动量候选快照，盘中服务只做约 30 秒的热启动和增量循环。
 
   - job_id: hourly_momentum
     display_name: 每小时动量扫描

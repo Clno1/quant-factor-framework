@@ -230,6 +230,8 @@ def load_task_artifacts(task_id: str) -> dict[str, Any]:
         "holdings_detail": "holdings_detail.parquet",
         "trades": "trades.parquet",
         "costs": "costs.parquet",
+        "portfolio_daily": "portfolio_daily.parquet",
+        "position_daily": "position_daily.parquet",
     }
     artifacts = {
         name: read_parquet(directory / filename)

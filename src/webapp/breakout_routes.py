@@ -20,6 +20,8 @@ from src.breakouts import (
     refresh_daily_frame,
 )
 from src.breakouts.application import (
+    BreakoutApplicationError,
+    BreakoutScanNotReadyError,
     BreakoutWatchlistNotFoundError,
     UnknownBreakoutUniverseError,
     breakout_universe_options,
@@ -82,11 +84,16 @@ def _http_breakout_scan(**parameters: Any) -> dict[str, Any]:
         return get_breakout_scan(
             **parameters,
             enabled_universes=_enabled_breakout_universes(),
+            allow_build=False,
         )
     except BreakoutWatchlistNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except UnknownBreakoutUniverseError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except BreakoutScanNotReadyError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except BreakoutApplicationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 def _breakout_daily_figure(
@@ -206,6 +213,7 @@ def breakouts_page(
             pivot_proximity=pivot_proximity,
             market_symbol=market_symbol.upper(),
             view=view,
+            allow_build=False,
         )
     except Exception as exc:  # noqa: BLE001
         error = str(exc)
@@ -217,7 +225,7 @@ def breakouts_page(
         request,
         "breakout_list.html",
         {
-            "title": "动量交易",
+            "title": "茶杯柄监控",
             "scan": scan,
             "error": error,
             "preset_universes": preset_universes,
@@ -473,7 +481,7 @@ def breakout_detail_page(
         request,
         "breakout_detail.html",
         {
-            "title": f"{ticker} · 动量诊断",
+            "title": f"{ticker} · 茶杯柄诊断",
             "ticker": ticker,
             "universe": context["universe"],
             "universe_label": context["label"],

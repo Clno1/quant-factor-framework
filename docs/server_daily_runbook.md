@@ -1,6 +1,6 @@
 # SG 服务器日常运维速查
 
-更新日期：2026-08-13
+更新日期：2026-08-26
 
 适用部署：`root@SG`、项目 `/home/projects/quant`、所有 Web 与 worker 统一使用
 `.venv`。完整架构和本地/服务器差异见
@@ -22,8 +22,8 @@ systemctl list-timers --all 'quant-*'
 预期：
 
 - `quant-web.service` 是 `active (running)`；
-- 9 个业务 timer 和 1 个运维 watchdog timer 均有下一次触发时间；全美宽基完成首次回填并正式
-  启用后应为 11 个；
+- 除明确归档的 `quant-us-daily-refresh.timer` 外，配置为启用的业务 timer 和运维 watchdog 均有
+  下一次触发时间；
 - 当前 SG 基线的行情 status 有 SP500、MAG7 和 `US_LIQUID_5M`；研究池改造部署完成后还必须有
   NASDAQ100；
 - SQLite 报告 `passed=true`、`sqlite_integrity=["ok"]`、`issues=[]`。
@@ -34,12 +34,12 @@ systemctl list-timers --all 'quant-*'
 
 | 时间 | Timer | 作用 |
 |---|---|---|
-| Tue-Sat 07:15 | `quant-us-daily-refresh.timer` | 发布 `US_LIQUID_5M` |
+| 已归档 | `quant-us-daily-refresh.timer` | 旧短周期行情只读保留，timer 关闭 |
 | Tue-Sat 08:15 | `quant-market-data.timer` | SP500/NASDAQ100 PIT + SP500/NASDAQ100/MAG7 行情 |
 | Tue-Sat 08:45 | `quant-factor-research.timer` | 发布 SP500/NASDAQ100 因子研究、MAG7 参考结果和跨池结论 |
-| Tue-Sat 09:15 | `quant-group-analytics-eod.timer` | 读取正式 SP500 version，发布板块研究 |
 | Tue-Sat 10:30 | `quant-paper-trading.timer` | 运行 active 模拟盘账户 |
 | Tue-Sat 11:30 | `quant-us-equity-coverage.timer` | **必须启用**：Security Master -> 全美 coverage -> PIT 宽基 -> 八因子 -> readiness -> 影子核验 |
+| Tue-Sat 13:15 | `quant-group-analytics-eod.timer` | 在宽基链后读取同日 SP500 与 coverage benchmark，发布板块研究 |
 | 每 5 分钟 | `quant-data-requests.timer` | 处理 Watchlist 缺数请求 |
 | Mon-Fri 09:20 ET | `quant-premarket-digest.timer` | 分别发送 momentum 与 sector rotation 盘前摘要 |
 | 每小时 :35 SGT | `quant-momentum-alerts.timer` | worker 内部只保留 10:00–15:59 ET |
@@ -50,8 +50,9 @@ systemctl list-timers --all 'quant-*'
 满足才会发送 Discord；否则始终是 shadow。生产环境默认关闭发送开关，五日通过只取得晋级
 资格，不会绕过人工启用步骤。
 
-本地 2026-08-08 已把 group timer 改为 09:15；SG 在部署这次 commit 前仍可能是上次审计的
-07:45 unit。以服务器上的 `systemctl cat quant-group-analytics-eod.timer` 为准。
+板块任务必须在 11:30 宽基 coverage 和八因子重任务完成后运行，不能改回 09:15，否则 SP500 与
+SPY/QQQ benchmark 可能绑定不同交易日。以服务器上的
+`systemctl cat quant-group-analytics-eod.timer` 为准。
 
 NASDAQ100 改造已于 2026-08-11 部署。NASDAQ100 PIT 任一门禁失败时，08:15 service 可以继续
 发布彼此独立的 SP500/MAG7，但 unit 最终应为失败，NASDAQ100 不得前移；08:45 仍需发布可审计的
@@ -62,7 +63,6 @@ NASDAQ100 改造已于 2026-08-11 部署。NASDAQ100 PIT 任一门禁失败时�
 ## 3. 查看最近结果和错误
 
 ```bash
-systemctl show quant-us-daily-refresh.service -p Result -p ExecMainStatus -p ActiveState
 systemctl show quant-market-data.service -p Result -p ExecMainStatus -p ActiveState
 systemctl show quant-factor-research.service -p Result -p ExecMainStatus -p ActiveState
 systemctl show quant-group-analytics-eod.service -p Result -p ExecMainStatus -p ActiveState

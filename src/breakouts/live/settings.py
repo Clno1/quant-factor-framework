@@ -55,6 +55,40 @@ class IntradayMonitorSettings:
     opening_range_windows: tuple[int, ...] = (5, 15)
     detector_interval_minutes: int = 5
     legacy_opening_ranges: tuple[int, ...] = (60, 30)
+    cup_handle_enabled: bool = True
+    cup_handle_delivery_enabled: bool = False
+    cup_lookback_sessions: int = 126
+    cup_min_width_sessions: int = 20
+    cup_max_width_sessions: int = 100
+    cup_right_rim_search_sessions: int = 15
+    cup_min_depth_pct: float = 8.0
+    cup_ideal_depth_pct: float = 18.0
+    cup_max_depth_pct: float = 35.0
+    cup_max_rim_tolerance_pct: float = 8.0
+    cup_min_side_fraction: float = 0.20
+    cup_min_bottom_position: float = 0.25
+    cup_max_bottom_position: float = 0.75
+    cup_min_right_rim_recovery: float = 0.85
+    cup_max_volume_contraction_ratio: float = 1.10
+    cup_intraday_interval_minutes: int = 5
+    cup_max_output_bars: int = 96
+    cup_min_handle_bars: int = 3
+    cup_max_handle_bars: int = 18
+    cup_min_handle_depth_pct: float = 1.0
+    cup_max_handle_depth_pct: float = 12.0
+    cup_max_handle_to_cup_depth_ratio: float = 0.50
+    cup_handle_start_tolerance_pct: float = 3.0
+    cup_volume_baseline_bars: int = 6
+    cup_max_handle_volume_ratio: float = 0.85
+    cup_breakout_buffer_bps: float = 10.0
+    cup_min_breakout_volume_ratio: float = 1.20
+    cup_replay_confirmation_horizon_bars: int = 6
+    cup_replay_confirmation_return_pct: float = 2.0
+    cup_observation_max_detection_p95_ms: float = 250.0
+    cup_observation_min_evaluable_ticker_coverage: float = 0.95
+    cup_observation_max_gap_ticker_ratio: float = 0.05
+    cup_detail_retention_sessions: int = 30
+    cup_required_shadow_sessions: int = 5
     max_concurrent_requests: int = 4
     heartbeat_seconds: int = 30
     poll_offset_seconds: int = 8
@@ -112,6 +146,34 @@ class IntradayMonitorSettings:
             raise ValueError("observation_max_error_cycle_ratio must be between 0 and 1")
         if self.observation_max_cycle_p95_seconds <= 0:
             raise ValueError("observation_max_cycle_p95_seconds must be positive")
+        if not 20 <= self.cup_lookback_sessions <= 504:
+            raise ValueError("cup_lookback_sessions must be between 20 and 504")
+        if not 10 <= self.cup_min_width_sessions <= self.cup_max_width_sessions:
+            raise ValueError("cup width session limits are invalid")
+        if self.cup_max_width_sessions > self.cup_lookback_sessions:
+            raise ValueError("cup_max_width_sessions cannot exceed cup_lookback_sessions")
+        if not 0 < self.cup_min_depth_pct < self.cup_max_depth_pct < 100:
+            raise ValueError("cup depth limits are invalid")
+        if self.cup_intraday_interval_minutes != 5:
+            raise ValueError("cup-handle confirmation requires completed 5-minute bars")
+        if not 12 <= self.cup_max_output_bars <= 256:
+            raise ValueError("cup_max_output_bars must be between 12 and 256")
+        if not 2 <= self.cup_min_handle_bars <= self.cup_max_handle_bars:
+            raise ValueError("cup handle bar limits are invalid")
+        if self.cup_max_handle_bars >= self.cup_max_output_bars:
+            raise ValueError("cup_max_handle_bars must be below cup_max_output_bars")
+        if self.cup_observation_max_detection_p95_ms <= 0:
+            raise ValueError("cup observation latency threshold must be positive")
+        if not 0.5 <= self.cup_observation_min_evaluable_ticker_coverage <= 1.0:
+            raise ValueError(
+                "cup evaluable ticker coverage must be between 0.5 and 1.0"
+            )
+        if not 0.0 <= self.cup_observation_max_gap_ticker_ratio <= 0.5:
+            raise ValueError("cup gap ticker ratio must be between 0 and 0.5")
+        if not 5 <= self.cup_detail_retention_sessions <= 252:
+            raise ValueError("cup detail retention must be between 5 and 252 sessions")
+        if not 5 <= self.cup_required_shadow_sessions <= 20:
+            raise ValueError("cup-handle shadow observation requires 5 to 20 sessions")
         return self
 
     @classmethod
@@ -129,6 +191,11 @@ class IntradayMonitorSettings:
         opening_windows = _nested(
             root, "opening_range", "windows", default=[5, 15]
         ) or [5, 15]
+        cup = root.get("cup_handle") or {}
+        cup_daily = cup.get("daily") or {}
+        cup_intraday = cup.get("intraday") or {}
+        cup_replay = cup.get("replay") or {}
+        cup_observation = cup.get("observation") or {}
         settings = cls(
             enabled=_strict_bool(
                 os.environ.get(
@@ -192,6 +259,93 @@ class IntradayMonitorSettings:
             ),
             preload_bars=int(_nested(root, "bars", "preload_bars", default=60)),
             opening_range_windows=tuple(int(value) for value in opening_windows),
+            detector_interval_minutes=int(
+                _nested(root, "detector", "interval_minutes", default=5)
+            ),
+            cup_handle_enabled=_strict_bool(
+                cup.get("enabled", True),
+                default=True,
+                field_name="intraday_momentum_monitor.cup_handle.enabled",
+            ),
+            cup_handle_delivery_enabled=_strict_bool(
+                cup.get("delivery_enabled", False),
+                default=False,
+                field_name="intraday_momentum_monitor.cup_handle.delivery_enabled",
+            ),
+            cup_lookback_sessions=int(cup_daily.get("lookback_sessions", 126)),
+            cup_min_width_sessions=int(cup_daily.get("min_width_sessions", 20)),
+            cup_max_width_sessions=int(cup_daily.get("max_width_sessions", 100)),
+            cup_right_rim_search_sessions=int(
+                cup_daily.get("right_rim_search_sessions", 15)
+            ),
+            cup_min_depth_pct=float(cup_daily.get("min_depth_pct", 8.0)),
+            cup_ideal_depth_pct=float(cup_daily.get("ideal_depth_pct", 18.0)),
+            cup_max_depth_pct=float(cup_daily.get("max_depth_pct", 35.0)),
+            cup_max_rim_tolerance_pct=float(
+                cup_daily.get("max_rim_tolerance_pct", 8.0)
+            ),
+            cup_min_side_fraction=float(cup_daily.get("min_side_fraction", 0.20)),
+            cup_min_bottom_position=float(
+                cup_daily.get("min_bottom_position", 0.25)
+            ),
+            cup_max_bottom_position=float(
+                cup_daily.get("max_bottom_position", 0.75)
+            ),
+            cup_min_right_rim_recovery=float(
+                cup_daily.get("min_right_rim_recovery", 0.85)
+            ),
+            cup_max_volume_contraction_ratio=float(
+                cup_daily.get("max_volume_contraction_ratio", 1.10)
+            ),
+            cup_intraday_interval_minutes=int(cup_intraday.get("interval_minutes", 5)),
+            cup_max_output_bars=int(cup_intraday.get("max_output_bars", 96)),
+            cup_min_handle_bars=int(cup_intraday.get("min_handle_bars", 3)),
+            cup_max_handle_bars=int(cup_intraday.get("max_handle_bars", 18)),
+            cup_min_handle_depth_pct=float(
+                cup_intraday.get("min_handle_depth_pct", 1.0)
+            ),
+            cup_max_handle_depth_pct=float(
+                cup_intraday.get("max_handle_depth_pct", 12.0)
+            ),
+            cup_max_handle_to_cup_depth_ratio=float(
+                cup_intraday.get("max_handle_to_cup_depth_ratio", 0.50)
+            ),
+            cup_handle_start_tolerance_pct=float(
+                cup_intraday.get("handle_start_tolerance_pct", 3.0)
+            ),
+            cup_volume_baseline_bars=int(
+                cup_intraday.get("volume_baseline_bars", 6)
+            ),
+            cup_max_handle_volume_ratio=float(
+                cup_intraday.get("max_handle_volume_ratio", 0.85)
+            ),
+            cup_breakout_buffer_bps=float(
+                cup_intraday.get("breakout_buffer_bps", 10.0)
+            ),
+            cup_min_breakout_volume_ratio=float(
+                cup_intraday.get("min_breakout_volume_ratio", 1.20)
+            ),
+            cup_replay_confirmation_horizon_bars=int(
+                cup_replay.get("confirmation_horizon_bars", 6)
+            ),
+            cup_replay_confirmation_return_pct=float(
+                cup_replay.get("confirmation_return_pct", 2.0)
+            ),
+            cup_observation_max_detection_p95_ms=float(
+                cup_observation.get("max_detection_p95_ms", 250.0)
+            ),
+            cup_observation_min_evaluable_ticker_coverage=float(
+                cup_observation.get("min_evaluable_ticker_coverage", 0.95)
+            ),
+            cup_observation_max_gap_ticker_ratio=float(
+                cup_observation.get("max_gap_ticker_ratio", 0.05)
+            ),
+            cup_detail_retention_sessions=int(
+                cup_observation.get("detail_retention_sessions", 30)
+            ),
+            cup_required_shadow_sessions=int(
+                cup_observation.get("required_sessions", 5)
+            ),
             max_concurrent_requests=int(
                 _nested(root, "runtime", "max_concurrent_requests", default=4)
             ),

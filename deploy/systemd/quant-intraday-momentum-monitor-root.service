@@ -1,7 +1,7 @@
 [Unit]
 Description=Quant intraday momentum monitor (automatic gated Discord promotion)
 Wants=network-online.target
-After=network-online.target quant-us-daily-refresh.service
+After=network-online.target quant-us-equity-coverage.service
 StartLimitIntervalSec=30min
 StartLimitBurst=4
 

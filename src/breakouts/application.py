@@ -8,6 +8,7 @@ from typing import Any
 import pandas as pd
 
 from src.breakouts.daily_data import load_breakout_daily_dataset
+from src.breakouts.broad_daily_data import load_broad_breakout_universe
 from src.breakouts.scan_cache import load_scan_cache, save_scan_cache
 from src.breakouts.scanner import (
     BreakoutFilters,
@@ -38,6 +39,10 @@ class BreakoutApplicationError(RuntimeError):
 
 class BreakoutWatchlistNotFoundError(BreakoutApplicationError):
     """Raised when a requested Watchlist no longer exists."""
+
+
+class BreakoutScanNotReadyError(BreakoutApplicationError):
+    """Raised when a caller forbids an expensive cache-miss rebuild."""
 
 
 class UnknownBreakoutUniverseError(BreakoutApplicationError):
@@ -127,10 +132,16 @@ def resolve_breakout_universe(
 
     data_universe = resolve_market_data_universe(universe)
     try:
-        published = load_published_universe(
-            requested_universe=universe,
-            data_universe=data_universe,
-            dataset_version_id=dataset_version_id,
+        published = (
+            load_broad_breakout_universe(
+                dataset_version_id=dataset_version_id,
+            )
+            if data_universe == US_LIQUID_5M
+            else load_published_universe(
+                requested_universe=universe,
+                data_universe=data_universe,
+                dataset_version_id=dataset_version_id,
+            )
         )
         metadata = published.universe
     except DataFoundationError as exc:
@@ -332,8 +343,15 @@ def get_breakout_scan(
     market_symbol: str,
     view: str,
     force: bool = False,
+    allow_build: bool = True,
 ) -> dict[str, Any]:
-    """Return a cached scan or build it under a process-local lock."""
+    """Return a cached scan or optionally build it under a process-local lock.
+
+    Web requests must pass ``allow_build=False``. A broad-universe cache miss can
+    materialize hundreds of trading days for thousands of securities, so that
+    work belongs to a resource-bounded background service rather than a Web
+    worker.
+    """
     normalized_universe = normalize_breakout_universe(universe)
     normalized_enabled = _normalized_enabled_universes(enabled_universes)
     context = resolve_breakout_universe(
@@ -374,6 +392,11 @@ def get_breakout_scan(
         if cached is not None:
             return cached
 
+    if not allow_build:
+        raise BreakoutScanNotReadyError(
+            "茶杯柄候选尚未由后台任务生成；网页不会现场执行全美股票扫描，请等待下一次后台发布"
+        )
+
     with _SCAN_LOCK:
         if not force and not is_watchlist:
             cached = load_scan_cache(parameters)
@@ -391,6 +414,7 @@ def get_breakout_scan(
 __all__ = [
     "BREAKOUT_UNIVERSE_LABELS",
     "BreakoutApplicationError",
+    "BreakoutScanNotReadyError",
     "BreakoutWatchlistNotFoundError",
     "UnknownBreakoutUniverseError",
     "breakout_universe_options",

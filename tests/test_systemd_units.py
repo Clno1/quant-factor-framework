@@ -62,22 +62,58 @@ class SystemdUnitTests(unittest.TestCase):
         intraday = (
             SYSTEMD_DIR / "quant-intraday-momentum-monitor-root.service"
         ).read_text(encoding="utf-8")
+        prepare = (
+            SYSTEMD_DIR / "quant-intraday-candidate-prepare-root.service"
+        ).read_text(encoding="utf-8")
         refresh = (
             SYSTEMD_DIR / "quant-us-daily-refresh-root.service"
         ).read_text(encoding="utf-8")
         premarket = (
             SYSTEMD_DIR / "quant-premarket-digest-root.service"
         ).read_text(encoding="utf-8")
+        premarket_prepare = (
+            SYSTEMD_DIR / "quant-premarket-prepare-root.service"
+        ).read_text(encoding="utf-8")
 
         self.assertIn("--scheduled-hourly", hourly)
         self.assertIn("--component hourly", hourly)
         self.assertIn("--auto", intraday)
         self.assertIn("--component intraday", intraday)
+        self.assertIn("--prepare-candidates", prepare)
+        self.assertIn("MemoryHigh=500M", prepare)
+        self.assertIn("MemoryMax=700M", prepare)
+        self.assertIn("MemorySwapMax=0", prepare)
         self.assertNotIn("--skip-precompute", refresh)
         self.assertIn("--channel all", premarket)
+        self.assertIn("--prepare --channel all", premarket_prepare)
+        self.assertNotIn("--send", premarket_prepare)
+        self.assertIn("MemoryHigh=500M", premarket_prepare)
+        self.assertIn("MemoryMax=700M", premarket_prepare)
+        self.assertIn("MemorySwapMax=0", premarket_prepare)
+        self.assertIn("MemoryHigh=300M", premarket)
+        self.assertIn("MemoryMax=450M", premarket)
         self.assertIn("--component premarket", premarket)
         self.assertIn("PREMARKET_SECTOR_ROTATION_ENABLED=true", premarket)
         self.assertNotIn("quant-group-analytics-eod.service", premarket)
+        for content in (hourly, intraday, premarket):
+            self.assertIn("quant-us-equity-coverage.service", content)
+            self.assertNotIn("quant-us-daily-refresh.service", content)
+
+        group_timer = (
+            SYSTEMD_DIR / "quant-group-analytics-eod.timer"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "OnCalendar=Tue..Sat *-*-* 13:15:00 Asia/Singapore",
+            group_timer,
+        )
+        candidate_timer = (
+            SYSTEMD_DIR / "quant-intraday-candidate-prepare.timer"
+        ).read_text(encoding="utf-8")
+        self.assertIn("06:30:00 America/New_York", candidate_timer)
+        premarket_prepare_timer = (
+            SYSTEMD_DIR / "quant-premarket-prepare.timer"
+        ).read_text(encoding="utf-8")
+        self.assertIn("07:00:00 America/New_York", premarket_prepare_timer)
 
     def test_broad_units_form_a_resource_bounded_success_chain(self):
         coverage = (
@@ -142,6 +178,45 @@ class SystemdUnitTests(unittest.TestCase):
         self.assertIn("Persistent=true", initial_timer)
         self.assertIn("Unit=quant-broad-initial-rollout.service", initial_timer)
 
+    def test_core_market_recovery_is_narrow_and_resource_bounded(self):
+        service = (
+            SYSTEMD_DIR / "quant-market-data-root.service"
+        ).read_text(encoding="utf-8")
+        self.assertIn("scripts/run_core_market_data.py", service)
+        self.assertIn("--workers 4", service)
+        self.assertIn("OMP_NUM_THREADS=1", service)
+        self.assertIn("MemoryHigh=700M", service)
+        self.assertIn("MemoryMax=900M", service)
+        self.assertIn("MemorySwapMax=0", service)
+        self.assertIn(".broad-production.lock", service)
+
+    def test_research_jobs_are_resource_bounded(self):
+        factor = (
+            SYSTEMD_DIR / "quant-factor-research-root.service"
+        ).read_text(encoding="utf-8")
+        group = (
+            SYSTEMD_DIR / "quant-group-analytics-eod-root.service"
+        ).read_text(encoding="utf-8")
+        broad_factor = (
+            SYSTEMD_DIR / "quant-broad-factor-data-root.service"
+        ).read_text(encoding="utf-8")
+
+        for value in (factor, group):
+            self.assertIn("MemorySwapMax=0", value)
+            self.assertIn("CPUQuota=100%", value)
+            self.assertIn("TasksMax=64", value)
+            self.assertIn("OOMPolicy=stop", value)
+        self.assertIn("MemoryHigh=700M", factor)
+        self.assertIn("MemoryMax=900M", factor)
+        self.assertIn("MemoryHigh=400M", group)
+        self.assertIn("MemoryMax=550M", group)
+        self.assertIn("quant-broad-factor-data.service", group)
+        self.assertIn(".broad-production.lock", group)
+        self.assertIn(
+            "Before=quant-group-analytics-eod.service",
+            broad_factor,
+        )
+
     def test_operations_site_is_independent_and_read_only(self):
         web = (
             SYSTEMD_DIR / "quant-operations-web-root.service"
@@ -184,7 +259,6 @@ class SystemdUnitTests(unittest.TestCase):
         for directory in ("data", "outputs", "logs", "runlog"):
             self.assertIn(f"--exclude='/{directory}/'", guide)
             self.assertNotIn(f"--exclude='{directory}/'", guide)
-
 
 if __name__ == "__main__":
     unittest.main()

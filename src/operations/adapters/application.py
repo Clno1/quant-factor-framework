@@ -35,6 +35,10 @@ def _app_db_path() -> Path:
     return configured if configured.is_absolute() else PROJECT_ROOT / configured
 
 
+def _paper_notification_db_path() -> Path:
+    return PROJECT_ROOT / "outputs" / "paper_notifications" / "state.sqlite3"
+
+
 def _decode(value: Any) -> dict[str, Any]:
     try:
         payload = json.loads(str(value or "{}"))
@@ -424,6 +428,169 @@ def _collect_paper(
     return result
 
 
+def _collect_paper_notifications(
+    job: JobDefinition,
+    *,
+    now: datetime,
+    observed_at: str,
+) -> CollectionResult:
+    result = CollectionResult()
+    path = _paper_notification_db_path()
+    rows: list[dict[str, Any]] = []
+    if "paper_notification_outbox" in sqlite_tables(path):
+        rows = sqlite_rows(
+            path,
+            """
+            SELECT * FROM paper_notification_outbox
+            ORDER BY created_at DESC, delivery_id DESC
+            LIMIT 500
+            """,
+        )
+    kind = str(job.evidence.get("kind") or "FILL").upper()
+    target_rows = [row for row in rows if str(row.get("kind") or "") == kind]
+    expected = expected_target_session(job, now=now)
+    scheduled_for = None
+    deadline_at = None
+    if job.schedule.get("time"):
+        scheduled_for, deadline_at = schedule_bounds(
+            job,
+            now=now,
+            target_session=expected,
+        )
+
+    status_map = {
+        "PENDING": JobStatus.SCHEDULED,
+        "SENDING": JobStatus.RUNNING,
+        "SENT": JobStatus.SUCCESS,
+        "FAILED": JobStatus.FAILED,
+        "UNKNOWN": JobStatus.DEGRADED,
+        "BASELINED": JobStatus.SKIPPED,
+    }
+    for row in target_rows[:100]:
+        source_id = str(row.get("delivery_id") or "")
+        source_status = str(row.get("status") or "UNKNOWN").upper()
+        result.runs.append(OperationRun(
+            run_id=stable_id("run_", job.job_id, source_id),
+            source_run_id=source_id,
+            job_id=job.job_id,
+            status=status_map.get(source_status, JobStatus.UNKNOWN),
+            source="paper_notifications.outbox",
+            observed_at=observed_at,
+            target_session=str(row.get("target_session") or "") or None,
+            stage=source_status,
+            attempt=int(row.get("attempts") or 0),
+            started_at=iso_utc(row.get("created_at")),
+            completed_at=iso_utc(row.get("sent_at")),
+            error_summary=safe_text(row.get("last_error")),
+            delivery_status=source_status,
+            metadata={
+                "kind": kind,
+                "account_id": row.get("account_id"),
+                "source_id": row.get("source_id"),
+                "message_id": row.get("message_id"),
+                "last_error_code": row.get("last_error_code"),
+            },
+        ))
+
+    counts: dict[str, int] = {}
+    for row in target_rows:
+        source_status = str(row.get("status") or "UNKNOWN").upper()
+        counts[source_status] = counts.get(source_status, 0) + 1
+    latest = target_rows[0] if target_rows else None
+    if kind == "DAILY_SUMMARY":
+        today_rows = [
+            row for row in target_rows
+            if str(row.get("target_session") or "") == expected
+        ]
+        current = today_rows[0] if today_rows else None
+        source_status = str((current or {}).get("status") or "").upper()
+        if source_status == "SENT":
+            status = JobStatus.SUCCESS
+            reason = f"{expected} 日结已发送"
+        elif source_status == "SENDING":
+            status = JobStatus.RUNNING
+            reason = f"{expected} 日结正在发送"
+        elif source_status == "PENDING":
+            status = JobStatus.SCHEDULED
+            reason = f"{expected} 日结已冻结，等待发送"
+        elif source_status == "UNKNOWN":
+            status = JobStatus.DEGRADED
+            reason = f"{expected} 日结发送结果不确定，禁止自动重试"
+        elif source_status == "FAILED":
+            status = JobStatus.FAILED
+            reason = f"{expected} 日结发送失败"
+        else:
+            status = time_relative_status(
+                now=now,
+                scheduled_for=scheduled_for,
+                deadline_at=deadline_at,
+                has_older_evidence=bool(target_rows),
+            )
+            reason = f"{expected} 日结尚未生成"
+        snapshot_run = current
+    else:
+        unresolved_unknown = counts.get("UNKNOWN", 0)
+        retry_exhausted = sum(
+            1
+            for row in target_rows
+            if str(row.get("status") or "").upper() == "FAILED"
+            and int(row.get("retryable") or 0) != 1
+        )
+        if unresolved_unknown:
+            status = JobStatus.DEGRADED
+            reason = f"{unresolved_unknown} 条成交通知结果不确定"
+        elif retry_exhausted:
+            status = JobStatus.FAILED
+            reason = f"{retry_exhausted} 条成交通知永久失败"
+        elif counts.get("SENDING", 0):
+            status = JobStatus.RUNNING
+            reason = f"正在发送 {counts['SENDING']} 条成交通知"
+        elif counts.get("PENDING", 0):
+            status = JobStatus.RUNNING
+            reason = f"等待发送 {counts['PENDING']} 条成交通知"
+        elif path.exists():
+            status = JobStatus.SUCCESS
+            reason = "成交通知 outbox 正常且没有待发送项"
+        else:
+            status = JobStatus.SCHEDULED
+            reason = "成交通知 outbox 尚未初始化"
+        snapshot_run = latest
+
+    result.snapshots.append(JobSnapshot(
+        job_id=job.job_id,
+        status=status,
+        observed_at=observed_at,
+        target_session=(
+            str((snapshot_run or {}).get("target_session") or "") or None
+        ),
+        run_id=(
+            stable_id("run_", job.job_id, snapshot_run.get("delivery_id"))
+            if snapshot_run else None
+        ),
+        stage=kind,
+        status_reason=reason,
+        scheduled_for=scheduled_for,
+        deadline_at=deadline_at,
+        last_success_at=max(
+            filter(None, [
+                iso_utc(row.get("sent_at"))
+                for row in target_rows
+                if str(row.get("status") or "").upper() == "SENT"
+            ]),
+            default=None,
+        ),
+        metrics={
+            "pending": counts.get("PENDING", 0),
+            "sending": counts.get("SENDING", 0),
+            "sent": counts.get("SENT", 0),
+            "failed": counts.get("FAILED", 0),
+            "unknown": counts.get("UNKNOWN", 0),
+            "baselined": counts.get("BASELINED", 0),
+        },
+    ))
+    return result
+
+
 def collect_application_evidence(
     jobs: Iterable[JobDefinition],
     *,
@@ -436,6 +603,14 @@ def collect_application_evidence(
             result.extend(_collect_data_requests(job, now=now, observed_at=observed_at))
         elif job.adapter == "paper_trading":
             result.extend(_collect_paper(job, now=now, observed_at=observed_at))
+        elif job.adapter == "paper_notifications":
+            result.extend(
+                _collect_paper_notifications(
+                    job,
+                    now=now,
+                    observed_at=observed_at,
+                )
+            )
     return result
 
 

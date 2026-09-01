@@ -92,6 +92,21 @@ def load_breakout_daily_dataset(
 ) -> BreakoutDailyDataset:
     """Resolve, validate and load exactly one published daily data version."""
     resolved = resolve_market_data_universe(data_universe or requested_universe)
+    if resolved == "US_LIQUID_5M":
+        from src.breakouts.broad_daily_data import load_broad_breakout_daily_dataset
+
+        return load_broad_breakout_daily_dataset(
+            requested_universe=requested_universe,
+            tickers=tickers,
+            ticker_selector=ticker_selector,
+            start=start,
+            end=end,
+            exact_universe=exact_universe,
+            dataset_version_id=dataset_version_id,
+            min_latest_coverage=min_latest_coverage,
+            lookback_calendar_days=lookback_calendar_days,
+            reader=reader,
+        )
     if tickers is not None and ticker_selector is not None:
         raise ValueError("tickers and ticker_selector are mutually exclusive")
     selected_version_id = dataset_version_id

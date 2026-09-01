@@ -28,6 +28,61 @@
     <div class="detail-cell"><span>进度</span><strong>{% if snapshot.progress_total %}{{ snapshot.progress_current or 0 }} / {{ snapshot.progress_total }}{% else %}-{% endif %}</strong></div>
 </section>
 
+{% if job.job_id == 'intraday_momentum' %}
+{% set metrics = snapshot.metrics or {} %}
+<section class="section-block">
+    <div class="section-heading">
+        <div>
+            <h2>茶杯柄独立影子监控</h2>
+            <p>日线杯体与完整 5 分钟柄独立评估；这里不复用旧动量突破的五日验收结果。</p>
+        </div>
+        <span class="status status-disabled">{{ metrics.get('茶杯柄模式') or 'shadow' }}</span>
+    </div>
+    <div class="detail-grid">
+        <div class="detail-cell"><span>影子验收</span><strong>{{ metrics.get('茶杯柄影子验收进度') or '0/5' }}</strong></div>
+        <div class="detail-cell"><span>最近完整交易日</span><strong class="mono">{{ metrics.get('茶杯柄最近完整交易日') or '-' }}</strong></div>
+        <div class="detail-cell"><span>最近完整日结论</span><strong>{{ status_label(metrics.get('茶杯柄最近完整交易日状态')) if metrics.get('茶杯柄最近完整交易日状态') else '等待首日' }}</strong></div>
+        <div class="detail-cell"><span>当前展示证据日</span><strong class="mono">{{ metrics.get('茶杯柄证据交易日') or '-' }}</strong></div>
+        <div class="detail-cell"><span>当日命中</span><strong>{{ metrics.get('茶杯柄命中数') or 0 }}</strong></div>
+        <div class="detail-cell"><span>当日拒绝</span><strong>{{ metrics.get('茶杯柄拒绝数') or 0 }}</strong></div>
+        <div class="detail-cell"><span>等待成形</span><strong>{{ metrics.get('茶杯柄等待数') or 0 }}</strong></div>
+        <div class="detail-cell"><span>当日不可评估</span><strong>{{ metrics.get('茶杯柄不可评估数') or 0 }}</strong></div>
+        <div class="detail-cell"><span>检测错误</span><strong>{{ metrics.get('茶杯柄错误数') or 0 }}</strong></div>
+        <div class="detail-cell"><span>可评估股票覆盖率</span><strong>{% if metrics.get('茶杯柄可评估股票覆盖率') is not none %}{{ '%.1f%%' | format(metrics.get('茶杯柄可评估股票覆盖率') * 100) }}{% else %}-{% endif %}</strong></div>
+        <div class="detail-cell"><span>数据缺口股票</span><strong>{{ metrics.get('茶杯柄数据缺口股票数') if metrics.get('茶杯柄数据缺口股票数') is not none else '-' }}</strong></div>
+        <div class="detail-cell"><span>数据缺口股票比例</span><strong>{% if metrics.get('茶杯柄数据缺口股票比例') is not none %}{{ '%.1f%%' | format(metrics.get('茶杯柄数据缺口股票比例') * 100) }}{% else %}-{% endif %}</strong></div>
+        <div class="detail-cell"><span>唯一缺口事件</span><strong>{{ metrics.get('茶杯柄数据缺口事件数') if metrics.get('茶杯柄数据缺口事件数') is not none else '-' }}</strong></div>
+        <div class="detail-cell"><span>P95 延迟</span><strong class="mono">{{ metrics.get('茶杯柄检测延迟P95毫秒') if metrics.get('茶杯柄检测延迟P95毫秒') is not none else '-' }} ms</strong></div>
+        <div class="detail-cell"><span>最长 5 分钟序列</span><strong>{{ metrics.get('茶杯柄最大序列长度') or 0 }} / 96</strong></div>
+        <div class="detail-cell"><span>算法版本</span><strong class="mono compact-hash" title="{{ metrics.get('茶杯柄算法版本') or '' }}">{{ metrics.get('茶杯柄算法版本') or '-' }}</strong></div>
+    </div>
+    <div class="table-wrap">
+        <table class="ops-table">
+            <thead><tr><th>五分钟数据缺口分类</th><th>唯一事件数</th></tr></thead>
+            <tbody>
+            {% for reason, count in (metrics.get('茶杯柄数据缺口分类') or {}).items() %}
+                <tr><td class="mono">{{ reason }}</td><td>{{ count }}</td></tr>
+            {% else %}
+                <tr><td colspan="2" class="table-empty">当前证据日没有五分钟数据缺口。</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <div class="table-wrap">
+        <table class="ops-table">
+            <thead><tr><th>主要拒绝原因</th><th>次数</th></tr></thead>
+            <tbody>
+            {% for reason, count in (metrics.get('茶杯柄主要拒绝原因') or {}).items() %}
+                <tr><td class="mono">{{ reason }}</td><td>{{ count }}</td></tr>
+            {% else %}
+                <tr><td colspan="2" class="table-empty">当前交易日尚无茶杯柄评估记录。</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endif %}
+
 <section class="section-block">
     <div class="section-heading"><div><h2>近期运行</h2><p>耗时来自持久化的开始和结束时间，不随页面刷新重新计时。</p></div></div>
     <div class="table-wrap">

@@ -278,9 +278,10 @@ def run_live_alert_scan(
     def select_tickers(source: pd.DataFrame) -> list[str]:
         _, eligible, _, _, _ = _prepare_broad_universe(settings, forced, source)
         selected = eligible["ticker"].tolist()
-        source_tickers = set(source["ticker"].astype(str).str.upper())
-        if "QQQ" in source_tickers:
-            selected.append("QQQ")
+        # QQQ is an explicit market-regime support instrument. The derived
+        # PIT stock pool intentionally excludes ETFs, while the parent broad
+        # coverage publication authenticates this separately requested row.
+        selected.append("QQQ")
         return list(dict.fromkeys(selected))
 
     daily = dataset_loader(

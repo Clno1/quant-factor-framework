@@ -63,17 +63,20 @@ quant-operations-web.service（SG: 0.0.0.0:18825）
 
 配置唯一来源是 [`../configs/operations.yaml`](../configs/operations.yaml)。当前包括：
 
-1. `07:15 SGT` 全美活跃股票行情缓存。
+1. 旧 `07:15 SGT` 短周期行情缓存已归档并预期关闭，历史证据保留。
 2. `08:15 SGT` SP500、NASDAQ100、MAG7 核心行情。
 3. `08:45 SGT` 多因子研究与跨池发布。
-4. `09:15 SGT` 板块和子行业研究。
+4. `13:15 SGT` 在宽基生产后运行板块和子行业研究。
 5. `10:30 SGT` 模拟盘日终运行。
-6. `11:30 SGT` 全美宽基生产链，首次回填完成前预期关闭。
-7. 每 5 分钟缺数队列。
-8. `09:20 ET` 盘前动量和板块轮动双频道投递。
-9. 美股交易时段每小时动量扫描。
-10. 美股交易时段盘中动量持续监控和心跳。
-11. 每分钟运维 watchdog 自身。
+6. 每两分钟对账模拟盘新成交；`11:00 SGT` 发送每日账户日结。
+7. `11:30 SGT` 全美宽基生产链，首日验收后必须保持启用。
+8. 每 5 分钟缺数队列。
+9. `06:30 ET` 盘中候选预计算。
+10. `07:00 ET` 盘前双频道 payload 预计算。
+11. `09:20 ET` 盘前动量和板块轮动双频道投递。
+12. 美股交易时段每小时动量扫描。
+13. 美股交易时段盘中动量持续监控和心跳。
+14. 每分钟运维 watchdog 自身。
 
 采集器只读以下既有事实：
 
@@ -82,6 +85,7 @@ quant-operations-web.service（SG: 0.0.0.0:18825）
 - group analytics 的 `latest_success.json` 和 `last_attempt.json`；
 - `outputs/quant_app.sqlite3` 的 data requests、paper accounts 和运行 frame；
 - premarket、hourly momentum、intraday monitor 三个专属 SQLite；
+- intraday monitor 内的茶杯柄使用独立算法版本、评估/周期/交易日三张表和独立 `5/5`，运维任务详情展示命中、拒绝原因、P95 延迟与有界序列长度；
 - 全美宽基 pipeline report、factor publication、readiness 和 shadow ledger；
 - Linux systemd 的 service/timer 状态；
 - 可用磁盘和内存。
@@ -407,3 +411,254 @@ Web，保住 SSH、运维站和生产 timer。
 `enabled/active`，没有宽基 timer 告警。真实 MDB、AEVA、重复 MDB 与主页面请求后，主 Web
 峰值稳定在约 420.5 MiB、`NRestarts=0`；SG 完整回归 `527 passed`。当前唯一开放 incident 是
 `data_requests` 的 `JOB_DEGRADED`，与本次 OOM 和宽基影子停滞无关，应作为独立缺数队列问题处理。
+
+## 16. 2026-08-25 身份漂移门禁告警
+
+宽基日常 timer 已按期触发，但 target `2026-08-24` 连续两次在 Security Master 阶段返回同一
+`policy selector drifted`。这类错误是确定性数据合同冲突，不应归类为供应商网络瞬断，也不应在
+页面显示为“继续运行”。运维证据应展示失败 security_id、政策期望、候选观测、冻结 source 路径
+和重试次数；下游四个阶段应显示“未运行”，shadow 保持 2/5。
+
+本次冲突由 FMP 同一 CIK 的 GRML/KLTO profile 使用不同 CUSIP、而 SEC 官方文件声明改名换码时
+CUSIP 保持不变触发。修复前保持 fail-closed 是正确行为。自动重试无法解决 selector drift，达到
+StartLimit 后应保持 failed，等待带 SEC 来源的 correction 与双重冻结源幂等验证。
+
+## 17. 2026-08-26 恢复证据和数据消费者迁移
+
+GRML/KLTO 的当前 incident 只能在三类证据同时成立后关闭：source-backed correction 精确匹配、
+同一冻结源双构建精确幂等、正式 Security Master/coverage/PIT/factor 链通过。仅修改配置或
+`systemctl reset-failed` 不算恢复。现网正式恢复链已经产生 2026-08-24 的完整 publication，shadow
+记为第三日 PASS；原两次 selector drift attempt 和冻结源继续保留在运行历史。
+
+运维站对旧 `us_daily_refresh` 的口径改为“已归档、预期关闭”，不再把旧短历史 publication 的
+过期状态当作当前动量故障。当前证据来自 `broad_us_pipeline`，而动量读合同还应显示父 coverage、
+PIT universe、membership/eligibility/manifest 哈希和 Security Master 代次。旧 timer 关闭不产生
+告警；宽基 timer 关闭、过期或失败仍必须告警。
+
+核心行情的自动恢复报告落在 `outputs/data_audits/core_market_data/target=<date>/`。每次运行包含普通
+增量结果、识别出的 semantic-drift 股票池、受控 full-rebuild 结果和有限日志尾部。日志在子进程
+运行时实时进入 journal，不能再因包装器缓冲而长时间显示无进度。只有所有失败池都属于明确的
+non-uniform revision/no-overlap/zero-volume 语义迁移且错误要求 full rebuild，才允许自动恢复；网络、
+PIT、版本哈希及混合错误保持红色 fail-closed。
+
+板块研究改为在宽基生产后执行，其 benchmark 读取全美 coverage；盘前和盘中动量使用同一父行情
+加精确 PIT 合同。运维验收必须分别检查：宽基 target、核心 SP500 target、板块 publication target、
+盘前 dry-run source session、盘中 candidate contract。任何一个交易日不一致都不能显示为整体正常。
+
+## 18. 2026-08-26 预计算、严格恢复和模拟盘证据
+
+盘前任务现分为两个可独立观测的阶段：`premarket_digest_prepare` 在 07:00 ET 计算并以
+`PENDING + payload_hash` 冻结消息，不接触 Discord；`premarket_digest` 在 09:20 ET 只能领取已冻结
+payload 并发送，缺失时 fail closed，禁止临时冷算。今日首次准备 13 分钟、峰值 547.3 MB；定时重复
+准备返回 `PREPARED_ALREADY_EXISTS`，发送后两条状态均为 `SENT/attempts=1`。运维页应分别显示
+“准备成功”和“两频道已发送”，不能把准备成功等同于已投递。
+
+盘中候选也有独立 `intraday_candidate_prepare` 证据，记录 coverage/PIT 版本、source session、候选数
+和耗时。今日为 363 个候选、热运行 0.949 秒；持续监控心跳正常、137 个循环、0 错误。小时扫描已在
+10:35/11:35 ET 成功完成并得到 Discord HTTP 200。
+
+缺数队列新增严格语义恢复日志 `Confirmed semantic drift; rebuilding requested universe`。该事件只有在
+writer 已完成供应商抓取和重叠认证、错误明确要求 full rebuild 时出现。网络超时、FMP 5xx、身份/PIT
+冲突和质量门禁不允许记录为可恢复。今日 Watchlist 请求由历史 failed 恢复为 success，队列当前
+pending/running/unresolved failed 均为 0；旧失败仍作为历史证据保留。
+
+模拟盘适配器当前显示 1/1 启用账户成功，目标日 2026-08-25。证据不仅包括 service exit 0，还包括
+数据版本 `93eb4878bc4b4e0b9829fbf690bc39f4`、逐票成本字段、现金/持仓/权益台账和同日幂等重跑。
+FMP `adj_close` 美分量化造成的伪分红使用区间边界审计：零在区间内才归零，整个区间为负仍产生红色
+数据质量失败。运维页面不得把该修复描述成“忽略负分红”。
+
+宽基专项为连续 4/5，日期 2026-08-20、21、24、25，剩余 1 日；第五日只能来自下一次不同的正式
+target。资源、主站和运维站健康，当前无失败 `quant-*` unit。旧短周期 `US_LIQUID_5M` publication
+仍可在 freshness 历史区显示过期，但其任务已归档，不能覆盖当前 broad coverage + PIT 消费链的成功状态。
+
+部署后最终回归由受限 transient systemd unit 执行，结果为 `608 passed, 1 warning in 108.42s`，
+峰值内存 281.1 MB、未使用 swap；唯一警告是 FastAPI TestClient 弃用提示。运维站的正式 unit 名是
+`quant-operations-web.service`，端口为 18825；排障脚本不得使用不存在的 `quant-ops-web.service`
+来判断站点状态。
+
+## 19. 2026-08-27 五日完成与 catalog 锁观测
+
+上线专项已进入 `SUCCESS`：五个连续交易日 2026-08-20、21、24、25、26 全部 PASS，网页默认
+开关已启用。运维快照必须同时展示 target 2026-08-26、coverage `e4963942c52a`、PIT
+`ded547cbef6b`、factor `1a60b302fa47`、Security Master `6706c172a3f0`，不能只展示 5/5 数字。
+
+当日新增一类明确 incident：长任务同时读取同一 DuckDB catalog 时，只读进程持有共享锁，而另一个
+所谓“读取”入口先调用 schema initialize，会尝试升级为写锁并失败。修复后的观测合同要求：
+
+1. `published_generation()` 只以 read-only 连接查询，读取过程中不得执行 DDL；
+2. 八因子必须先于板块研究，核心行情、宽基链和板块研究使用同一生产 `flock`；
+3. 运维事件必须记录锁持有 PID、unit、失败阶段和自动重试次数，不能归类成 FMP 网络错误；
+4. 停止被错误调度的板块任务后，八因子只能从输入哈希完全匹配的 checkpoint 恢复。
+
+真实恢复结果为 640/640、无 swap，readiness 仅保留预期 PIT 行业历史 blocker，shadow 自动落为
+5/5。完整测试为 `609 passed, 1 warning`；MDB/AEVA 搜索与历史 API 均返回 200。正式宽基置信研究
+仍显示 BLOCKED 是正确状态，不应覆盖因子数据浏览已经正式启用的 SUCCESS 状态。核心 SP500
+落后一个交易日是独立 incident，应继续显示在 freshness/jobs 区，不能把上线专项重新降为失败。
+
+## 20. 2026-08-28 上线完成后日更状态语义
+
+网页默认开关与 5/5 台账只证明“上线门槛已经完成”，不能证明“今天的数据已经发布”。此前专项总
+状态只检查这两个条件，所以在四层 publication 都落后一天时仍显示 `SUCCESS/正常`；阶段列表却
+显示四个 `STALE/已过期`，两者互相矛盾。
+
+修复后的证据模型把状态拆开：
+
+1. freshness 始终按实际 publication target 判断，旧版本仍如实记录 stale；
+2. 若核心行情、核心研究或模拟盘等 systemd 上游正在执行，专项显示 `RUNNING`，尚未轮到的四层
+   显示 `SCHEDULED/等待运行`，并记录具体上游 unit；
+3. 只有四层 publication 当前、5/5 已通过且网页开关开启时，专项总状态才是 `SUCCESS`；
+4. 网页已开启但四层滞后且没有活跃恢复任务时，总状态为 `DEGRADED`，不得继续显示正常；
+5. 5/5 是不可变的上线验收历史，不因每日更新过程重置；PIT 行业历史 blocker 继续单独显示。
+
+现网最新证据已显示 `RUNNING`，原因为“等待核心行情日更完成
+（quant-market-data.service）”；前四层为等待运行，shadow 保持 5/5。全量重建的性能证据还应记录
+raw 完成时间、CPU、MemoryCurrent/Peak、`memory.events.high` 和 Python/C 调用栈，避免把本地内存
+退化误判成 FMP 网络卡顿。
+
+## 21. 2026-08-28 恢复后的最终观测状态
+
+target `2026-08-27` 已完成正式恢复。watchdog 在 2026-08-28 重新采集后，上线专项为
+`SUCCESS`，前四层分别绑定 Security Master `be02e2fff93d`、coverage `378d1f3fae89`、PIT
+`8f19d47b45b6`、八因子 `11247203be72`；影子台账显示连续 `6/5`，网页默认开关为 true。
+MDB、AEVA 的真实 MOM_12M 查询均返回 6 个交易日并通过版本绑定。运维站刷新后若仍显示旧
+`STALE`，应先比较快照 `observed_at`，不得仅凭浏览器缓存判断生产状态。
+
+本次恢复应产生三类不同 incident，不得合并为“FMP 失败”：
+
+- `CORE_REBUILD_DTYPE_PRESSURE`：FMP 已抓取成功，但数值列被转换成 object，出现大量 cgroup high
+  event；修复后 SP500 full rebuild 约 2 分钟完成。
+- `BROAD_PUBLICATION_CONTRACT_MISMATCH`：日更脚本传入价格语义合同，而存储接口未同步接收；
+  修复后 manifest v5 强制校验父版本和 lineage。
+- `BROAD_PRODUCTION_LOCK_CONTENTION`：板块研究超时重试持有生产锁，宽基人工重跑等待锁后退出；
+  当前主链已恢复，板块任务仍需独立性能处置。
+
+宽基正式置信研究继续显示 BLOCKED，并只列出 `PIT_CLASSIFICATION_POLICY`、
+`PIT_INDUSTRY_COVERAGE`，这是正确的 fail-closed 证据。专项数据 freshness、历史 6/5 上线验收、
+正式置信研究三者必须在页面和告警中保持独立。
+
+## 22. 2026-08-28 SLA 截止时间与消费者性能证据
+
+运维状态不能直接等同于业务表中的原始状态。盘前 outbox 的 `PENDING` 表示消息从未成功领取，
+在投递窗口内可解释为运行中；超过 09:29 ET 后，同一原始状态必须解释为 `MISSED`。适配器现在同时
+保留：
+
+- `source_status=PENDING`：SQLite 原始证据；
+- `past_deadline=true`：按任务 schedule 计算的时间事实；
+- `status=MISSED`：面向值班人员的运维结论。
+
+盘前准备同理。两个 payload 都存在只能证明工作最终完成；若最大 `created_at` 晚于 08:30 ET，
+状态为 `DEGRADED`，`last_success_at` 仍记录实际完成时间。运维站不得把“晚完成”显示成“提前冻结
+成功”，也不得把准备成功等同于投递成功。
+
+本次事故链为：消费者重复全量哈希 92 个历史分片并加载无界行情 -> 板块任务 3 小时超时、盘前准备
+超过 4 小时 -> 09:20 发送器找不到预生成 payload -> 当日两个频道漏发。修复后板块研究 CPU
+9.609 秒；盘前准备约 11 分钟完成，CPU 8 分 42.79 秒、峰值 537.1 MB、无 swap，但因已过窗口
+仅保留审计，没有迟到补发。
+
+完整 publication 的安全门禁没有被移除。消费者只跳过与查询无关的 child hash，实际读取分片仍
+验哈希；shadow、发布验收和人工完整核验仍检查全部 child。watchdog 新测试固定验证两条合同：
+截止后的 PENDING 必须为 MISSED，晚于截止时间的完整准备必须为 DEGRADED。当前 SG 快照已按该
+合同重新生成，今天的盘前漏发保留为开放 incident。
+
+数值指标还必须区分“零”和“缺失”。`remaining_sessions=0` 表示五日门槛已完成，不能通过
+`value or default` 被替换成默认值 5。适配器现在只在值为 `None` 时回退；现网最终指标为
+`shadow_passed=6`、`shadow_required=5`、`shadow_remaining=0`。
+
+## 23. 2026-08-30 主站宽基扫描阻塞事故
+
+主站出现“进程 active、所有页面持续转圈”的假健康。根因不是界面改名、FMP、网络或整机内存
+耗尽，而是旧 `quant-us-daily-refresh` 归档后不再预热 `data/cache/momentum_scans/`；Web 仍保留
+“缓存缺失就在 HTTP 请求内构建扫描”的旧合同。一次 `/breakouts` 请求因此读取约 2,780 只 PIT
+成员、每票约 400 个日历日，并在 DuckDB 内执行全量排序。
+
+现网证据包括：主站 RSS 约 565 MB、cgroup `MemoryHigh=420M` 被越过、多个请求线程分别等待
+DuckDB 实例锁和 SQLite；GDB 原生栈明确停在 DuckDB `PhysicalOrder`、`SortedRunMerger` 和 catalog
+checkpoint 读取。后续点击继续进入线程池并等待数据库锁，所以静态资源已加载、页面主体却一直没有
+响应。服务状态 `active` 在此场景不能代表 HTTP 健康。
+
+永久修复提交为 `46aa2f0`。后台脚本继续允许在独立资源边界内生成扫描缓存；Web 页面和 JSON API
+统一传入 `allow_build=false`。缓存不存在时，页面立即显示等待后台发布，API 返回 503，禁止在 Web
+进程内退化为全美现场扫描。新增测试固定验证 cache miss 不会调用 `build_breakout_scan()`。
+
+SG 定向回归为 `19 passed`。部署后六个入口的实测响应为：研究 0.994 秒、策略 0.416 秒、回测
+0.405 秒、模拟盘 0.405 秒、股票池 0.423 秒、茶杯柄 1.325 秒，均为 HTTP 200。整组请求后 Web
+cgroup 峰值约 383 MB，未再次越过 420 MB 高水位。部署备份：
+
+```text
+/home/projects/quant-backups/web-broad-scan-guard-20260830T1544CST
+```
+
+## 24. 2026-08-30 模拟盘周末日历边界事故
+
+模拟盘任务在周六进入 `failed`，根因是 XNYS 动态日历的右边界停在前一交易日，周六日期无法执行
+`direction=previous`。观测上应把这种错误标记为 `CALENDAR_SESSION_BOUNDARY`，因为服务在行情读取、
+因子计算和订单执行之前失败；不得归类为 FMP、成本模型或策略失败。systemd 的三次自动重试使用
+相同输入，因此只会重复同一确定性错误，随后触发 start limit。
+
+修复后生产验收证据：service exit 0，decision/expected/mark 均为 2026-08-28，`last_error=null`，
+dataset version 为 `c18ef8024a494896860fb5ade7783ecb`。首次恢复产生 2 个 next-open fill；紧接着
+同 session 重跑产生 0 fill、0 order，持久账本计数保持 orders=7、fills=7、equity rows=5，仅新增
+一条运行审计记录。SQLite integrity、ID 唯一性、成交日期、滑点方向和费用模型全部通过。
+
+运维适配器以后判断模拟盘健康时至少应同时展示：最新 service 退出状态、账户 `last_error`、
+expected/decision/mark session、输入 dataset version、当次 fill/order/pending 数，以及最近一次成功
+时间。旧账户的 research/Watchlist 创建时快照缺失属于 provenance warning，应与 runtime failure
+分开展示。
+
+## 25. 2026-08-30 模拟盘通知可观测性合同
+
+模拟盘外发不再依赖 journal 文本判断，而使用独立 SQLite outbox。每个真实 fill 以 `fill_id` 形成唯一
+`FILL` delivery；每日交易状态以 XNYS `target_session` 形成唯一 `DAILY_SUMMARY` delivery。运维站
+分别展示 `BASELINED/PENDING/SENDING/SENT/FAILED/UNKNOWN` 数量、最近目标日、尝试次数和错误码。
+
+`UNKNOWN` 表示进程在发送后、提交 Discord message ID 前中断，存在已经送达的可能，必须冻结并
+人工核对，不能自动重试。明确失败最多尝试 3 次；测试消息、角色 mention 和真实 Webhook 均不进入
+运维数据库或日志。当前 SG 仅完成预部署：7 笔历史 fill 已 baseline，两个 timer 与运维期望均关闭。
+频道配置并人工验收后才切换为 enabled；该关闭状态不应产生 incident。
+
+## 26. 2026-08-31 模拟盘通知激活证据
+
+频道测试与 `2026-08-28` 正式日结均成功。当前 outbox 为 `FILL:BASELINED=7`、
+`DAILY_SUMMARY:SENT=1`，没有 pending、failed 或 unknown；日结一次尝试即取得 message ID。两个
+timer 与 `enabled_expected` 已同时切换为 true，后续 watchdog 应将 timer、应用证据和 Discord
+delivery 三层分开判断，不能只凭 systemd active 宣告发送成功。
+
+## 27. 2026-08-31 茶杯柄零值语义
+
+首个交易日盘前，茶杯柄三张专属表为 0 行、进度为 `0/5`。运维站必须解释为“等待首个完整交易日”，
+不能把旧动量 PASS 迁入，也不能把尚未产生的 P95、最大 bar 数或误报率显示为 0。候选快照中的日线
+评估与盘中 `cup_handle_evaluations` 是两层证据：前者已完成 2,772 只筛选并选出 600 只，后者只有
+开盘后实际运行才可满足每日门槛。
+
+MDB 回放 `signal_count=0` 时 `false_positive_rate_proxy=null`，页面和告警必须继续显示“暂无可评估
+信号”，不能显示“误报率 0%”。发送开关在 5/5 前保持 false，5/5 后也只报告待人工验收。
+
+## 28. 2026-09-01 茶杯柄缺口与状态覆盖语义
+
+首个完整日产生 655 个 `NON_CONTIGUOUS_5M_SEQUENCE`，集中于 17 只股票。该错误不是算法运算慢：
+检测 P95 只有 0.568 ms；也不是服务或 FMP 请求失败：服务退出码 0，2,800 次精确请求失败 0 次。
+它表示检测输入的五分钟桶不连续。当前聚合器只保存实际收到的一分钟 bar，检测器则要求相邻桶严格
+相差五分钟；首次缺口进入有界窗口后，同一不可逆缺口会在该股票后续周期重复出现。
+
+运维口径必须同时展示两层状态：systemd 运行成功只证明监控循环完成，茶杯柄 session FAIL 才是算法
+shadow 门禁结论。watchdog 曾为 2026-08-31 生成 `DEGRADED/JOB_DEGRADED`，但任务结束后的
+`SCHEDULED` 快照把当前卡片改成“等待下次运行”，对应 incident 也自动变为 RESOLVED；历史
+`job_runs` 仍保存 655 个 ERROR。这会掩盖最近一个完整 session 未通过的事实。运维站后续应在
+SCHEDULED 卡片中保留并突出 `last_completed_session_status=FAIL`、失败门槛、错误数和观察进度，
+仅当后续完整 session 通过后才解除该业务告警。
+
+数据缺口不能静默前向填充。修复后的指标至少应包含：缺口证券数、无成交与供应商缺数分类、不可评估
+证券数、去重后的缺口事件数、实际可评估证券覆盖率，以及完整 session 的门禁结论。重复错误可以按
+证券和 session 抑制，但原始缺口和 fail-closed 日结必须保留，不能通过重分类把失败日补记为通过。
+
+## 29. 2026-09-01 茶杯柄 v2 可观测性合同
+
+`daily-cup-5m-handle-shadow-v2` 将“检测器异常”和“证券数据不可评估”分开。完整空桶不再反复写入
+ERROR，而是写入唯一的 `cup_handle_data_gaps` 事件并把当次结果标为 `UNEVALUABLE`。运维指标
+必须同时展示唯一缺口事件数、缺口证券数、缺口证券比例、可评估证券覆盖率，以及
+`NO_TRADE_CONFIRMED`、`PROVIDER_GAP_CONFIRMED`、`UNRESOLVED_SOURCE_GAP` 分类数量。
+
+任务当前状态和最近完整 session 结论是两条独立事实。下一交易日的 SCHEDULED 不能清除上一完整日
+FAIL；适配器现在持续生成 `CUP_HANDLE_SHADOW_SESSION_FAILED` WARNING，并让任务保持 DEGRADED。
+详情页的“证据交易日”明确说明计数来自哪一天，避免把尚未开始的新交易日显示成全零并误解为没有
+日志。后续同算法版本完整日 PASS 后，watchdog 才可以按指纹自动解决该事件。

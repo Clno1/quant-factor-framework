@@ -162,12 +162,19 @@ def test_membership_exit_uses_final_close_then_keeps_weight_in_cash():
         {"A": [100.0] * 4, "B": [100.0, 90.0, np.nan, np.nan]},
         index=dates,
     )
+    events_ledger = pd.DataFrame(
+        {
+            "effective_date": [dates[2]],
+            "removed_ticker": ["B"],
+            "reason": ["Buyer acquired B"],
+        }
+    )
 
     adjusted, events = _apply_membership_exit_policy(
         returns,
         held,
         membership_mask=membership,
-        membership_events=None,
+        membership_events=events_ledger,
         rebalance_dates=pd.DatetimeIndex([dates[0]]),
         open_df=opens,
         close_df=closes,
@@ -180,10 +187,10 @@ def test_membership_exit_uses_final_close_then_keeps_weight_in_cash():
         timing="next_open",
     )
 
-    assert adjusted.loc[dates[1], "B"] == pytest.approx(-0.10)
-    assert adjusted.loc[dates[2], "B"] == 0.0
-    assert group_returns.loc[dates[1], "Q1"] == pytest.approx(-0.04)
-    assert group_returns.loc[dates[2], "Q1"] == pytest.approx(0.015)
+    assert adjusted.loc[dates[1], "B"] == 0.0
+    assert adjusted.loc[dates[2], "B"] == pytest.approx(-0.10)
+    assert group_returns.loc[dates[1], "Q1"] == pytest.approx(0.01)
+    assert group_returns.loc[dates[2], "Q1"] == pytest.approx(-0.035)
     assert events.iloc[0]["ticker"] == "B"
     assert events.iloc[0]["pricing_method"] == "LAST_TRADABLE_CLOSE"
 
@@ -284,50 +291,134 @@ def test_stale_exit_uses_version_bound_event_settlement(
         policy="next_open_or_last_close_to_cash",
     )
 
-    assert adjusted.loc[dates[1], "TARGET"] == pytest.approx(expected_return)
+    assert adjusted.loc[dates[1], "TARGET"] == 0.0
     assert adjusted.loc[dates[2], "TARGET"] == 0.0
+    assert adjusted.loc[dates[3], "TARGET"] == pytest.approx(expected_return)
     assert exit_events.iloc[0]["pricing_method"] == expected_method
+    assert exit_events.iloc[0]["decision_date"] == dates[3]
+    assert exit_events.iloc[0]["execution_date"] == dates[3]
+    assert exit_events.iloc[0]["terminal_date"] == dates[1]
 
 
-def test_halted_membership_exit_stays_with_last_executable_group():
+def test_membership_exit_waits_until_effective_state_is_observed():
     dates = pd.date_range("2026-01-05", periods=5, freq="B")
-    held = pd.DataFrame(
-        {"TARGET": [3.0, 3.0, 1.0, 1.0, 1.0]},
-        index=dates,
-    )
+    held = pd.DataFrame(3.0, index=dates, columns=["TARGET"])
     membership = pd.DataFrame(
         {"TARGET": [True, True, True, False, False]},
         index=dates,
     )
-    opens = pd.DataFrame(
-        {"TARGET": [100.0, 100.0, np.nan, 4.0, 4.0]},
-        index=dates,
-    )
-    closes = pd.DataFrame(
-        {"TARGET": [100.0, 90.0, np.nan, 3.0, 3.0]},
-        index=dates,
-    )
-    returns = pd.DataFrame(
-        {"TARGET": [0.0, np.nan, np.nan, 0.0, np.nan]},
-        index=dates,
-    )
+    opens = pd.DataFrame(100.0, index=dates, columns=["TARGET"])
+    returns = pd.DataFrame(0.0, index=dates, columns=["TARGET"])
 
     adjusted, exit_events = _apply_membership_exit_policy(
         returns,
         held,
         membership_mask=membership,
         membership_events=None,
-        rebalance_dates=pd.DatetimeIndex([dates[1]]),
+        rebalance_dates=pd.DatetimeIndex([dates[0]]),
         open_df=opens,
-        close_df=closes,
+        close_df=opens,
         policy="next_open_or_last_close_to_cash",
     )
 
-    assert adjusted.loc[dates[1], "TARGET"] == pytest.approx(-0.96)
+    assert adjusted.loc[dates[1], "TARGET"] == 0.0
     assert adjusted.loc[dates[2], "TARGET"] == 0.0
+    assert adjusted.loc[dates[3], "TARGET"] == 0.0
     assert exit_events.iloc[0]["assignment"] == 3.0
-    assert exit_events.iloc[0]["execution_date"] == dates[3]
+    assert exit_events.iloc[0]["decision_date"] == dates[3]
+    assert exit_events.iloc[0]["execution_date"] == dates[4]
+    assert exit_events.iloc[0]["effective_exit_date"] == dates[3]
     assert exit_events.iloc[0]["pricing_method"] == "NEXT_OPEN"
+
+
+def test_stateful_portfolio_drifts_and_rebalances_with_real_orders():
+    dates = pd.date_range("2026-01-05", periods=8, freq="B")
+    tickers = ["A", "B", "C", "D"]
+    scores = pd.DataFrame(
+        np.tile(np.arange(4, dtype=float), (len(dates), 1)),
+        index=dates,
+        columns=tickers,
+    )
+    opens = pd.DataFrame(
+        {
+            "A": [100, 100, 120, 132, 132, 132, 132, 132],
+            "B": [100] * len(dates),
+            "C": [100] * len(dates),
+            "D": [100] * len(dates),
+        },
+        index=dates,
+        dtype=float,
+    )
+    result = quintile_backtest(
+        scores,
+        opens.pct_change(fill_method=None),
+        n_groups=2,
+        rebalance_days=3,
+        rebalance_mode="every_n_days",
+        open_df=opens,
+        price_df=opens,
+        volume_df=_matrix(dates, tickers, 1_000_000_000.0),
+        tradable_mask=_matrix(dates, tickers, True),
+        execution={
+            "fee_model": "simple_bps",
+            "commission_bps": 0.0,
+            "slippage_model": "none",
+        },
+    )
+
+    assert result.group_daily_returns.loc[dates[2], "Q1"] == pytest.approx(
+        (60.0 / 110.0) * 0.10
+    )
+    second_rebalance = result.trades_detail.loc[
+        result.trades_detail["date"].eq(dates[4].strftime("%Y-%m-%d"))
+        & result.trades_detail["group"].eq("Q1")
+    ]
+    assert set(second_rebalance["ticker"]) == {"A", "B"}
+    assert set(second_rebalance["side"]) == {"BUY", "SELL"}
+    assert second_rebalance["trade_abs_weight"].sum() > 0
+
+    daily = result.portfolio_daily
+    assert daily["accounting_error"].abs().max() < 1e-8
+    assert np.allclose(
+        daily["net_return"],
+        daily["gross_return"] - daily["cost_return"],
+        atol=1e-12,
+    )
+
+
+def test_long_short_pays_costs_on_both_legs():
+    dates = pd.date_range("2026-01-05", periods=6, freq="B")
+    tickers = ["A", "B", "C", "D"]
+    scores = pd.DataFrame(
+        np.tile(np.arange(4, dtype=float), (len(dates), 1)),
+        index=dates,
+        columns=tickers,
+    )
+    opens = _matrix(dates, tickers, 100.0)
+    result = quintile_backtest(
+        scores,
+        opens.pct_change(fill_method=None),
+        n_groups=2,
+        rebalance_days=10,
+        rebalance_mode="every_n_days",
+        open_df=opens,
+        price_df=opens,
+        volume_df=_matrix(dates, tickers, 1_000_000_000.0),
+        tradable_mask=_matrix(dates, tickers, True),
+        execution={
+            "fee_model": "simple_bps",
+            "commission_bps": 10.0,
+            "slippage_model": "none",
+        },
+    )
+
+    first = result.long_short_returns.first_valid_index()
+    expected = -(
+        result.cost_returns.loc[first, "Q1"]
+        + result.cost_returns.loc[first, "Q2"]
+    )
+    assert result.long_short_returns.loc[first] == pytest.approx(expected)
+    assert result.long_short_returns.loc[first] < 0
 
 
 def test_same_day_close_execution_is_rejected():
@@ -485,6 +576,44 @@ def test_backtest_capacity_error_reports_the_strictest_full_period_limit():
     assert details["worst_order"]["ticker"] == "B"
     assert details["worst_order"]["participation_rate"] == pytest.approx(0.25)
     assert details["worst_order"]["volume_limit"] == pytest.approx(0.025)
+
+
+def test_stateful_formal_backtest_enforces_adv_capacity():
+    dates = pd.date_range("2026-01-05", periods=8, freq="B")
+    tickers = ["A", "B", "C", "D"]
+    scores = pd.DataFrame(
+        np.tile(np.arange(4, dtype=float), (len(dates), 1)),
+        index=dates,
+        columns=tickers,
+    )
+    opens = _matrix(dates, tickers, 10.0)
+
+    with pytest.raises(BacktestCapacityError) as raised:
+        quintile_backtest(
+            scores,
+            opens.pct_change(fill_method=None),
+            n_groups=2,
+            rebalance_days=3,
+            rebalance_mode="every_n_days",
+            open_df=opens,
+            price_df=opens,
+            volume_df=_matrix(dates, tickers, 40_000.0),
+            tradable_mask=_matrix(dates, tickers, True),
+            execution={
+                "portfolio_value": 100_000.0,
+                "fee_model": "simple_bps",
+                "commission_bps": 0.0,
+                "slippage_model": "volume_share",
+                "slippage": {
+                    "volume_limit": 0.025,
+                    "price_impact": 0.0,
+                    "spread_bps": 0.0,
+                    "adv_window": 20,
+                },
+            },
+        )
+
+    assert raised.value.to_dict()["breach_count"] == 4
 
 
 def test_penultimate_signal_does_not_create_truncated_horizon_trade():

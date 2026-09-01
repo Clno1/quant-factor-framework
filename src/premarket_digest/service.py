@@ -361,6 +361,7 @@ class PremarketDigestService:
         context: Any,
         *,
         send: bool,
+        prepare: bool,
         retry_unknown: bool,
         scheduled: bool,
         rebuild_failed: bool,
@@ -370,6 +371,23 @@ class PremarketDigestService:
             return {**base, "status": "SKIPPED_DISABLED"}
         if send and not self._scheduled_send_allowed(context, scheduled=scheduled):
             return {**base, "status": "SKIPPED_OUTSIDE_WINDOW"}
+
+        if prepare:
+            existing = self.state_store.get(context.target_session, channel)
+            if existing is not None:
+                existing_source = str(existing.get("source_session") or "")
+                if existing_source != context.source_session:
+                    return {
+                        **base,
+                        "status": "FAILED_PERMANENT",
+                        "error_code": "PREPARED_SOURCE_SESSION_MISMATCH",
+                    }
+                return {
+                    **base,
+                    "status": "PREPARED_ALREADY_EXISTS",
+                    "delivery_status": str(existing.get("status") or ""),
+                    "payload_hash": existing.get("payload_hash"),
+                }
 
         webhook_url = self.settings.webhook_for(channel)
         if send:
@@ -412,6 +430,12 @@ class PremarketDigestService:
                     webhook_url,
                     scheduled=scheduled,
                 )
+            if scheduled and existing is None:
+                return {
+                    **base,
+                    "status": "FAILED_RETRYABLE",
+                    "error_code": "PREPARED_PAYLOAD_MISSING",
+                }
 
         role_id = self.settings.role_for(channel)
         if role_id and not is_discord_snowflake(role_id):
@@ -444,6 +468,20 @@ class PremarketDigestService:
                 "error_type": type(exc).__name__,
             }
         digest = payload_hash(payload)
+        if prepare:
+            staged = self.state_store.stage(
+                context.target_session,
+                channel,
+                context.source_session,
+                payload,
+            )
+            return {
+                **base,
+                "status": "PREPARED",
+                "delivery_status": str(staged.get("status") or ""),
+                "payload_hash": digest,
+                "metadata": metadata,
+            }
         if not send:
             return {
                 **base,
@@ -497,6 +535,7 @@ class PremarketDigestService:
         self,
         *,
         send: bool = False,
+        prepare: bool = False,
         scheduled: bool = False,
         requested_session: str | None = None,
         channels: Iterable[DigestChannel] | None = None,
@@ -506,6 +545,14 @@ class PremarketDigestService:
     ) -> dict[str, Any]:
         selected = list(channels or list(DigestChannel))
         recovery_requested = retry_unknown or rebuild_failed
+        if prepare and (send or scheduled or recovery_requested):
+            return {
+                "mode": "prepare",
+                "status": "FAILED_CONFIGURATION",
+                "error_code": "INVALID_PREPARE_SCOPE",
+                "exit_code": 2,
+                "channels": [channel.value for channel in selected],
+            }
         if recovery_requested and (
             not send
             or scheduled
@@ -545,9 +592,9 @@ class PremarketDigestService:
                 "exit_code": 2,
                 "channels": [channel.value for channel in selected],
             }
-        if send and not self.settings.enabled:
+        if (send or prepare) and not self.settings.enabled:
             return {
-                "mode": "send",
+                "mode": "send" if send else "prepare",
                 "status": "FAILED_CONFIGURATION",
                 "error_code": "PREMARKET_DIGEST_DISABLED",
                 "target_session": context.target_session,
@@ -556,7 +603,7 @@ class PremarketDigestService:
                 "channels": [channel.value for channel in selected],
             }
 
-        lock = self.state_store.run_lock() if send else nullcontext()
+        lock = self.state_store.run_lock() if send or prepare else nullcontext()
         try:
             with lock:
                 results = []
@@ -566,6 +613,7 @@ class PremarketDigestService:
                             channel,
                             context,
                             send=send,
+                            prepare=prepare,
                             retry_unknown=retry_unknown,
                             scheduled=scheduled,
                             rebuild_failed=rebuild_failed,
@@ -590,7 +638,7 @@ class PremarketDigestService:
                 for channel in selected
             ]
         summary = {
-            "mode": "send" if send else "dry-run",
+            "mode": "send" if send else "prepare" if prepare else "dry-run",
             "status": "COMPLETED" if self._exit_code(results) == 0 else "PARTIAL_OR_FAILED",
             "target_session": context.target_session,
             "source_session": context.source_session,
@@ -598,7 +646,7 @@ class PremarketDigestService:
             "results": results,
             "exit_code": self._exit_code(results),
         }
-        if not send and write_preview:
+        if not send and not prepare and write_preview:
             summary["preview_files"] = self._write_preview(summary)
         return summary
 

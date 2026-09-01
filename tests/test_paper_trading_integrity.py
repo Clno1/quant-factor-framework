@@ -239,7 +239,42 @@ def test_dividend_cash_ledger_is_economic_and_idempotent(monkeypatch, tmp_path):
     assert positions["A"]["quantity"] == pytest.approx(10.0)
 
 
+def test_dividend_derivation_ignores_fmp_cent_quantization_noise():
+    dates = pd.DatetimeIndex(["2021-11-17", "2021-11-18"])
+    target = SimpleNamespace(
+        prices=pd.DataFrame({"LUNA": [9.295, 9.380]}, index=dates),
+        total_return_close_prices=pd.DataFrame(
+            {"LUNA": [9.30, 9.38]},
+            index=dates,
+        ),
+    )
+
+    distributions = runner._derived_dividend_cash_per_share(target)
+
+    assert distributions.loc[pd.Timestamp("2021-11-18"), "LUNA"] == 0.0
+
+
+def test_dividend_derivation_rejects_negative_beyond_source_precision():
+    dates = pd.DatetimeIndex(["2026-01-05", "2026-01-06"])
+    target = SimpleNamespace(
+        prices=pd.DataFrame({"A": [100.0, 100.0]}, index=dates),
+        total_return_close_prices=pd.DataFrame(
+            {"A": [100.0, 90.0]},
+            index=dates,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="beyond source precision"):
+        runner._derived_dividend_cash_per_share(target)
+
+
 def test_historical_asof_resolves_previous_xnys_session():
     assert runner._expected_target_session("2026-01-04") == pd.Timestamp(
         "2026-01-02"
+    )
+
+
+def test_historical_asof_after_latest_session_resolves_previous_session():
+    assert runner._expected_target_session("2026-08-29") == pd.Timestamp(
+        "2026-08-28"
     )

@@ -135,7 +135,7 @@ data:
     output_dir: "outputs/universes/US_LIQUID_5M/factor_data"
     # 五个不同交易日的 SG 影子核验通过后才改为 true。false 时页面仍可
     # 显式选择宽基池验收，但不会自动替代标普 500 成为默认比较池。
-    web_default_enabled: false
+    web_default_enabled: true
     methodology_version: "BROAD_FACTOR_DATA_V1"
     preprocessing_methodology_version: "FACTOR_CLEAN_V1"
     partition_frequency: "month"
@@ -318,6 +318,49 @@ intraday_momentum_monitor:
 
   opening_range:
     windows: [5, 15]              # 仅影子观测；正式触发仍保留既有 60/30 分钟语义
+
+  detector:
+    interval_minutes: 5
+
+  cup_handle:
+    enabled: true
+    delivery_enabled: false       # 独立五交易日影子验收完成前禁止投递
+    daily:
+      lookback_sessions: 126
+      min_width_sessions: 20
+      max_width_sessions: 100
+      right_rim_search_sessions: 15
+      min_depth_pct: 8.0
+      ideal_depth_pct: 18.0
+      max_depth_pct: 35.0
+      max_rim_tolerance_pct: 8.0
+      min_side_fraction: 0.20
+      min_bottom_position: 0.25
+      max_bottom_position: 0.75
+      min_right_rim_recovery: 0.85
+      max_volume_contraction_ratio: 1.10
+    intraday:
+      interval_minutes: 5
+      max_output_bars: 96
+      min_handle_bars: 3
+      max_handle_bars: 18
+      min_handle_depth_pct: 1.0
+      max_handle_depth_pct: 12.0
+      max_handle_to_cup_depth_ratio: 0.50
+      handle_start_tolerance_pct: 3.0
+      volume_baseline_bars: 6
+      max_handle_volume_ratio: 0.85
+      breakout_buffer_bps: 10.0
+      min_breakout_volume_ratio: 1.20
+    replay:
+      confirmation_horizon_bars: 6
+      confirmation_return_pct: 2.0
+    observation:
+      required_sessions: 5
+      max_detection_p95_ms: 250.0
+      min_evaluable_ticker_coverage: 0.95
+      max_gap_ticker_ratio: 0.05
+      detail_retention_sessions: 30
 
   runtime:
     max_concurrent_requests: 4

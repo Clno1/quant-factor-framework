@@ -1,17 +1,17 @@
 # SG 生产运维总览
 
-更新日期：2026-08-25
+更新日期：2026-08-29
 
 ## 1. 当前部署状态
 
 | 范围 | 状态 |
 |---|---|
-| 共享仓库 | 研究完整性修复已提交；远端 `main` 与 `master` 同步 |
-| SG `/home/projects/quant` | 研究完整性代码、命名池、宽基数据和真实业务链均已部署验收 |
-| 全美宽基 v1 | Security Master、coverage、PIT 和八因子已连续通过 2026-08-20/21 影子验收，当前 2/5；日常 timer 已启用，网页默认开关仍关闭 |
+| 本地 `/Users/huozhihong/Documents/Quant` | 全美宽基、严格回测、茶杯柄 shadow 与独立运维站代码已完成集成 |
+| SG `/home/projects/quant` | 宽基代码和独立运维站已部署；主 Web、双核心研究池、既有调度、运维采集和茶杯柄 shadow 均已验收 |
+| 全美宽基 v1 | 五交易日上线门槛已完成，网页默认开关已启用；正式置信研究仍由 PIT 行业历史门禁独立阻断 |
 
-SG 发布使用隔离 worktree 生成的精确白名单包，不从用户仍有未提交改动的本地工作目录直接部署。
-本次先把此前 SG 审核热修复纳入共享提交，再让远端 `main`、`master` 与 SG `.deploy-commit` 对齐。
+SG 发布使用隔离 worktree 生成的精确白名单包，不从有未提交改动的本地工作目录直接部署。生产
+`.deploy-commit` 必须在下一次 SG 部署时更新到实际验收的共享提交，不能用文档中的历史提交号代替。
 部署始终排除 `.git`、项目根目录的 `data/outputs/logs`、虚拟环境和密钥文件。rsync 排除项必须写成
 `/data/`、`/outputs/` 等根锚定形式；非锚定 `data/` 会误排除代码目录 `src/data/`。
 
@@ -19,13 +19,15 @@ SG 发布使用隔离 worktree 生成的精确白名单包，不从用户仍有�
 
 ```mermaid
 flowchart TD
-    TIMER["systemd timers"] --> LIQ["07:15 US_LIQUID_5M"]
+    TIMER["systemd timers"] --> LEGACY["legacy short cache: disabled/read-only"]
     TIMER --> MARKET["08:15 SP500 + NASDAQ100 PIT and market data"]
     TIMER --> FACTOR["08:45 two-pool factor research + cross assessment"]
-    TIMER --> GROUP["09:15 group analytics"]
+    TIMER --> GROUP["13:15 group analytics"]
     TIMER --> PAPER["10:30 paper trading"]
     TIMER --> BROAD["11:30 broad coverage chain"]
     TIMER --> REQUEST["every 5m data requests"]
+    TIMER --> CANDIDATES["06:30 ET intraday candidate prepare"]
+    TIMER --> PREPARE["07:00 ET premarket payload prepare"]
     TIMER --> PREMARKET["09:20 ET momentum + sector digests"]
     TIMER --> HOURLY["hourly momentum alerts"]
     TIMER --> INTRADAY["minute monitor"]
@@ -34,10 +36,13 @@ flowchart TD
     MARKET --> GROUP
     FACTOR --> PAPER
     REQUEST --> LAKE["DuckDB + Parquet"]
-    LIQ --> LAKE
     MARKET --> LAKE
     FACTOR --> OUTPUT["factor publications"]
     BROAD --> BROAD_FACTOR["US_LIQUID_5M factor data"]
+    BROAD --> GROUP
+    BROAD --> PREMARKET
+    BROAD --> HOURLY
+    BROAD --> INTRADAY
     BROAD_FACTOR --> BROAD_CHECK["readiness + shadow ledger"]
     PAPER --> SQLITE["application SQLite"]
     WEB["quant-web.service"] --> LAKE
@@ -59,12 +64,16 @@ flowchart TD
 | `quant-web.service` | enabled + active | FastAPI 页面/API |
 | `quant-operations-web.service` | enabled + active | `0.0.0.0:18825` 独立只读运维站，强制独立认证，不注册主业务路由 |
 | `quant-operations-watchdog.timer` | enabled | 每分钟汇总 DuckDB、SQLite、JSON 和 systemd 证据，不发送 Discord 运维告警 |
-| `quant-us-daily-refresh.timer` | enabled | `US_LIQUID_5M` 正式版本 |
+| `quant-us-daily-refresh.timer` | disabled | 旧短历史版本只读归档，不再作为当前数据源 |
 | `quant-market-data.timer` | enabled | SP500/NASDAQ100 PIT、SP500/NASDAQ100/MAG7 行情 |
 | `quant-factor-research.timer` | enabled | 两个核心池研究、MAG7 参考结果和跨池发布 |
-| `quant-group-analytics-eod.timer` | enabled | 读取正式 SP500 version 的板块研究 |
+| `quant-group-analytics-eod.timer` | enabled | 13:15 读取同日 SP500 与全美 coverage benchmark 的板块研究 |
 | `quant-paper-trading.timer` | enabled | active 模拟盘账户 |
+| `quant-paper-discord-events.timer` | Webhook 配置后 enabled | 每两分钟对账新 fill，幂等发送模拟成交通知 |
+| `quant-paper-discord-daily.timer` | Webhook 配置后 enabled | Tue-Sat 11:00 SGT 发送模拟盘账户日结 |
 | `quant-data-requests.timer` | enabled | Watchlist 缺数队列 |
+| `quant-intraday-candidate-prepare.timer` | enabled | 06:30 ET 预计算全美宽基盘中候选 |
+| `quant-premarket-prepare.timer` | enabled | 07:00 ET 冻结双频道 payload，不连接 Discord |
 | `quant-premarket-digest.timer` | enabled | 分别发送 momentum 与 sector rotation 盘前摘要 |
 | `quant-momentum-alerts.timer` | enabled | 10:00–15:59 ET 小时摘要 |
 | `quant-intraday-momentum-monitor.timer` | enabled | 分钟 shadow；五日验收后人工武装推送 |
@@ -74,8 +83,8 @@ flowchart TD
 | `quant-broad-shadow-observation.service` | 由 factor `OnSuccess` 触发 | 完整哈希、真实排名查询和五日台账 |
 
 服务器应以 `systemctl list-unit-files 'quant-*'`、`systemctl list-timers --all 'quant-*'` 和 journal
-为事实来源。当前有 9 个业务 timer 加 1 个运维 watchdog timer，共 10 个 active timer；宽基
-timer 正式启用后总数增加为 11 个。
+为事实来源。旧 `quant-us-daily-refresh.timer` 必须保持 disabled；不能用固定 timer 总数代替逐项
+核对 `configs/operations.yaml` 的 `enabled_expected`。
 
 ## 4. 存储职责
 
@@ -89,6 +98,8 @@ timer 正式启用后总数增加为 11 个。
 | Research outputs | `/home/projects/quant/outputs/universes/` | 当前 factor publication 与 generation |
 | Backtest artifacts | `/home/projects/quant/outputs/backtests/` | 大型结果和日志 |
 | Intraday momentum state | `/home/projects/quant/outputs/intraday_momentum_monitor/state.sqlite3` | 信号、outbox、逐分钟观测、五日晋级证据 |
+
+茶杯柄检测复用 `quant-intraday-momentum-monitor.service`，不新增第二个行情抓取服务。它在同一 SQLite 中使用 `cup_handle_evaluations`、`cup_handle_cycles` 和 `cup_handle_session_observations`，并以 `daily-cup-5m-handle-shadow-v1` 独立累计五个完整交易日。部署后必须保持 `intraday_momentum_monitor.cup_handle.delivery_enabled: false`，直到新台账达到 `5/5` 且历史回放误报统计经人工验收。
 | Operations ledger | `/home/projects/quant/outputs/operations/operations.sqlite3` | 任务运行、数据新鲜度、投递和异常台账；Web 读取独立原子快照 |
 
 DuckDB 和 SQLite 都是嵌入式文件，不需要独立 daemon。Parquet 也是文件格式。数据只存在部署它们
@@ -556,7 +567,213 @@ cgroup 设置 `MemoryHigh=420M`、`MemoryMax=600M`、`MemorySwapMax=0`、`OOMPol
 宽基 timer 为 `enabled/active`，下次计划在 2026-08-25 11:31 SGT 左右运行；影子台账保持
 2/5、剩余 3 日，网页默认开关继续关闭。
 
-## 16. 2026-08-24/25 研究完整性强制重建与真实业务验收
+## 16. 2026-08-25 Security Master selector drift
+
+当日 target `2026-08-24` 在 Security Master 阶段确定性失败，11:31 和 12:05 两次运行均为
+`policy selector drifted`：政策中的 `sec_5cba73738dbb59188a27c25dbaedf178` 预期 GRML 活跃，
+候选却解析成 KLTO 不活跃。资源门槛通过，两次峰值约 601/573 MB；这不是 OOM、FMP timeout 或
+下游任务问题。coverage、PIT、八因子和 shadow 均未启动，观察保持 2/5。
+
+两次不可变 source 均已保留。FMP 将相同 CIK 下的 GRML/KLTO 分别返回为 CUSIP
+`49876K202`/`49876K103`；SEC CIK 索引确认二者是同一 registrant 的前后名称，官方 2026-03-16
+8-K 声明名称/代码变更时普通股 CUSIP 保持不变。运维不得反复重试这个确定性门禁，也不得直接
+修改历史政策绕过。修复必须先增加 source-backed identifier correction，使用冻结源双构建验证
+身份连续与无 share-class 误合并，再补跑失败 target；失败日不计数。
+
+## 17. 2026-08-26 第三日恢复与旧行情链退役准备
+
+GRML/KLTO 已通过带 SEC 来源的 schema v2 标识冲突规则解决。规则只授权 2026-03-12 的精确
+证券连续性，不覆盖 FMP 原始 CUSIP/ISIN，也不放宽 100% 身份覆盖门槛。同一冻结源双重构建四表
+精确幂等通过，正式 Security Master 为 `1e5e249c62424fc1ad679f3d70f179fc`。部署备份包括：
+
+```text
+/home/projects/quant-backups/security-master-identity-correction-20260825T233921CST
+/home/projects/quant-backups/broad-breakout-adapter-20260826T112207CST
+```
+
+target 2026-08-24 的 coverage `77cfefacab4a417cbec8d681bed6e201`、PIT
+`19fd8dc8fee24d11bd1869b4276505b2` 和 factor `0fd93177f78444fc981c448d603fb437`
+已完整通过，shadow 为 3/5。2026-08-25 日常宽基链已按 timer 正常启动；其最终 publication 和
+第四日 shadow 必须等待全部 640 个因子分片及自动 readiness/shadow 完成后再登记。
+
+动量、盘前摘要和板块 benchmark 已迁移到 broad coverage + 精确 PIT 合同。新适配器的 SG 真实
+三票检查覆盖 MDB、AEVA、QQQ，读取 target 2026-08-24，父 coverage/PIT 绑定一致，约 2.6 秒、
+最大 RSS 约 318 MB。旧 `quant-us-daily-refresh` 将作为只读历史任务归档；正式停 timer 前仍需完成
+全量候选、盘前 dry-run 和盘中一次性 smoke 验收，禁止手工发送 Discord。
+
+核心行情日更 2026-08-25 因 ATO/CDW/AAPL/AMZN 的非均匀价格或成交量修订失败。严格门禁行为
+正确，但旧 unit 不会自动执行所需的 full rebuild。已安装受控恢复器与资源边界，备份为：
+
+```text
+/home/projects/quant-backups/core-market-controlled-recovery-20260826T115019CST
+/home/projects/quant-backups/core-market-resource-boundary-20260826T115912CST
+/home/projects/quant-backups/group-benchmark-broad-coverage-20260826T115640CST
+```
+
+受控恢复只识别明确语义漂移，不会把 FMP 超时或哈希/PIT 错误误判成可重建；日志实时写 journal。
+一次性 target 2026-08-25 全量恢复安排在 13:00 SGT，并等待宽基因子 service 完成。成功后再运行
+核心因子研究和板块研究。板块日常时间将由 09:15 调整为 13:15，避免 SP500 与 benchmark 使用
+不同交易日，也避免与 11:30 宽基链争抢内存。
+
+## 18. 2026-08-26 生产链统一验收
+
+当前宽基 shadow 为 4/5：2026-08-20、21、24、25 均为 PASS，剩余 1 个不同 XNYS 交易日。
+正式版本为 Security Master `1953abeff75c`、coverage `b91499501659`、PIT `ef508d571b76`、
+八因子 `9eadbfad7bc5`。`quant-us-equity-coverage.timer` 为 enabled/active，下一次计划 2026-08-27
+11:30 SGT；网页默认开关继续关闭。
+
+今日完成以下运行恢复和容量验收：
+
+- 核心 SP500/NASDAQ100/MAG7 受控重建与研究发布成功；板块和子行业研究成功。
+- `quant-intraday-candidate-prepare.timer` 在 06:30 ET 预热 363 个候选，热命中约 1 秒；盘中监控
+  自 09:20 ET 持续运行，运维快照记录 137 个循环、0 个错误。
+- `quant-premarket-prepare.timer` 在 07:00 ET 前冻结 momentum/sector-rotation 两个 payload；首次冷算
+  峰值 547.3 MB，重复准备 2 秒内复用同一 hash。09:20 ET 两频道各发送一次，QQQ 过滤为明确 FAIL，
+  不再显示 UNKNOWN。
+- Watchlist 增量语义漂移触发严格的专池 full rebuild，正式版本 `93eb4878bc4b`，6/6 股票覆盖 100%。
+  网络、身份、PIT/hash 和混合错误均不允许触发该恢复。
+- 模拟盘处理 FMP 美分量化误差后成功，决策日 2026-08-25、权益 9,590.43 美元、2 张待执行订单。
+  第二次同日运行新增订单 0、成交 0，证明重启和重复执行幂等。
+
+已有两笔历史成交均保存完整逐票成本：`next_open` 原始/成交价、ADV20、参与率、动态滑点、IBKR
+固定佣金、CAT、清算、pass-through、总费用和总现金成本。SQLite 核验结果为 integrity `ok`、
+1 个策略、1 个 Watchlist、3 个回测、1 个模拟盘、8 个业务 frame、无问题。当前无任何失败的
+`quant-*` unit；主站 `quant-web.service`/18823 与运维站
+`quant-operations-web.service`/18825 认证请求均返回 HTTP 200。SG 全量回归在受限临时单元中完成
+`608 passed, 1 warning in 108.42s`，峰值内存 281.1 MB、无 swap；唯一警告为 FastAPI TestClient
+弃用提示。
+
+FMP 相关事故必须按两类处理：
+
+1. 重叠历史无法由单一比例认证：只允许目标股票池完整重建，并保留旧版本和审计。
+2. `adj_close` 美分精度导致分红反推约正负 0.005 美元：使用区间误差归零不确定点，确定性负区间
+   继续失败关闭，不能简单把所有负值裁成零。
+
+## 19. 2026-08-27 宽基 5/5 与 DuckDB 调度修复
+
+宽基 target `2026-08-26` 已完成第五个不同交易日验收。Security Master 为 `6706c172a3f0`，
+coverage 为 `e4963942c52a`，PIT 为 `ded547cbef6b`，八因子 generation 为 `1a60b302fa47`；
+影子日期 2026-08-20、21、24、25、26 全部 PASS。配置先备份到
+`/home/projects/quant-backups/broad-web-enable-20260827T1715CST`，再将网页默认开关设为 true。
+
+当日延迟使 `quant-group-analytics-eod` 与 `quant-broad-factor-data` 在 coverage 完成后同时启动，
+前者持有 DuckDB 读锁，后者的 Security Master 读路径却先尝试写初始化，形成确定性锁冲突。代码
+已改为纯只读发布查询；八因子增加 `Before=quant-group-analytics-eod.service`，板块研究增加对应
+`After` 并与核心行情共用 `.broad-production.lock`。部署备份为
+`/home/projects/quant-backups/duckdb-scheduling-fix-20260827T1530CST`，SG 针对性测试 35 项通过。
+
+八因子从认证 checkpoint 恢复后完成 640/640，systemd 峰值 714.5 MB、无 swap。最终完整回归
+`609 passed, 1 warning`，业务 SQLite integrity `ok`、无 issues。主站 18823 与运维站 18825 均
+正常；运维专项显示 `SUCCESS`、`5/5`、`web_default_enabled=true`。MDB 和 AEVA 的真实 MOM_12M
+查询均为 HTTP 200，最新日 2026-08-26，版本合同一致。
+
+核心 SP500 行情仍停在 2026-08-25：当日三池严格 full rebuild 在 5 小时超时前只完成 MAG7 和
+NASDAQ100，后续重试又被旧板块读锁阻断。该事件保留在运维记录，次日 timer 将按新共享锁仅重试
+未完成池；不得将它与已经完成的宽基 5/5 混为同一结论。
+
+## 20. 2026-08-28 日更滞后与恢复口径
+
+11:30 SGT 后目标交易日已切换为 `2026-08-27`，而宽基 Security Master、coverage、PIT 和八因子
+仍为 `2026-08-26`。这四层在 freshness 口径下确实是 stale，但当时
+`quant-market-data.service` 正在执行严格 full rebuild，宽基日更按 systemd 顺序等待上游，并非四个
+独立任务同时失败。运维处置必须先检查 `systemctl list-jobs`、核心行情进程和生产锁，禁止重复启动
+coverage/PIT/factor。
+
+SP500 raw 已完整落盘且 FMP failures 为 0，慢点来自空 parent 与 fetched frame 拼接后把数值列转成
+`object`，在 `MemoryHigh=700M` 下产生超过 8 万次 cgroup 高水位回收。代码已改为 full rebuild
+直接保留 fetched numeric dtype，并在 SG 备份后部署。旧不可变版本、raw ingestion、历史 5/5 台账
+均保留。
+
+恢复验收顺序保持不变：核心 SP500 发布到 target -> 核心因子/模拟盘顺序任务 -> 宽基 Security
+Master/coverage/PIT -> 八因子 -> readiness/shadow。只有正式 target、版本哈希和质量门禁一致才关闭
+incident。宽基正式置信研究的 `PIT_CLASSIFICATION_POLICY` 与 `PIT_INDUSTRY_COVERAGE` 仍是预期
+阻断，不应与本次日更延迟合并处理。
+
+## 21. 2026-08-28 日更恢复结果与剩余事项
+
+target `2026-08-27` 的主数据链已经正式追平。SP500 full rebuild 发布版本
+`e151b46c1d814d93a9d631dafc730ab1`，980,613 行、621 只证券、目标日覆盖 100%，耗时约 2 分钟，
+峰值 688.2 MB、无 swap。宽基随后发布 Security Master `be02e2fff93d`、coverage
+`378d1f3fae89`、PIT `8f19d47b45b6` 和八因子 generation `11247203be72`。coverage 的 1 条
+缺失身份记录进入隔离台账；正式目标日坏价格记录为 0。
+
+八因子因 Security Master 变化重算 640/640 个分片，耗时 1 小时 08 分 43 秒、峰值 703.7 MB、
+无 OOM 或 swap。readiness 仅保留两个已知 PIT 行业历史 blocker；2026-08-27 shadow PASS 后，
+台账为连续 `6/5`，网页默认开关保持开启。watchdog 最新专项快照的前四层均为 SUCCESS，目标日为
+2026-08-27，不再显示 stale。
+
+本次新增两项必须保留的运维经验：
+
+1. pandas full rebuild 的空表 concat 可把数值列转成 object，引发高水位内存回收；排障必须同时看
+   dtype、原生调用栈和 `memory.events.high`，不能只看 FMP 是否抓取完成。
+2. `update_us_equity_coverage.py` 与存储层的价格语义参数曾不一致。发布接口现强制认证父版本和
+   lineage 一致；这类 TypeError 属于部署合同错误，不得重试为供应商错误。
+
+当前仍有两个独立事项：板块研究曾在 2 小时超时后自动重试并占用生产锁，本次为恢复主链停止了
+该次重试，需单独做性能分析；SP500/NASDAQ100 正式因子研究继续被 PIT 行业历史门禁阻断，
+MAG7 正常发布。二者都不能覆盖宽基数据浏览已经成功上线的结论。
+
+## 22. 2026-08-28 消费任务恢复与盘前漏发处置
+
+板块研究超时和盘前预计算卡顿的共同根因是例行读取被放大成全 publication 审计：每个消费者在
+真正读取前重复哈希 92 个 coverage 月分片，板块研究还把 SP500 全历史装入内存。现网已部署有界
+读取：manifest/index 先认证，实际读取的 child 仍逐一验哈希，完整 child hash 继续由 shadow 和
+人工验收执行。板块行情窗口限制为 as-of 前 120 个日历日，覆盖 ADV60 的业务需要。
+
+真实验收结果：
+
+- `quant-group-analytics-eod.service` 成功发布 2026-08-27 板块和子行业结果，CPU 9.609 秒；
+- `quant-premarket-prepare.service` 于 23:25 SGT 成功完成，CPU 8 分 42.79 秒、峰值 537.1 MB、
+  swap 0；两个 payload 的 target 为 2026-08-28、source 为 2026-08-27；
+- 该准备晚于 08:30 ET 预计算截止和 09:29 ET 投递截止，因此没有补发；源记录保持
+  `PENDING/attempts=0/message_id=NULL/sent_at=NULL`；
+- 小时级动量在当日 10:36 ET 正常发送并收到 Discord HTTP 200；持续盘中监控在
+  `US_EQUITY_COVERAGE` 版本 `378d1f3fae89` 上持续运行，当前仍按自身晋级门槛保持 shadow。
+
+运维站重新采集后的正确状态为：`premarket_digest_prepare=DEGRADED`，原因是晚于截止时间生成；
+`premarket_digest=MISSED`，原因是投递窗口结束后两个频道仍未发送。不得为“清除红色”执行迟到
+发送或把源 SQLite 手工改成 SENT。下一交易日 timer 将创建新的 target，不会领取 2026-08-28 的
+过期记录。
+
+宽基链本身仍为 target 2026-08-27、shadow `6/5`、网页默认开关开启。SP500/NASDAQ100 正式研究
+仍因 `PIT_CLASSIFICATION_POLICY` 和 `PIT_INDUSTRY_COVERAGE` 降级，这是预期 fail-closed，和
+本次盘前漏发是两个独立事件。部署备份：
+
+```text
+/home/projects/quant-backups/consumer-bounded-read-20260828T1905CST
+/home/projects/quant-backups/operations-deadline-state-20260828T2340CST
+```
+
+最终 watchdog 指标为 `shadow_passed=6`、`shadow_required=5`、`shadow_remaining=0`。旧代码用
+`remaining_sessions or 5` 读取指标，会把合法的 0 误替换成 5；现已改为仅在值为 `None` 时使用
+默认值。SG 宽基与运维定向回归为 `28 passed`，本地完整回归为 `586 passed`。
+
+## 23. 2026-08-29 茶杯柄独立 shadow 上线
+
+独立 `daily-cup-5m-handle-shadow-v1` 已接入现有分钟行情进程，不新增 FMP 请求服务。日线候选、
+有界完整五分钟序列、柄形态检测、SQLite/outbox、历史回放和运维指标均已部署；消息发送开关保持
+false。部署备份为：
+
+```text
+/home/projects/quant-backups/cup-handle-shadow-20260829T152237CST
+```
+
+生产验收结果：22 个部署文件 SHA-256 全部一致；SG 专项测试 `40 passed`，正式 `tests/` 全量回归
+`620 passed, 1 warning`；SQLite integrity 为 `ok`，新增三表可读；运维站任务详情 HTTP 200 且
+包含独立算法版本。systemd 校验只有腾讯云 `tat_agent` 的无关旧路径提示。候选预计算 timer 和盘中
+timer 均已启用，下一次分别为 2026-08-31 18:30、21:20 SGT。
+
+新的五日门槛从 2026-08-31 独立起算，旧动量观察日不得复用。每个交易日必须核对周期覆盖率、
+实际评估数、日线筛选合同、错误比例、P95 延迟和 96 根序列上限；没有命中允许通过，没有评估不
+允许通过。五日全部通过后仍需查看历史回放误报代理与拒绝原因分布，再单独决定是否开启发送。
+
+真实盘前预验收已使用 source 2026-08-28 构建 2026-08-31 快照：评估 2,772 只、日线杯体合格
+1,343 只、保留候选 600 只，耗时 49.062 秒。MDB 的两日分钟回放处理 110 根完整五分钟 bar，
+信号 0，误报率保持 null；报告保存于
+`outputs/data_audits/cup_handle_replay_mdb_20260810_20260811.json`。这只能证明生产链可运行，
+不能替代五个完整交易日或更长历史样本的参数判断。
+
+## 24. 2026-08-24/25 研究完整性强制重建补充记录
 
 发布前备份为：
 
@@ -565,47 +782,158 @@ cgroup 设置 `MemoryHigh=420M`、`MemoryMax=600M`、`MemorySwapMax=0`、`OOMPol
 ```
 
 备份约 7.9 GB，包含项目、`/etc/quant` 环境文件、systemd unit 和维护前 11 个 timer 清单。代码包
-没有覆盖 `.git`、`data/`、`outputs/`、`logs/`、虚拟环境或密钥。远端 `main` 与 `master` 同步；
-本地用户工作目录中的未提交改动没有被 reset、覆盖或拿来拼生产包。
+没有覆盖 `.git`、`data`、`outputs`、`logs`、虚拟环境或密钥。
 
-这次不再信任只有列名、但没有来源语义认证的旧行情。正式重建结果：
+本次正式重建不再信任只有列名、但没有来源语义认证的旧行情。验收对象包括 SP500、NASDAQ100、
+MAG7、全美 coverage、PIT `US_LIQUID_5M`、宽基八因子和业务 `US_LIQUID_5M`；三池研究均绑定同目标日
+的新行情版本，并通过 schema 3、价格语义、HAC 和 confidence 文件哈希校验。
 
-| 对象 | 当前正式身份 | 结果 |
-|---|---|---|
-| SP500 行情 | `f150d0b840004c768909bf19659e87e2` | 978,326 行，621 票，target 2026-08-21 |
-| NASDAQ100 行情 | `4a847de456c14a129e2a61ee757b6975` | 251,942 行，166 票，target 2026-08-21 |
-| MAG7 行情 | `12eaee8f10134553aa76fb21956d367c` | 13,344 行，8 票，target 2026-08-21 |
-| 全美 coverage | `a3d19d164a6143bda815589a10b93311` | 10,404,180 行，7,963 个证券，640 个分片 |
-| PIT US_LIQUID_5M | `c5c45b65d83c43e2a6d5689f5fa43eed` | 91 个快照，当前 2,779 个成员 |
-| 宽基八因子 | `796257a9-5704-4f77-960a-d13f8bdf119a` | 8 因子、640 分片，逐子文件哈希通过 |
-| 业务 US_LIQUID_5M | `0727972df65340de9685ae84618cc81d` | 365,085 行、2,935 票、99.9659% 目标覆盖 |
+重建业务 `US_LIQUID_5M` 时，旧命令曾在 2026-08-24 美股盘中刷新 live universe。候选在发布前
+被停止并标记 `FAILED`，证据保存在 `outputs/data_audits/research_integrity_20260825/`。正式重建改用
+target 2026-08-21、9,786 票、SHA-256 为
+`acb44911c0725d4d084725ed724dde7bdf2d09fb3ac871e199f45be4d3c5249a` 的冻结清单；代码强制校验
+source session、行数和 SHA，禁止把未来可知股票清单写入历史目标日。
 
-SP500、NASDAQ100 和 MAG7 的正式研究 publication 分别为
-`fe4ffa5a-9316-49fc-9a90-93bdb7787019`、`25f47502-22d3-4570-bcf1-abbf47eb9b78`、
-`afae67cf-d090-40e4-aca3-7e7032398e8e`。三者都绑定同目标日的新行情版本，并通过 schema 3、
-价格语义、HAC 和 confidence 文件哈希校验。
+真实业务验收使用 Watchlist `36d324f4-4391-42b3-855b-3f9c91cfae80`：v3 缺数请求经历
+`pending -> running -> success`，回测从 `WAITING_FOR_DATA` 自动恢复并生成逐票交易与成本，模拟盘按
+`next_open` 创建 pending order；同日重跑和冷启动均没有重复订单。下一交易日日线尚未发布时保持
+0 fill，禁止用当日收盘价替代下一开盘价。
 
-重建业务 `US_LIQUID_5M` 时，旧命令曾在 2026-08-24 美股盘中刷新 live universe。该候选在发布前
-被发现并停止，未成为正式版本；无效 ingestion 明确标记 `FAILED`，原文件保存在
-`outputs/data_audits/research_integrity_20260825/`。正式重建改用 target 2026-08-21、9,786 票、
-SHA-256 为 `acb44911c0725d4d084725ed724dde7bdf2d09fb3ac871e199f45be4d3c5249a` 的冻结清单，代码现在强制
-校验 source session、行数与 SHA，禁止再次把未来可知股票清单写入历史目标日。
+该时点宽基影子为 2/5，readiness 仅保留 `PIT_CLASSIFICATION_POLICY`、
+`PIT_INDUSTRY_COVERAGE` 预期阻断。后续 5/5 和网页启用结果记录在第 19 节；本节保留的是不可覆盖的
+历史验收证据，不代表当前 freshness。
 
-真实业务验收使用 Watchlist `36d324f4-4391-42b3-855b-3f9c91cfae80`：v3 缺数请求先后真实经历
-`pending -> running -> success`，发布专属版本 `41907b7b9e1b4437be32f853f0527d4c`；worker 重启后
-成功请求 attempts 仍为 1。回测任务 `57750813-86a4-4903-a7cd-97b294c00997` 从
-`WAITING_FOR_DATA` 自动恢复到 `success`，绑定上述版本并产生 72 条逐票交易记录，总成本扣减
-`0.03418349277437505`，年化成本约 70.263 bps。模拟盘账户
-`ba277a68-fa45-4d5c-b3df-7b6e596da0bb` 使用 `ibkr_us_pro_fixed + volume_share`，按 `next_open`
-创建 2 条 pending order；同日重跑和 `quant-paper-trading.service` 冷启动均没有重复订单。因下一交易日
-2026-08-24 日线尚未发布，当前 0 fill 是正确行为，不允许用 2026-08-21 收盘价代替下一开盘价。
+## 25. 2026-08-30 茶杯柄首个交易日前巡检
 
-宽基影子台账只按不同 target session 计数，目前通过 2026-08-20、2026-08-21，进度 2/5，剩余
-3 个交易日，`web_default_enabled=false` 保持不变。readiness 的
-`PIT_CLASSIFICATION_POLICY`、`PIT_INDUSTRY_COVERAGE` 仍为预期阻断：当前行业数据是 latest-known，
-不能发布正式宽基 IC/置信结论。基础行情、PIT、八因子数据和查询已就绪，这不等于宽基正式研究通过。
+茶杯柄独立 shadow 当前为 `0/5`，三张专属 SQLite 表均为 0 行。由于部署发生在周末，这不是任务
+中断；首个可计数交易日为 2026-08-31，最早完成日期为 2026-09-05 SGT。候选准备和盘中监控 timer
+均为 enabled，下一次触发分别为 18:30 和 21:20 SGT；运维 watchdog 与独立运维站正常，运维 Web
+`NRestarts=0`、峰值约 43.1 MiB。
 
-本地完整回归为 `595 passed`；SG 代码基线完整回归为 `593 passed`。业务 SQLite、运维 SQLite 和
-快照 integrity 都为 `ok`，Quant systemd unit 的 `systemd-analyze verify` 无错误。维护结束后恢复
-主 Web、运维 Web 与备份清单中的 11 个 timer；计划维护造成的当日盘前和部分小时动量缺口保留为
-运维 incident，不补发、不删除，待下一个完整交易日自然验收。
+配置保持 `delivery_enabled=false`，P95 上限 250 ms、五分钟序列上限 96 根。MDB 两日回放信号数为
+0，误报代理仍为 null；这表示尚无可评估信号，不是 0% 误报。2026-08-28 的候选准备 TERM 记录发生
+在茶杯柄部署之前，只保留为历史服务证据，不得计入或判定新 shadow。后续每日必须以
+`daily-cup-5m-handle-shadow-v1` 的完整 XNYS 交易日和真实评估行计数。
+
+## 26. 2026-08-30 主站请求内全量扫描事故
+
+15:33 CST 后主站曾出现所有业务页面持续等待，但 `quant-web.service` 仍显示 active。现网线程栈
+确认 `/breakouts` 在缓存缺失时同步读取约 2,780 只股票、400 日宽基行情并执行 DuckDB 排序；Web
+RSS 升至约 565 MB，越过 `MemoryHigh=420M`，其他请求阻塞在 DuckDB 实例锁。这不是 SG 网络、FMP
+或页面文案导致的故障。
+
+事故合同缺口是：旧 `quant-us-daily-refresh` 已按统一宽基迁移计划归档，因此不再预热旧扫描缓存；
+Web 消费者却仍把缓存缺失解释为“现场重算”。修复 `46aa2f0` 后，Web 只读后台发布结果，cache miss
+快速显示等待状态，JSON API 返回 503；只有资源受限的后台任务可以执行扫描构建。
+
+生产文件备份位于
+`/home/projects/quant-backups/web-broad-scan-guard-20260830T1544CST`。SG 定向测试为
+`19 passed`。研究、策略、回测、模拟盘、股票池和茶杯柄六个入口全部 HTTP 200，最慢为茶杯柄
+1.325 秒；整组验收后 cgroup 峰值约 383 MB。今后主站巡检必须同时检查 HTTP 延迟、
+`MemoryCurrent/Peak`、DuckDB 等待栈和未完成请求，不能只检查 systemd active。
+
+## 27. 2026-08-30 模拟盘周末交易日边界修复
+
+`quant-paper-trading.service` 在 2026-08-29（周六）连续失败三次并触发 systemd start limit。
+失败发生在策略计算和成交之前：配置中的 `date_range.end=today` 传入周六日期后，公共 XNYS
+辅助函数创建的日历恰好以 2026-08-28（周五）为最后一个 session，再用 2026-08-29 调用
+`date_to_session(..., direction="previous")`，触发 `DateOutOfBounds`。这不是 FMP、服务器资源、
+手续费、滑点或账户账本损坏。
+
+提交 `d62bfb3` 将动态 XNYS 日历扩展到查询日之后 14 天，并为查询窗口预留左边界；模拟盘显式
+`asof` 也统一复用公共 session 解析。生产文件备份位于：
+
+```text
+/home/projects/quant-backups/paper-calendar-boundary-20260830T1600CST
+```
+
+本地完整回归为 `644 passed`，SG 定向回归为 `40 passed`。修复后的真实账户
+`ba277a68-fa45-4d5c-b3df-7b6e596da0bb` 成功处理 2026-08-28：行情版本
+`c18ef8024a494896860fb5ade7783ecb`，首次恢复运行成交 2 笔、新建订单 0、剩余 pending 1，权益
+9,287.71 美元。第二次同日运行成交 0、订单 0，订单和成交 ID 均无重复。
+
+SQLite `integrity_check=ok`；全部成交满足 `fill_date > decision_date`，没有当天收盘成交；模型为
+`ibkr_us_pro_fixed` 和 `volume_share`，累计手续费 8.009688 美元、滑点成本 3.864387 美元、总成本
+11.874075 美元。剩余 ECHO 1 股订单只会在 2026-08-28 之后的下一条真实开盘行情继续评估，不会
+重复消费同一日 bar。主站重启后模拟盘详情页与公网研究页均为 HTTP 200。
+
+该账户是迁移前旧记录，缺少创建时 research publication 和 Watchlist revision 快照；页面继续
+按 fail-closed 显示血缘不完整。这个历史审计缺口不等于本次运行失败，也不得事后伪造快照。
+
+## 28. 2026-08-30 模拟盘 Discord 通知预部署
+
+模拟成交即时通知与每日账户日结已以提交 `74defad` 部署。独立 outbox 位于
+`outputs/paper_notifications/state.sqlite3`，现有 7 笔历史 fill 全部为 `BASELINED`，不会补发。
+SG 定向测试 `11 passed`，watchdog 新快照运行成功且 collector error 为 0；主站、模拟盘 timer、
+watchdog 和独立运维站保持 active。
+
+生产备份为：
+
+```text
+/home/projects/quant-backups/paper-discord-notifications-20260830T2350CST
+```
+
+当前没有保存 Discord Webhook，环境开关为 false，两个新 timer 均保持 disabled，运维注册也标记为
+`enabled_expected=false`。频道管理员完成独立“模拟交易”频道和不回显 Webhook 配置后，先验收测试
+消息，再启用每两分钟成交 worker 与 Tue-Sat 11:00 SGT 日结 timer；启用时同步将两项运维期望改为
+true。不得复用盘前、板块轮动或茶杯柄频道的 Webhook。
+
+## 29. 2026-08-31 模拟盘 Discord 通知正式启用
+
+独立“模拟交易”频道测试通过，生产密钥文件保持 `0600`。事件和日结 timer 已 enabled + active，
+运维注册中的 `paper_fill_notifications` 与 `paper_daily_summary` 同步改为
+`enabled_expected=true`。首次事件 worker 没有补发 7 笔 baseline 成交。
+
+最近交易日 `2026-08-28` 的正式日结一次发送成功，outbox 记录为 `DAILY_SUMMARY:SENT`、
+`attempts=1` 且持有 Discord message ID；SQLite 完整性正常，没有待发送、失败或不确定消息。日常
+合同为每两分钟对账新 fill、Tue-Sat 11:00 SGT 发送日结，继续使用独立 Webhook。
+
+日志降噪提交 `6951bf4` 部署期间，分钟 timer 在新脚本与依赖模块逐文件替换的数秒窗口触发过一次
+`TypeError`；下一轮完整代码运行成功，`staged/sent/failed/unknown` 均为 0，watchdog 最终仍将
+两个通知任务判定为 `SUCCESS`。该事件没有影响 outbox 或 Discord。以后通知代码在线部署必须先停
+事件 timer、整体替换并测试，再恢复 timer；不能依赖下一轮自动恢复掩盖非原子部署。
+
+## 30. 2026-08-31 茶杯柄首日盘前状态
+
+12:01 SGT 检查确认茶杯柄独立 shadow 为 `0/5`，三张专属 SQLite 表均为 0 行。这是首个 XNYS
+交易日开盘前状态，不是任务中断。2026-08-31 候选快照已绑定 source 2026-08-28 和数据版本
+`d4c85d16084143ecbccda73497465a7c`，日线评估 2,772 只、通过 1,343 只、选择 600 只；候选和监控
+timer 分别等待 18:30 与 21:20 SGT。
+
+当前可用内存约 1,176 MiB；上一完整 legacy 监控峰值约 606.2 MiB，运维站约 43.1 MiB，watchdog
+约 100.9 MiB。8 月 28 日候选服务的 TERM 属于茶杯柄部署前人工停止记录，不计为新算法失败日。
+发送继续保持关闭，最早 9 月 5 日完成五日观察后也只进入人工验收。
+
+## 31. 2026-09-01 茶杯柄首日失败
+
+2026-08-31 是 `daily-cup-5m-handle-shadow-v1` 的首个完整观察日，但结果为 FAIL，不计入台账，
+当前仍为 `0/5`。70 个实际周期达到 89.74% 周期覆盖率；2,760 次评估中拒绝 1,616、等待 489、
+错误 655、命中 0。P95 仅 0.568 ms，最大 bar 数 77，性能和序列上限都通过；失败原因是 59/70
+周期出现检测错误，超过错误率门槛。
+
+全部错误都是 `NON_CONTIGUOUS_5M_SEQUENCE`，集中在 17 只股票。聚合器不会为没有收到一分钟 bar
+的时间桶合成数据，检测器却要求有界序列严格五分钟连续；首次缺口进入窗口后，同一股票后续周期会
+重复报错。现阶段不能判断每个缺口究竟是无成交还是 FMP 缺数，因此不能前向填充或降低门槛。后续
+修复必须建立明确的数据缺口分类、不可评估证券处理、重复错误抑制和证券评估覆盖率门槛，再重新开始
+有效交易日观察。
+
+候选服务与盘中服务均正常退出，监控服务峰值 306.3 MiB、无 swap，FMP 请求失败数为 0；这次不是
+服务器资源或任务中断。`cup_handle.delivery_enabled` 保持 false。由于 8 月 31 日失败且 9 月 7 日
+为 XNYS 休市日，修复后最早可能的五个通过日为 9 月 1、2、3、4、8 日，最早 9 月 9 日 SGT
+进入人工验收，实际日期还取决于修复部署时间。
+
+## 32. 2026-09-01 茶杯柄数据缺口合同修复
+
+茶杯柄算法已升级到 `daily-cup-5m-handle-shadow-v2`。新版本接受由实际成交 bar 聚合出的部分五分钟
+桶，但仍禁止构造不存在的 OHLCV；完整空桶会按报价累计成交量证据分成确认无成交、确认供应商缺数
+和证据不足三类，并把证券标记为当日不可评估。唯一缺口进入新的
+`cup_handle_data_gaps` 台账，同一缺口不会在每个后续周期重复算 detector ERROR。
+
+每日验收新增可评估股票覆盖率不低于 95%、缺口股票比例不高于 5% 两项严格门禁。SQLite 前向迁移
+保留 v1 的原始评估和失败记录；v2 使用独立算法版本重新开始五日观察，旧失败不得计入新版本。完整
+本地回归为 `660 passed`，生产部署后还必须实际检查新表、候选快照、分钟周期和运维页面。
+
+运维适配器同时修复了状态覆盖：最近完整交易日若为 FAIL，即使下一交易日尚未开盘，任务卡片仍保持
+DEGRADED，并产生 `CUP_HANDLE_SHADOW_SESSION_FAILED` 事件；只有后续同算法版本的完整日 PASS
+才解除。详情页新增证据交易日、最近完整日结论、不可评估数、可评估覆盖率、缺口股票数与比例、唯一
+缺口事件和缺口分类。

@@ -1,7 +1,7 @@
 [Unit]
 Description=Send isolated US premarket momentum and sector digests
 Wants=network-online.target
-After=network-online.target quant-us-daily-refresh.service
+After=network-online.target quant-us-equity-coverage.service
 StartLimitIntervalSec=30min
 StartLimitBurst=4
 
@@ -13,6 +13,12 @@ WorkingDirectory=/opt/quant
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH=/opt/quant
 Environment=MPLCONFIGDIR=/opt/quant/data/cache/matplotlib
+Environment=OMP_NUM_THREADS=1
+Environment=OPENBLAS_NUM_THREADS=1
+Environment=MKL_NUM_THREADS=1
+Environment=NUMEXPR_NUM_THREADS=1
+Environment=VECLIB_MAXIMUM_THREADS=1
+Environment=BLIS_NUM_THREADS=1
 Environment=PREMARKET_SECTOR_ROTATION_ENABLED=true
 EnvironmentFile=/etc/quant/premarket-digest.env
 ExecStartPre=/opt/quant/.venv/bin/python -c "import sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
@@ -23,6 +29,12 @@ Restart=on-failure
 RestartSec=3min
 RestartPreventExitStatus=2 3
 UMask=0077
+MemoryHigh=300M
+MemoryMax=450M
+MemorySwapMax=0
+CPUQuota=100%
+TasksMax=64
+OOMPolicy=stop
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full

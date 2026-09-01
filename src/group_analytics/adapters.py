@@ -24,7 +24,7 @@ import pandas as pd
 
 from src.config import CONFIG, PROJECT_ROOT
 from src.data.foundation import DataFoundationError, MarketDataReader
-from src.data.universe_ids import US_LIQUID_5M
+from src.data.universe_ids import US_EQUITY_COVERAGE
 
 from .classification import (
     ClassificationValidationError,
@@ -45,6 +45,7 @@ from .models import (
 
 _SAFE_LOCATOR = re.compile(r"^snapshots/[A-Za-z0-9._-]+$")
 _CLASSIFICATION_CACHE_SCHEMA = 1
+_LIQUIDITY_LOOKBACK_CALENDAR_DAYS = 120
 
 
 class ClassificationSourceError(GroupAnalyticsError):
@@ -714,7 +715,7 @@ class PublishedEODMarketDataProvider:
         *,
         reader: MarketDataReader | None = None,
         universe: str = "SP500",
-        benchmark_universe: str = US_LIQUID_5M,
+        benchmark_universe: str = US_EQUITY_COVERAGE,
     ) -> None:
         self.reader = reader or MarketDataReader()
         self.universe = str(universe).upper()
@@ -765,6 +766,7 @@ class PublishedEODMarketDataProvider:
         *,
         symbols: list[str],
         benchmark: str,
+        asof: str | pd.Timestamp | None = None,
         force: bool = False,
     ) -> EODMarketSnapshot:
         # ``force`` cannot bypass the published pointer or trigger a download.
@@ -773,6 +775,12 @@ class PublishedEODMarketDataProvider:
             dict.fromkeys(normalize_ticker(symbol) for symbol in symbols)
         )
         benchmark = normalize_ticker(benchmark)
+        target = pd.Timestamp(asof).normalize() if asof is not None else None
+        query_start = (
+            target - pd.Timedelta(days=_LIQUIDITY_LOOKBACK_CALENDAR_DAYS)
+            if target is not None
+            else None
+        )
         try:
             version = self.reader.require_latest(
                 self.universe,
@@ -782,6 +790,8 @@ class PublishedEODMarketDataProvider:
                 self.reader.load_bars(
                     self.universe,
                     tickers=normalized,
+                    start=query_start,
+                    end=target,
                     version=version,
                 ),
                 source=self.universe,
@@ -798,6 +808,8 @@ class PublishedEODMarketDataProvider:
                     self.reader.load_bars(
                         self.benchmark_universe,
                         tickers=[benchmark],
+                        start=query_start,
+                        end=target,
                         version=benchmark_version,
                     ),
                     source=self.benchmark_universe,
@@ -870,6 +882,9 @@ class PublishedEODMarketDataProvider:
                 benchmark_version.target_session.isoformat()
             ),
             "benchmark_bars_sha256": benchmark_version.checksum_sha256,
+            "query_start": query_start.date().isoformat() if query_start is not None else None,
+            "query_end": target.date().isoformat() if target is not None else None,
+            "liquidity_lookback_sessions": 60,
             "source_max_date": (
                 all_dates.max().date().isoformat() if len(all_dates) else None
             ),

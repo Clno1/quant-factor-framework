@@ -222,6 +222,44 @@ def test_request_worker_full_rebuilds_only_legacy_price_semantics(tmp_path):
     assert writer.update_universe.call_args.kwargs["full_rebuild"] is True
 
 
+def test_request_worker_full_rebuilds_only_confirmed_semantic_drift(tmp_path):
+    database = AppDatabase(tmp_path / "app.sqlite3")
+    request = database.enqueue_data_request(
+        data_universe="WATCHLIST_TEST",
+        payload={
+            "universe_records": [{"ticker": "AAA"}],
+            "tickers": ["AAA"],
+            "initial_start": "2020-01-01",
+        },
+        consumer_kind="paper",
+        consumer_id="paper-one",
+    )
+    result = Mock()
+    result.to_dict.return_value = {"version_id": "version-rebuilt"}
+    result.version.version_id = "version-rebuilt"
+    writer = Mock()
+    writer.catalog.latest_version.return_value = None
+    writer.update_universe.side_effect = [
+        DataFoundationError(
+            "AAA: non-uniform volume revision in overlap window; "
+            "run a full rebuild"
+        ),
+        result,
+    ]
+
+    processed = process_pending_data_requests(
+        limit=1,
+        database=database,
+        writer=writer,
+    )
+
+    assert processed[0].status == DATA_REQUEST_SUCCESS
+    assert writer.update_universe.call_count == 2
+    first, second = writer.update_universe.call_args_list
+    assert first.kwargs["full_rebuild"] is False
+    assert second.kwargs["full_rebuild"] is True
+
+
 def test_request_worker_does_not_rebuild_over_integrity_failure(tmp_path):
     database = AppDatabase(tmp_path / "app.sqlite3")
     request = database.enqueue_data_request(
@@ -251,6 +289,34 @@ def test_request_worker_does_not_rebuild_over_integrity_failure(tmp_path):
 
     assert processed[0].status != DATA_REQUEST_SUCCESS
     writer.update_universe.assert_not_called()
+
+
+def test_request_worker_does_not_rebuild_provider_failures(tmp_path):
+    database = AppDatabase(tmp_path / "app.sqlite3")
+    request = database.enqueue_data_request(
+        data_universe="WATCHLIST_TEST",
+        payload={
+            "universe_records": [{"ticker": "AAA"}],
+            "tickers": ["AAA"],
+            "initial_start": "2020-01-01",
+        },
+        consumer_kind="paper",
+        consumer_id="paper-one",
+    )
+    writer = Mock()
+    writer.catalog.latest_version.return_value = None
+    writer.update_universe.side_effect = DataFoundationError(
+        "FMP request timed out after 6 attempts"
+    )
+
+    processed = process_pending_data_requests(
+        limit=1,
+        database=database,
+        writer=writer,
+    )
+
+    assert processed[0].status != DATA_REQUEST_SUCCESS
+    assert writer.update_universe.call_count == 1
 
 
 def test_market_data_request_v3_does_not_deduplicate_to_legacy_success():

@@ -1,6 +1,6 @@
 # 回测与模拟盘交易费用说明
 
-更新日期：2026-08-11
+更新日期：2026-08-29
 
 本文记录系统内回测和模拟盘使用的成交、滑点、手续费模型。相关代码集中在
 `src/execution/models.py`，默认参数在 `configs/default.yaml` 的
@@ -8,8 +8,9 @@
 
 ## 适用范围
 
-- 回测：`src/backtest/quintile.py` 按逐票目标权重变化估算订单金额和股数，
-  再调用共享执行模型计算成交价、滑点成本和费用，最后按组合资金规模扣减到组收益。
+- 回测：`src/backtest/portfolio.py` 为每个研究分组维护持仓市值、现金和 NAV。
+  调仓订单来自调仓前真实漂移持仓与新目标的差额，再调用共享执行模型计算成交价、
+  滑点和费用；收益、订单、成本和净值来自同一本状态账。
 - 模拟盘：`src/papertrading/runner.py` 使用同一套模型；买单会在含滑点和费用后
   检查现金是否足够，卖单会按实际持仓数量成交。
 - 默认成交时机：`next_open`，即 T 日决策，T+1 开盘价成交。系统不允许
@@ -85,17 +86,23 @@ slippage_cost = abs(quantity) * raw_price * slippage_bps / 10000
 
 ## 回测落账
 
-回测使用等权分组，因此每次调仓会得到每只股票的 `old_weight`、`new_weight` 和
-`trade_weight`。系统按以下步骤扣成本：
+回测在调仓时建立等权目标，但调仓之间不会免费恢复等权。价格变化后，每只股票按真实
+持仓市值自然漂移；下一次调仓才会卖出超配股票、买入低配股票。系统按以下步骤落账：
 
-1. `estimated_notional = abs(trade_weight) * portfolio_value`
-2. `estimated_quantity = estimated_notional / raw_price`
-3. 校验 `estimated_quantity <= trailing_ADV × volume_limit`；引擎会扫描完整回测区间并汇总
+1. 用当前开盘价标记原持仓，计算调仓前 `positions + cash = NAV`。
+2. 以 `NAV - estimated_cost` 为可投资金额迭代求解目标持仓，为本次费用预留现金。
+3. `estimated_notional = abs(target_value - actual_position_value)`。
+4. `estimated_quantity = estimated_notional / raw_price`。
+5. 校验 `estimated_quantity <= trailing_ADV × volume_limit`；引擎会扫描完整回测区间并汇总
    所有超限订单，以最严格订单反推出该历史区间可承载的最大 `portfolio_value`。只要存在
    超限就拒绝发布结果，不假装整单成交，也不在横截面回测中暗做部分成交。
-4. 调用 `calculate_execution(...)` 得到成交价、滑点成本、费用明细。
-5. `cost = total_cost_cash / portfolio_value`
-6. 在调仓生效日从对应组的日收益中扣除 `cost`。
+6. 调用 `calculate_execution(...)` 得到成交价、滑点成本和费用明细。
+7. 调仓后重新校验 `positions + cash = NAV - cost`；持有期只让仓位随证券收益变化。
+8. 每日强制满足 `net_return = gross_return - cost_return` 和
+   `end_nav = start_nav × (1 + net_return)`。
+
+Long-Short 收益按“定向毛价差 - 多头成本 - 空头成本”计算；禁止用两个净收益直接相减，
+因为那会错误地把空头腿成本加回组合。
 
 容量失败会以结构化 `ADV_CAPACITY_EXCEEDED` 写入任务，页面显示当前资金、全区间容量、
 最严格股票、请求/允许股数和订单参与率。页面给出的重建资金在历史容量上再保留 10% 缓冲，
@@ -121,23 +128,27 @@ slippage_cost = abs(quantity) * raw_price * slippage_bps / 10000
 动态股票池内持仓在两次正常调仓之间退出时，默认执行策略是
 `next_open_or_last_close_to_cash`：
 
-1. 正常退出按下一正式交易日开盘卖出，完整计算滑点、券商佣金和监管费用；
+1. 成分快照采用 effective-close 语义；T 日首次观察到退出，只允许在 T+1 开盘卖出，
+   不读取 T+1 membership 为 T 日提前下单；
 2. 若下一日停牌但后来恢复报价，沿用最后一次真实可成交时的组合归属，在首个恢复开盘卖出；
 3. 若并购后不再恢复交易，只有版本绑定事件账本明确为收购/合并时才允许用最后可交易收盘近似；
 4. 若事件账本明确为 FDIC 接管、破产或 receivership，按 100% 损失 write-off，不虚构券商成交；
 5. 未审阅的事件理由、缺事件账本或没有可验证价格时 fail closed；
-6. 退出后的权重保持现金直到下一次正常调仓，不对剩余股票事后放大权重。
+6. 停牌期间持仓值冻结；最终结算损益在退出证据可知日入账，不倒记到最后交易日，避免未来
+   事件改写中间 NAV 或调仓；
+7. 退出后的权重保持现金直到下一次正常调仓，不对剩余股票事后放大权重。
 
-本地真实 SP500 验收中，`FRC` 在 2023-04-28 仍由 Q3 持有，2023-05-01/02 无开盘而未发生
-理论换组，最终于 2023-05-03 首个恢复开盘 `0.396` 卖出。逐票账本记录
-`event_type=MEMBERSHIP_EXIT`、`pricing_method=NEXT_OPEN`、`old_weight=0.01`，并计入动态滑点和
-IBKR 风格费用。
+没有 `announcement_date/known_at` 的旧 PIT 事件不会被解释成“提前已知”。当前保守合同宁可
+在有效状态确认后晚一根开盘退出，也不根据未来 membership 获得理想成交。
 
 回测产物中会保存：
 
-- `holdings.parquet`：逐票目标持仓权重。
+- `holdings.parquet`：每次调仓后的逐票持仓集合。
+- `holdings_detail.parquet`：目标权重、实际权重、持仓市值、估算数量、现金和 NAV。
 - `trades.parquet`：逐票交易、估算股数、成交价、滑点、费用组件。
 - `costs.parquet`：按日期和分组聚合后的滑点、费用和总成本。
+- `portfolio_daily.parquet`：每日期初/期末 NAV、现金、市场损益、成本和会计误差。
+- `position_daily.parquet`：每日逐票期初权重、证券收益和组合收益贡献。
 
 ## 模拟盘落账
 
@@ -164,6 +175,9 @@ IBKR 风格费用。
 - `SP500`、`US_LIQUID_5M` 是动态股票池，必须提供 point-in-time 完整成分快照。
   严格校验包括：首个快照覆盖回测起点、历史活跃股票都存在于行情/因子矩阵。
   `MAG7` 在配置中被明确声明为固定研究池，因此不要求 PIT 文件。
+- 市值双排序只接受版本绑定的 `date × ticker` PIT 市值矩阵。当前 profile 的
+  `ticker × market_cap` 快照只用于当期展示；系统写入
+  `BLOCKED_NO_PIT_MARKET_CAP`，禁止向历史广播后冒充稳健性检验。
 - 模拟盘只接受目标因子日期等于指定 `as-of` 对应的 XNYS session；不传 `as-of`
   时必须等于最近一个已经正式收盘的 XNYS session。数据陈旧会直接失败。
 

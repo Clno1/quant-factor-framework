@@ -114,3 +114,7 @@ SQLite 事务并核对 checksum。
 这是内部日线模拟盘，不会连接券商，也不能提交真实订单。费用和滑点是显式模型，不是券商
 真实回报；交易所路由、盘口排队、盘前盘后、借券费、融资利息和 corporate actions 的券商
 落账差异仍不在当前模型内。具体参数见 `docs/trading_costs.md`。
+
+模拟成交和每日账户日结可以通过独立 Discord 频道发送。通知 worker 只对账持久化交易事实，
+Discord 失败不会回滚或污染账户；详细状态机、11:00 SGT 调度和部署方式见
+[`paper_trading_discord_notifications.md`](paper_trading_discord_notifications.md)。
