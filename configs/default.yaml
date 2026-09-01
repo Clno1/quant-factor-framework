@@ -358,6 +358,8 @@ intraday_momentum_monitor:
     observation:
       required_sessions: 5
       max_detection_p95_ms: 250.0
+      min_evaluable_ticker_coverage: 0.95
+      max_gap_ticker_ratio: 0.05
       detail_retention_sessions: 30
 
   runtime:

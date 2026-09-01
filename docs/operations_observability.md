@@ -650,3 +650,15 @@ SCHEDULED 卡片中保留并突出 `last_completed_session_status=FAIL`、失败
 数据缺口不能静默前向填充。修复后的指标至少应包含：缺口证券数、无成交与供应商缺数分类、不可评估
 证券数、去重后的缺口事件数、实际可评估证券覆盖率，以及完整 session 的门禁结论。重复错误可以按
 证券和 session 抑制，但原始缺口和 fail-closed 日结必须保留，不能通过重分类把失败日补记为通过。
+
+## 29. 2026-09-01 茶杯柄 v2 可观测性合同
+
+`daily-cup-5m-handle-shadow-v2` 将“检测器异常”和“证券数据不可评估”分开。完整空桶不再反复写入
+ERROR，而是写入唯一的 `cup_handle_data_gaps` 事件并把当次结果标为 `UNEVALUABLE`。运维指标
+必须同时展示唯一缺口事件数、缺口证券数、缺口证券比例、可评估证券覆盖率，以及
+`NO_TRADE_CONFIRMED`、`PROVIDER_GAP_CONFIRMED`、`UNRESOLVED_SOURCE_GAP` 分类数量。
+
+任务当前状态和最近完整 session 结论是两条独立事实。下一交易日的 SCHEDULED 不能清除上一完整日
+FAIL；适配器现在持续生成 `CUP_HANDLE_SHADOW_SESSION_FAILED` WARNING，并让任务保持 DEGRADED。
+详情页的“证据交易日”明确说明计数来自哪一天，避免把尚未开始的新交易日显示成全零并误解为没有
+日志。后续同算法版本完整日 PASS 后，watchdog 才可以按指纹自动解决该事件。

@@ -181,6 +181,122 @@ class CupHandleAlgorithmTests(unittest.TestCase):
         self.assertEqual(bars[-1]["timestamp"], "2026-04-09 09:35:00")
         self.assertEqual(capped, bars[-1:])
 
+    def test_partial_source_bucket_uses_only_observed_trades(self):
+        index = pd.to_datetime([
+            "2026-04-09 09:30",
+            "2026-04-09 09:31",
+            "2026-04-09 09:33",
+            "2026-04-09 09:34",
+            "2026-04-09 09:35",
+            "2026-04-09 09:38",
+        ])
+        frame = pd.DataFrame({
+            "open": [10.0] * len(index),
+            "high": [10.2] * len(index),
+            "low": [9.8] * len(index),
+            "close": [10.1] * len(index),
+            "volume": [100.0] * len(index),
+        }, index=index)
+        rolling = RollingIntradayBars("TEST")
+        rolling.merge(frame)
+
+        metrics = rolling.metrics(
+            now=datetime(2026, 4, 9, 9, 40, 1, tzinfo=NEW_YORK),
+            session_date="2026-04-09",
+            interval=5,
+        )
+
+        self.assertEqual(len(metrics["bars"]), 2)
+        self.assertEqual(
+            [row["source_minute_count"] for row in metrics["bars"]],
+            [4, 2],
+        )
+        self.assertEqual(metrics["data_quality"]["status"], "PASS")
+        self.assertEqual(metrics["data_quality"]["partial_bucket_count"], 2)
+        self.assertEqual(metrics["data_quality"]["gap_count"], 0)
+
+    def test_empty_bucket_is_classified_from_quote_evidence(self):
+        index = pd.to_datetime([
+            *pd.date_range("2026-04-09 09:30", periods=5, freq="min"),
+            *pd.date_range("2026-04-09 09:40", periods=5, freq="min"),
+        ])
+        frame = pd.DataFrame({
+            "open": [10.0] * len(index),
+            "high": [10.2] * len(index),
+            "low": [9.8] * len(index),
+            "close": [10.1] * len(index),
+            "volume": [100.0] * len(index),
+        }, index=index)
+        rolling = RollingIntradayBars("TEST")
+        rolling.merge(frame)
+        rolling.observe_quote(
+            observed_at=datetime(2026, 4, 9, 9, 35, tzinfo=NEW_YORK),
+            provider_timestamp=datetime(2026, 4, 9, 9, 34, tzinfo=NEW_YORK),
+            cumulative_volume=500.0,
+        )
+        rolling.observe_quote(
+            observed_at=datetime(2026, 4, 9, 9, 40, tzinfo=NEW_YORK),
+            provider_timestamp=datetime(2026, 4, 9, 9, 34, tzinfo=NEW_YORK),
+            cumulative_volume=500.0,
+        )
+
+        metrics = rolling.metrics(
+            now=datetime(2026, 4, 9, 9, 45, 1, tzinfo=NEW_YORK),
+            session_date="2026-04-09",
+            interval=5,
+        )
+        quality = metrics["data_quality"]
+
+        self.assertEqual(quality["status"], "UNEVALUABLE")
+        self.assertEqual(quality["gap_count"], 1)
+        self.assertEqual(
+            quality["gaps"][0]["classification"],
+            "NO_TRADE_CONFIRMED",
+        )
+
+        evaluation = CupHandleDetector(IntradayMonitorSettings()).evaluate(
+            _candidate(IntradayMonitorSettings()),
+            QuoteSnapshot(
+                ticker="TEST",
+                timestamp=datetime(2026, 4, 9, 9, 44, tzinfo=NEW_YORK),
+                price=10.1,
+                cumulative_volume=1000.0,
+                day_high=10.2,
+                day_low=9.8,
+                open=10.0,
+                previous_close=9.9,
+                change_percentage=2.0,
+            ),
+            metrics,
+            now=datetime(2026, 4, 9, 9, 45, 1, tzinfo=NEW_YORK),
+            session_date="2026-04-09",
+            market_open=True,
+        )
+        self.assertEqual(evaluation.outcome, "UNEVALUABLE")
+        self.assertEqual(evaluation.rejection_reason, "NO_TRADE_5M_INTERVAL")
+
+        provider_gap = RollingIntradayBars("TEST")
+        provider_gap.merge(frame)
+        provider_gap.observe_quote(
+            observed_at=datetime(2026, 4, 9, 9, 35, tzinfo=NEW_YORK),
+            provider_timestamp=datetime(2026, 4, 9, 9, 34, tzinfo=NEW_YORK),
+            cumulative_volume=500.0,
+        )
+        provider_gap.observe_quote(
+            observed_at=datetime(2026, 4, 9, 9, 40, tzinfo=NEW_YORK),
+            provider_timestamp=datetime(2026, 4, 9, 9, 37, tzinfo=NEW_YORK),
+            cumulative_volume=600.0,
+        )
+        provider_metrics = provider_gap.metrics(
+            now=datetime(2026, 4, 9, 9, 45, 1, tzinfo=NEW_YORK),
+            session_date="2026-04-09",
+            interval=5,
+        )
+        self.assertEqual(
+            provider_metrics["data_quality"]["gaps"][0]["classification"],
+            "PROVIDER_GAP_CONFIRMED",
+        )
+
     def test_completed_handle_and_volume_breakout_match(self):
         settings = IntradayMonitorSettings()
         candidate = _candidate(settings)
@@ -301,6 +417,8 @@ class CupHandleAlgorithmTests(unittest.TestCase):
                     min_cycle_coverage=0.85,
                     max_error_cycle_ratio=0.05,
                     max_detection_p95_ms=250.0,
+                    min_evaluable_ticker_coverage=0.95,
+                    max_gap_ticker_ratio=0.05,
                     max_bar_count=96,
                 )
                 self.assertEqual(summary["status"], "PASS")
@@ -313,6 +431,74 @@ class CupHandleAlgorithmTests(unittest.TestCase):
             self.assertFalse(legacy["eligible"])
             self.assertTrue(cup["eligible"])
             self.assertEqual(cup["passed_sessions"], 5)
+
+    def test_gap_event_is_deduplicated_and_fails_coverage_gate(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state = IntradayMonitorState(Path(temporary) / "state.sqlite3")
+            for minute in range(2):
+                rows = []
+                for index in range(10):
+                    ticker = f"T{index}"
+                    gap = ({
+                        "gap_start": "2026-04-09 10:00:00",
+                        "gap_end": "2026-04-09 10:05:00",
+                        "classification": "PROVIDER_GAP_CONFIRMED",
+                        "evidence": {"cumulative_volume_delta": 100.0},
+                    } if ticker == "T0" else None)
+                    rows.append({
+                        "ticker": ticker,
+                        "outcome": "UNEVALUABLE" if gap else "REJECTED",
+                        "rejection_reason": (
+                            "PROVIDER_MINUTE_DATA_GAP" if gap else "RIM_NOT_BROKEN"
+                        ),
+                        "evaluated_at": (
+                            f"2026-04-09T14:{30 + minute}:08+00:00"
+                        ),
+                        "latency_ms": 1.0,
+                        "bar_count": 10,
+                        "details": {
+                            "data_quality": {"gaps": [gap]}
+                        } if gap else {},
+                        "signal": None,
+                    })
+                state.record_cup_handle_cycle({
+                    "session_date": "2026-04-09",
+                    "observed_at": f"2026-04-09T14:{30 + minute}:08+00:00",
+                    "algorithm_version": CUP_HANDLE_ALGORITHM_VERSION,
+                    "parameter_version": CUP_HANDLE_PARAMETER_VERSION,
+                    "daily_evaluated_count": 500,
+                    "daily_candidate_count": 10,
+                    "data_contract_complete": True,
+                }, rows)
+
+            summary = state.finalize_cup_handle_observation(
+                session_date="2026-04-09",
+                algorithm_version=CUP_HANDLE_ALGORITHM_VERSION,
+                parameter_version=CUP_HANDLE_PARAMETER_VERSION,
+                expected_open_cycles=2,
+                min_cycle_coverage=0.85,
+                max_error_cycle_ratio=0.05,
+                max_detection_p95_ms=250.0,
+                min_evaluable_ticker_coverage=0.95,
+                max_gap_ticker_ratio=0.05,
+                max_bar_count=96,
+            )
+
+            self.assertEqual(summary["status"], "FAIL")
+            self.assertEqual(summary["error_count"], 0)
+            self.assertEqual(summary["gap_event_count"], 1)
+            self.assertEqual(summary["gap_ticker_count"], 1)
+            self.assertEqual(summary["evaluable_ticker_coverage"], 0.9)
+            self.assertIn(
+                "INSUFFICIENT_EVALUABLE_TICKER_COVERAGE",
+                summary["failure_reasons"],
+            )
+            self.assertIn(
+                "EXCESSIVE_MINUTE_DATA_GAPS",
+                summary["failure_reasons"],
+            )
+            gap_counts = state.status()["cup_handle"]["latest_gap_counts"]
+            self.assertEqual(gap_counts[0]["event_count"], 1)
 
     def test_replay_reports_false_positive_proxy_contract(self):
         settings = replace(

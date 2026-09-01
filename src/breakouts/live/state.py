@@ -202,6 +202,7 @@ class IntradayMonitorState:
                     match_count INTEGER NOT NULL,
                     rejected_count INTEGER NOT NULL,
                     not_ready_count INTEGER NOT NULL,
+                    unevaluable_count INTEGER NOT NULL,
                     error_count INTEGER NOT NULL,
                     p95_latency_ms REAL NOT NULL,
                     max_bar_count INTEGER NOT NULL,
@@ -224,15 +225,43 @@ class IntradayMonitorState:
                     match_count INTEGER NOT NULL,
                     rejected_count INTEGER NOT NULL,
                     not_ready_count INTEGER NOT NULL,
+                    unevaluable_count INTEGER NOT NULL,
                     error_count INTEGER NOT NULL,
                     error_cycle_ratio REAL NOT NULL,
                     detection_p95_ms REAL NOT NULL,
                     max_bar_count INTEGER NOT NULL,
+                    unique_ticker_count INTEGER NOT NULL,
+                    evaluable_ticker_count INTEGER NOT NULL,
+                    evaluable_ticker_coverage REAL NOT NULL,
+                    gap_ticker_count INTEGER NOT NULL,
+                    gap_ticker_ratio REAL NOT NULL,
+                    gap_event_count INTEGER NOT NULL,
+                    gap_classification_counts_json TEXT NOT NULL,
                     rejection_counts_json TEXT NOT NULL,
                     failure_reasons_json TEXT NOT NULL,
                     finalized_at TEXT NOT NULL,
                     PRIMARY KEY (session_date, algorithm_version)
                 );
+                CREATE TABLE IF NOT EXISTS cup_handle_data_gaps (
+                    session_date TEXT NOT NULL,
+                    ticker TEXT NOT NULL,
+                    algorithm_version TEXT NOT NULL,
+                    parameter_version TEXT NOT NULL,
+                    gap_start TEXT NOT NULL,
+                    gap_end TEXT NOT NULL,
+                    classification TEXT NOT NULL,
+                    evidence_json TEXT NOT NULL,
+                    first_seen_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL,
+                    observation_count INTEGER NOT NULL,
+                    PRIMARY KEY (
+                        session_date, ticker, algorithm_version, gap_start
+                    )
+                );
+                CREATE INDEX IF NOT EXISTS idx_cup_handle_data_gaps_session
+                    ON cup_handle_data_gaps (
+                        session_date, algorithm_version, classification, ticker
+                    );
             """)
             existing = {
                 str(row["name"])
@@ -249,6 +278,34 @@ class IntradayMonitorState:
                     db.execute(
                         f"ALTER TABLE candidate_snapshots ADD COLUMN {column} TEXT"
                     )
+            migrations = {
+                "cup_handle_cycles": (
+                    ("unevaluable_count", "INTEGER NOT NULL DEFAULT 0"),
+                ),
+                "cup_handle_session_observations": (
+                    ("unevaluable_count", "INTEGER NOT NULL DEFAULT 0"),
+                    ("unique_ticker_count", "INTEGER NOT NULL DEFAULT 0"),
+                    ("evaluable_ticker_count", "INTEGER NOT NULL DEFAULT 0"),
+                    ("evaluable_ticker_coverage", "REAL NOT NULL DEFAULT 0"),
+                    ("gap_ticker_count", "INTEGER NOT NULL DEFAULT 0"),
+                    ("gap_ticker_ratio", "REAL NOT NULL DEFAULT 0"),
+                    ("gap_event_count", "INTEGER NOT NULL DEFAULT 0"),
+                    (
+                        "gap_classification_counts_json",
+                        "TEXT NOT NULL DEFAULT '{}'",
+                    ),
+                ),
+            }
+            for table, columns in migrations.items():
+                table_columns = {
+                    str(row["name"])
+                    for row in db.execute(f"PRAGMA table_info({table})").fetchall()
+                }
+                for column, definition in columns:
+                    if column not in table_columns:
+                        db.execute(
+                            f"ALTER TABLE {table} ADD COLUMN {column} {definition}"
+                        )
 
     def save_candidate_snapshot(self, snapshot: dict[str, Any]) -> None:
         contract = snapshot.get("data_contract") or {}
@@ -639,6 +696,7 @@ class IntradayMonitorState:
             "match_count": outcomes.count("MATCH"),
             "rejected_count": outcomes.count("REJECTED"),
             "not_ready_count": outcomes.count("NOT_READY"),
+            "unevaluable_count": outcomes.count("UNEVALUABLE"),
             "error_count": outcomes.count("ERROR"),
             "p95_latency_ms": _percentile(latencies, 0.95),
             "max_bar_count": max(
@@ -661,10 +719,11 @@ class IntradayMonitorState:
                 INSERT INTO cup_handle_cycles (
                     session_date, cycle_minute, algorithm_version,
                     parameter_version, observed_at, evaluation_count,
-                    match_count, rejected_count, not_ready_count, error_count,
+                    match_count, rejected_count, not_ready_count,
+                    unevaluable_count, error_count,
                     p95_latency_ms, max_bar_count, daily_evaluated_count,
                     daily_candidate_count, data_contract_complete
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(session_date, cycle_minute, algorithm_version)
                 DO UPDATE SET parameter_version=excluded.parameter_version,
                               observed_at=excluded.observed_at,
@@ -672,6 +731,7 @@ class IntradayMonitorState:
                               match_count=excluded.match_count,
                               rejected_count=excluded.rejected_count,
                               not_ready_count=excluded.not_ready_count,
+                              unevaluable_count=excluded.unevaluable_count,
                               error_count=excluded.error_count,
                               p95_latency_ms=excluded.p95_latency_ms,
                               max_bar_count=excluded.max_bar_count,
@@ -688,6 +748,7 @@ class IntradayMonitorState:
                 summary["match_count"],
                 summary["rejected_count"],
                 summary["not_ready_count"],
+                summary["unevaluable_count"],
                 summary["error_count"],
                 summary["p95_latency_ms"],
                 summary["max_bar_count"],
@@ -726,6 +787,49 @@ class IntradayMonitorState:
                 for value in rows
                 if str(value.get("ticker") or "").strip()
             ])
+            for value in rows:
+                ticker = str(value.get("ticker") or "").strip().upper()
+                data_quality = (value.get("details") or {}).get(
+                    "data_quality"
+                ) or {}
+                for gap in data_quality.get("gaps") or []:
+                    gap_start = str(gap.get("gap_start") or "")
+                    gap_end = str(gap.get("gap_end") or "")
+                    if not ticker or not gap_start or not gap_end:
+                        continue
+                    classification = str(
+                        gap.get("classification") or "UNRESOLVED_SOURCE_GAP"
+                    )
+                    db.execute("""
+                        INSERT INTO cup_handle_data_gaps (
+                            session_date, ticker, algorithm_version,
+                            parameter_version, gap_start, gap_end,
+                            classification, evidence_json, first_seen_at,
+                            last_seen_at, observation_count
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                        ON CONFLICT (
+                            session_date, ticker, algorithm_version, gap_start
+                        ) DO UPDATE SET
+                            parameter_version=excluded.parameter_version,
+                            gap_end=excluded.gap_end,
+                            classification=excluded.classification,
+                            evidence_json=excluded.evidence_json,
+                            last_seen_at=excluded.last_seen_at,
+                            observation_count=(
+                                cup_handle_data_gaps.observation_count + 1
+                            )
+                    """, (
+                        session_date,
+                        ticker,
+                        algorithm_version,
+                        parameter_version,
+                        gap_start,
+                        gap_end,
+                        classification,
+                        _payload_json(gap.get("evidence") or {}),
+                        summary["observed_at"],
+                        summary["observed_at"],
+                    ))
         return summary
 
     def finalize_cup_handle_observation(
@@ -738,6 +842,8 @@ class IntradayMonitorState:
         min_cycle_coverage: float,
         max_error_cycle_ratio: float,
         max_detection_p95_ms: float,
+        min_evaluable_ticker_coverage: float,
+        max_gap_ticker_ratio: float,
         max_bar_count: int,
     ) -> dict[str, Any]:
         """Finalize a detector-specific session without reusing legacy promotion."""
@@ -748,9 +854,15 @@ class IntradayMonitorState:
                 ORDER BY cycle_minute
             """, (session_date, algorithm_version)).fetchall()
             evaluations = db.execute("""
-                SELECT outcome, rejection_reason, latency_ms, bar_count
+                SELECT ticker, outcome, rejection_reason, latency_ms, bar_count
                 FROM cup_handle_evaluations
                 WHERE session_date=? AND algorithm_version=?
+            """, (session_date, algorithm_version)).fetchall()
+            gap_rows = db.execute("""
+                SELECT ticker, classification, COUNT(*) AS event_count
+                FROM cup_handle_data_gaps
+                WHERE session_date=? AND algorithm_version=?
+                GROUP BY ticker, classification
             """, (session_date, algorithm_version)).fetchall()
             observed = len(cycles)
             coverage = observed / max(1, int(expected_open_cycles))
@@ -759,6 +871,42 @@ class IntradayMonitorState:
             latencies = [float(row["latency_ms"] or 0.0) for row in evaluations]
             detection_p95 = _percentile(latencies, 0.95)
             outcomes = [str(row["outcome"] or "ERROR") for row in evaluations]
+            unique_tickers = {
+                str(row["ticker"] or "").upper()
+                for row in evaluations
+                if str(row["ticker"] or "").strip()
+            }
+            unevaluable_tickers = {
+                str(row["ticker"] or "").upper()
+                for row in evaluations
+                if str(row["outcome"] or "") == "UNEVALUABLE"
+            }
+            gap_tickers = {
+                str(row["ticker"] or "").upper()
+                for row in gap_rows
+                if str(row["ticker"] or "").strip()
+            }
+            unevaluable_tickers.update(gap_tickers)
+            evaluable_tickers = unique_tickers - unevaluable_tickers
+            unique_ticker_count = len(unique_tickers)
+            evaluable_coverage = (
+                len(evaluable_tickers) / unique_ticker_count
+                if unique_ticker_count else 0.0
+            )
+            gap_ratio = (
+                len(gap_tickers) / unique_ticker_count
+                if unique_ticker_count else 0.0
+            )
+            gap_classification_counts: dict[str, int] = {}
+            for row in gap_rows:
+                classification = str(
+                    row["classification"] or "UNRESOLVED_SOURCE_GAP"
+                )
+                gap_classification_counts[classification] = (
+                    gap_classification_counts.get(classification, 0)
+                    + int(row["event_count"] or 0)
+                )
+            gap_event_count = sum(gap_classification_counts.values())
             rejection_counts: dict[str, int] = {}
             for row in evaluations:
                 if str(row["outcome"] or "") == "MATCH":
@@ -787,6 +935,10 @@ class IntradayMonitorState:
                 reasons.append("MISSING_DATA_CONTRACT")
             if error_ratio > max_error_cycle_ratio:
                 reasons.append("EXCESSIVE_DETECTOR_ERRORS")
+            if evaluable_coverage < min_evaluable_ticker_coverage:
+                reasons.append("INSUFFICIENT_EVALUABLE_TICKER_COVERAGE")
+            if gap_ratio > max_gap_ticker_ratio:
+                reasons.append("EXCESSIVE_MINUTE_DATA_GAPS")
             if detection_p95 > max_detection_p95_ms:
                 reasons.append("DETECTION_P95_TOO_SLOW")
             if observed_max_bars > max_bar_count:
@@ -804,10 +956,18 @@ class IntradayMonitorState:
                 "match_count": outcomes.count("MATCH"),
                 "rejected_count": outcomes.count("REJECTED"),
                 "not_ready_count": outcomes.count("NOT_READY"),
+                "unevaluable_count": outcomes.count("UNEVALUABLE"),
                 "error_count": outcomes.count("ERROR"),
                 "error_cycle_ratio": round(error_ratio, 6),
                 "detection_p95_ms": round(detection_p95, 6),
                 "max_bar_count": observed_max_bars,
+                "unique_ticker_count": unique_ticker_count,
+                "evaluable_ticker_count": len(evaluable_tickers),
+                "evaluable_ticker_coverage": round(evaluable_coverage, 6),
+                "gap_ticker_count": len(gap_tickers),
+                "gap_ticker_ratio": round(gap_ratio, 6),
+                "gap_event_count": gap_event_count,
+                "gap_classification_counts": gap_classification_counts,
                 "rejection_counts": dict(
                     sorted(rejection_counts.items(), key=lambda item: (-item[1], item[0]))
                 ),
@@ -819,10 +979,14 @@ class IntradayMonitorState:
                     session_date, algorithm_version, parameter_version, status,
                     expected_open_cycles, observed_open_cycles, cycle_coverage,
                     evaluation_count, match_count, rejected_count,
-                    not_ready_count, error_count, error_cycle_ratio,
-                    detection_p95_ms, max_bar_count, rejection_counts_json,
+                    not_ready_count, unevaluable_count, error_count,
+                    error_cycle_ratio, detection_p95_ms, max_bar_count,
+                    unique_ticker_count, evaluable_ticker_count,
+                    evaluable_ticker_coverage, gap_ticker_count,
+                    gap_ticker_ratio, gap_event_count,
+                    gap_classification_counts_json, rejection_counts_json,
                     failure_reasons_json, finalized_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(session_date, algorithm_version)
                 DO UPDATE SET parameter_version=excluded.parameter_version,
                               status=excluded.status,
@@ -833,10 +997,18 @@ class IntradayMonitorState:
                               match_count=excluded.match_count,
                               rejected_count=excluded.rejected_count,
                               not_ready_count=excluded.not_ready_count,
+                              unevaluable_count=excluded.unevaluable_count,
                               error_count=excluded.error_count,
                               error_cycle_ratio=excluded.error_cycle_ratio,
                               detection_p95_ms=excluded.detection_p95_ms,
                               max_bar_count=excluded.max_bar_count,
+                              unique_ticker_count=excluded.unique_ticker_count,
+                              evaluable_ticker_count=excluded.evaluable_ticker_count,
+                              evaluable_ticker_coverage=excluded.evaluable_ticker_coverage,
+                              gap_ticker_count=excluded.gap_ticker_count,
+                              gap_ticker_ratio=excluded.gap_ticker_ratio,
+                              gap_event_count=excluded.gap_event_count,
+                              gap_classification_counts_json=excluded.gap_classification_counts_json,
                               rejection_counts_json=excluded.rejection_counts_json,
                               failure_reasons_json=excluded.failure_reasons_json,
                               finalized_at=excluded.finalized_at
@@ -852,10 +1024,18 @@ class IntradayMonitorState:
                 summary["match_count"],
                 summary["rejected_count"],
                 summary["not_ready_count"],
+                summary["unevaluable_count"],
                 summary["error_count"],
                 error_ratio,
                 detection_p95,
                 observed_max_bars,
+                unique_ticker_count,
+                len(evaluable_tickers),
+                evaluable_coverage,
+                len(gap_tickers),
+                gap_ratio,
+                gap_event_count,
+                json.dumps(gap_classification_counts, ensure_ascii=False),
                 json.dumps(summary["rejection_counts"], ensure_ascii=False),
                 json.dumps(reasons, ensure_ascii=False),
                 summary["finalized_at"],
@@ -1116,11 +1296,23 @@ class IntradayMonitorState:
                 GROUP BY rejection_reason
                 ORDER BY count DESC, rejection_reason LIMIT 10
             """).fetchall()
+            cup_gaps = db.execute("""
+                SELECT session_date, classification,
+                       COUNT(*) AS event_count,
+                       COUNT(DISTINCT ticker) AS ticker_count
+                FROM cup_handle_data_gaps
+                WHERE session_date=(SELECT MAX(session_date) FROM cup_handle_data_gaps)
+                GROUP BY session_date, classification
+                ORDER BY event_count DESC, classification
+            """).fetchall()
         observation_rows = []
         for row in observations:
             value = dict(row)
             value["failure_reasons"] = json.loads(
                 str(value.pop("failure_reasons_json") or "[]")
+            )
+            value["gap_classification_counts"] = json.loads(
+                str(value.pop("gap_classification_counts_json") or "{}")
             )
             observation_rows.append(value)
         cup_observation_rows = []
@@ -1159,6 +1351,7 @@ class IntradayMonitorState:
                     str(row["rejection_reason"]): int(row["count"])
                     for row in cup_rejections
                 },
+                "latest_gap_counts": [dict(row) for row in cup_gaps],
                 "session_observations": cup_observation_rows,
             },
         }

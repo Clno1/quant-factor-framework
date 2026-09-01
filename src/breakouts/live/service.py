@@ -536,6 +536,17 @@ class IntradayMomentumMonitor:
             preload_loaded = []
             fresh_exact = set()
 
+        for ticker in self.active_tickers:
+            quote = self.quotes.get(ticker)
+            rolling = self.rolling.get(ticker)
+            if quote is None or rolling is None:
+                continue
+            rolling.observe_quote(
+                observed_at=aware_now,
+                provider_timestamp=quote.timestamp,
+                cumulative_volume=quote.cumulative_volume,
+            )
+
         candidate_map = {
             candidate.ticker: candidate for candidate in self.candidates
         }
@@ -688,6 +699,7 @@ class IntradayMomentumMonitor:
                     "match_count",
                     "rejected_count",
                     "not_ready_count",
+                    "unevaluable_count",
                     "error_count",
                     "p95_latency_ms",
                     "max_bar_count",
@@ -769,6 +781,12 @@ class IntradayMomentumMonitor:
                         ),
                         max_detection_p95_ms=(
                             self.settings.cup_observation_max_detection_p95_ms
+                        ),
+                        min_evaluable_ticker_coverage=(
+                            self.settings.cup_observation_min_evaluable_ticker_coverage
+                        ),
+                        max_gap_ticker_ratio=(
+                            self.settings.cup_observation_max_gap_ticker_ratio
                         ),
                         max_bar_count=self.settings.cup_max_output_bars,
                     )

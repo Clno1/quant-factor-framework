@@ -85,6 +85,8 @@ class IntradayMonitorSettings:
     cup_replay_confirmation_horizon_bars: int = 6
     cup_replay_confirmation_return_pct: float = 2.0
     cup_observation_max_detection_p95_ms: float = 250.0
+    cup_observation_min_evaluable_ticker_coverage: float = 0.95
+    cup_observation_max_gap_ticker_ratio: float = 0.05
     cup_detail_retention_sessions: int = 30
     cup_required_shadow_sessions: int = 5
     max_concurrent_requests: int = 4
@@ -162,6 +164,12 @@ class IntradayMonitorSettings:
             raise ValueError("cup_max_handle_bars must be below cup_max_output_bars")
         if self.cup_observation_max_detection_p95_ms <= 0:
             raise ValueError("cup observation latency threshold must be positive")
+        if not 0.5 <= self.cup_observation_min_evaluable_ticker_coverage <= 1.0:
+            raise ValueError(
+                "cup evaluable ticker coverage must be between 0.5 and 1.0"
+            )
+        if not 0.0 <= self.cup_observation_max_gap_ticker_ratio <= 0.5:
+            raise ValueError("cup gap ticker ratio must be between 0 and 0.5")
         if not 5 <= self.cup_detail_retention_sessions <= 252:
             raise ValueError("cup detail retention must be between 5 and 252 sessions")
         if not 5 <= self.cup_required_shadow_sessions <= 20:
@@ -325,6 +333,12 @@ class IntradayMonitorSettings:
             ),
             cup_observation_max_detection_p95_ms=float(
                 cup_observation.get("max_detection_p95_ms", 250.0)
+            ),
+            cup_observation_min_evaluable_ticker_coverage=float(
+                cup_observation.get("min_evaluable_ticker_coverage", 0.95)
+            ),
+            cup_observation_max_gap_ticker_ratio=float(
+                cup_observation.get("max_gap_ticker_ratio", 0.05)
             ),
             cup_detail_retention_sessions=int(
                 cup_observation.get("detail_retention_sessions", 30)

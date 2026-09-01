@@ -14,8 +14,8 @@ from src.breakouts.live.models import BreakoutSignal, DailyCandidate, QuoteSnaps
 from src.breakouts.live.settings import IntradayMonitorSettings
 
 
-CUP_HANDLE_ALGORITHM_VERSION = "daily-cup-5m-handle-shadow-v1"
-CUP_HANDLE_PARAMETER_VERSION = "2026-08-29.1"
+CUP_HANDLE_ALGORITHM_VERSION = "daily-cup-5m-handle-shadow-v2"
+CUP_HANDLE_PARAMETER_VERSION = "2026-09-01.1"
 CUP_HANDLE_TRIGGER_FAMILY = "CUP_HANDLE_BREAKOUT"
 
 
@@ -337,6 +337,29 @@ class CupHandleDetector:
                 started=started, candidate=candidate, session_date=session_date,
                 now=now, bars=bars, outcome="ERROR", reason="MINUTE_DATA_ERROR",
                 details={**common, "error": str(metrics.get("error"))},
+            )
+        data_quality = metrics.get("data_quality") or {}
+        gaps = list(data_quality.get("gaps") or [])
+        if gaps:
+            classifications = {
+                str(value.get("classification") or "UNRESOLVED_SOURCE_GAP")
+                for value in gaps
+            }
+            if "PROVIDER_GAP_CONFIRMED" in classifications:
+                reason = "PROVIDER_MINUTE_DATA_GAP"
+            elif "UNRESOLVED_SOURCE_GAP" in classifications:
+                reason = "UNRESOLVED_5M_SOURCE_GAP"
+            else:
+                reason = "NO_TRADE_5M_INTERVAL"
+            return self._result(
+                started=started,
+                candidate=candidate,
+                session_date=session_date,
+                now=now,
+                bars=bars,
+                outcome="UNEVALUABLE",
+                reason=reason,
+                details={**common, "data_quality": data_quality},
             )
         if len(bars) > self.settings.cup_max_output_bars:
             return self._result(

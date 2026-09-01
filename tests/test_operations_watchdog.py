@@ -424,3 +424,69 @@ def test_intraday_exposes_cup_handle_shadow_metrics(monkeypatch, tmp_path: Path)
     assert metrics["茶杯柄主要拒绝原因"] == {"RIM_NOT_BROKEN": 2}
     assert metrics["茶杯柄检测延迟P95毫秒"] == 2.9
     assert metrics["茶杯柄最大序列长度"] == 20
+
+
+def test_intraday_keeps_latest_failed_cup_session_visible(monkeypatch, tmp_path: Path):
+    database = tmp_path / "intraday-cup-failed.sqlite3"
+    heartbeat = {
+        "session_date": "2026-08-31",
+        "updated_at": "2026-09-01T00:05:00+00:00",
+        "phase": "completed_session",
+        "mode": "shadow",
+        "errors": [],
+        "cup_handle": {
+            "mode": "shadow",
+            "algorithm_version": "daily-cup-5m-handle-shadow-v2",
+            "error_count": 0,
+        },
+    }
+    with sqlite3.connect(database) as connection:
+        connection.executescript("""
+            CREATE TABLE heartbeat (
+                singleton INTEGER PRIMARY KEY, updated_at TEXT NOT NULL,
+                payload_json TEXT NOT NULL
+            );
+            CREATE TABLE cup_handle_session_observations (
+                session_date TEXT, algorithm_version TEXT, status TEXT,
+                failure_reasons_json TEXT, evaluable_ticker_coverage REAL,
+                gap_ticker_count INTEGER, gap_ticker_ratio REAL,
+                gap_event_count INTEGER, gap_classification_counts_json TEXT
+            );
+        """)
+        connection.execute(
+            "INSERT INTO heartbeat VALUES (1, ?, ?)",
+            (heartbeat["updated_at"], json.dumps(heartbeat)),
+        )
+        connection.execute(
+            "INSERT INTO cup_handle_session_observations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "2026-08-31",
+                "daily-cup-5m-handle-shadow-v2",
+                "FAIL",
+                json.dumps(["EXCESSIVE_MINUTE_DATA_GAPS"]),
+                0.9,
+                4,
+                0.1,
+                5,
+                json.dumps({"UNRESOLVED_SOURCE_GAP": 5}),
+            ),
+        )
+    monkeypatch.setattr("src.operations.adapters.delivery.INTRADAY_DB", database)
+    registry = OperationsRegistry("configs/operations.yaml")
+
+    result = collect_delivery_evidence(
+        [registry.get("intraday_momentum")],
+        now=datetime(2026, 9, 1, 12, 0, tzinfo=timezone.utc),
+        observed_at="2026-09-01T12:00:00+00:00",
+    )
+
+    snapshot = result.snapshots[0]
+    assert snapshot.status == JobStatus.DEGRADED
+    assert "2026-08-31" in str(snapshot.status_reason)
+    assert snapshot.metrics["茶杯柄最近完整交易日状态"] == "FAIL"
+    assert snapshot.metrics["茶杯柄证据交易日"] == "2026-08-31"
+    assert snapshot.metrics["茶杯柄数据缺口股票数"] == 4
+    assert any(
+        incident.code == "CUP_HANDLE_SHADOW_SESSION_FAILED"
+        for incident in result.incidents
+    )

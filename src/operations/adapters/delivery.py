@@ -61,6 +61,26 @@ def _p95(values: Iterable[float]) -> float | None:
     return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
 
 
+def _json_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    try:
+        parsed = json.loads(str(value or "[]"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def _json_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    try:
+        parsed = json.loads(str(value or "{}"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 def _delivery_state(status: JobStatus) -> str:
     return {
         JobStatus.SUCCESS: "SENT",
@@ -690,6 +710,8 @@ def _collect_intraday(
     )
     heartbeat_row = heartbeat_rows[0] if heartbeat_rows else None
     heartbeat = _parse_payload(heartbeat_row)
+    cup_heartbeat = heartbeat.get("cup_handle") or {}
+    cup_algorithm_version = str(cup_heartbeat.get("algorithm_version") or "")
     heartbeat_at = iso_utc(
         heartbeat.get("updated_at") or (heartbeat_row or {}).get("updated_at")
     )
@@ -727,6 +749,15 @@ def _collect_intraday(
             if str(row.get("session_date") or "") == expected
         ),
         None,
+    )
+    cup_observations_for_version = [
+        row for row in cup_observations
+        if not cup_algorithm_version
+        or str(row.get("algorithm_version") or "") == cup_algorithm_version
+    ]
+    latest_cup_observation = (
+        cup_observations_for_version[0]
+        if cup_observations_for_version else None
     )
     timeout = int(job.schedule.get("heartbeat_timeout_seconds") or 120)
     if not heartbeat:
@@ -784,21 +815,49 @@ def _collect_intraday(
         status = JobStatus.SCHEDULED
         reason = "等待下一个交易时段启动"
 
-    cup_heartbeat = heartbeat.get("cup_handle") or {}
     if (
         int(cup_heartbeat.get("error_count") or 0) > 0
         and status in {JobStatus.RUNNING, JobStatus.SUCCESS}
     ):
         status = JobStatus.DEGRADED
         reason = "茶杯柄检测最近周期存在错误"
-    if (
-        market_phase == "AFTER"
-        and current_cup_observation
-        and str(current_cup_observation.get("status") or "") != "PASS"
-        and status == JobStatus.SUCCESS
-    ):
+    latest_cup_failed = bool(
+        latest_cup_observation
+        and str(latest_cup_observation.get("status") or "") != "PASS"
+    )
+    if latest_cup_failed and status not in {
+        JobStatus.FAILED,
+        JobStatus.MISSED,
+        JobStatus.STALE,
+        JobStatus.BLOCKED,
+    }:
         status = JobStatus.DEGRADED
-        reason = "盘中动量通过，但茶杯柄独立影子验收未通过"
+        latest_session = str(
+            latest_cup_observation.get("session_date") or "未知交易日"
+        )
+        failures = _json_list(
+            latest_cup_observation.get("failure_reasons_json")
+        )
+        reason = (
+            f"最近完整交易日 {latest_session} 的茶杯柄影子验收未通过"
+            + (f"：{', '.join(map(str, failures))}" if failures else "")
+        )
+        result.incidents.append(IncidentCandidate(
+            fingerprint=(
+                "intraday_momentum:cup_handle_latest_session_failed:"
+                f"{cup_algorithm_version or 'unknown'}"
+            ),
+            severity=IncidentSeverity.WARNING,
+            code="CUP_HANDLE_SHADOW_SESSION_FAILED",
+            title="茶杯柄最近完整交易日未通过",
+            detail=reason,
+            job_id=job.job_id,
+            target_session=latest_session,
+            metadata={
+                "algorithm_version": cup_algorithm_version,
+                "failure_reasons": failures,
+            },
+        ))
 
     cycles: list[dict[str, Any]] = []
     if "monitor_cycles" in tables:
@@ -809,19 +868,24 @@ def _collect_intraday(
         )
     cup_cycles: list[dict[str, Any]] = []
     cup_evaluations: list[dict[str, Any]] = []
+    cup_evidence_session = (
+        expected
+        if heartbeat_session == expected
+        else str((latest_cup_observation or {}).get("session_date") or expected)
+    )
     if "cup_handle_cycles" in tables:
         cup_cycles = sqlite_rows(
             INTRADAY_DB,
             """SELECT * FROM cup_handle_cycles
                WHERE session_date=? ORDER BY observed_at DESC LIMIT 500""",
-            (expected,),
+            (cup_evidence_session,),
         )
     if "cup_handle_evaluations" in tables:
         cup_evaluations = sqlite_rows(
             INTRADAY_DB,
             """SELECT outcome, rejection_reason, latency_ms, bar_count
                FROM cup_handle_evaluations WHERE session_date=?""",
-            (expected,),
+            (cup_evidence_session,),
         )
     cup_outcome_counts: dict[str, int] = {}
     cup_rejection_counts: dict[str, int] = {}
@@ -834,12 +898,6 @@ def _collect_intraday(
     cup_latency_p95 = _p95(
         float(row.get("latency_ms") or 0.0) for row in cup_evaluations
     )
-    cup_algorithm_version = str(cup_heartbeat.get("algorithm_version") or "")
-    cup_observations_for_version = [
-        row for row in cup_observations
-        if not cup_algorithm_version
-        or str(row.get("algorithm_version") or "") == cup_algorithm_version
-    ]
     cup_expected_shadow = previous_xnys_sessions(expected, 5)
     cup_by_session = {
         str(row.get("session_date") or ""): row
@@ -905,8 +963,10 @@ def _collect_intraday(
                 "cup_handle": {
                     "algorithm_version": cup_algorithm_version,
                     "mode": cup_heartbeat.get("mode"),
+                    "evidence_session": cup_evidence_session,
                     "outcome_counts": cup_outcome_counts,
                     "detection_p95_ms": cup_latency_p95,
+                    "latest_completed_observation": latest_cup_observation,
                 },
             },
         ))
@@ -992,10 +1052,18 @@ def _collect_intraday(
             "latest_observation": observations[0] if observations else None,
             "茶杯柄算法版本": cup_heartbeat.get("algorithm_version"),
             "茶杯柄模式": cup_heartbeat.get("mode"),
+            "茶杯柄证据交易日": cup_evidence_session,
+            "茶杯柄最近完整交易日状态": (
+                str((latest_cup_observation or {}).get("status") or "") or None
+            ),
+            "茶杯柄最近完整交易日": (
+                str((latest_cup_observation or {}).get("session_date") or "") or None
+            ),
             "茶杯柄评估周期": len(cup_cycles),
             "茶杯柄命中数": cup_outcome_counts.get("MATCH", 0),
             "茶杯柄拒绝数": cup_outcome_counts.get("REJECTED", 0),
             "茶杯柄等待数": cup_outcome_counts.get("NOT_READY", 0),
+            "茶杯柄不可评估数": cup_outcome_counts.get("UNEVALUABLE", 0),
             "茶杯柄错误数": cup_outcome_counts.get("ERROR", 0),
             "茶杯柄检测延迟P95毫秒": (
                 round(cup_latency_p95, 3) if cup_latency_p95 is not None else None
@@ -1020,9 +1088,33 @@ def _collect_intraday(
                 if session in cup_by_session
                 and str(cup_by_session[session].get("status") or "") != "PASS"
             ],
+            "茶杯柄可评估股票覆盖率": (
+                latest_cup_observation.get("evaluable_ticker_coverage")
+                if latest_cup_observation else None
+            ),
+            "茶杯柄数据缺口股票数": (
+                latest_cup_observation.get("gap_ticker_count")
+                if latest_cup_observation else None
+            ),
+            "茶杯柄数据缺口股票比例": (
+                latest_cup_observation.get("gap_ticker_ratio")
+                if latest_cup_observation else None
+            ),
+            "茶杯柄数据缺口事件数": (
+                latest_cup_observation.get("gap_event_count")
+                if latest_cup_observation else None
+            ),
+            "茶杯柄数据缺口分类": (
+                _json_dict(
+                    latest_cup_observation.get(
+                        "gap_classification_counts_json"
+                    )
+                )
+                if latest_cup_observation else {}
+            ),
             "茶杯柄独立影子验收": (
                 current_cup_observation
-                or (cup_observations[0] if cup_observations else None)
+                or latest_cup_observation
             ),
         },
     ))
