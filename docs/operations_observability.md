@@ -662,3 +662,47 @@ ERROR，而是写入唯一的 `cup_handle_data_gaps` 事件并把当次结果标
 FAIL；适配器现在持续生成 `CUP_HANDLE_SHADOW_SESSION_FAILED` WARNING，并让任务保持 DEGRADED。
 详情页的“证据交易日”明确说明计数来自哪一天，避免把尚未开始的新交易日显示成全零并误解为没有
 日志。后续同算法版本完整日 PASS 后，watchdog 才可以按指纹自动解决该事件。
+
+## 30. 2026-09-02 上游阻断与恢复状态语义
+
+茶杯柄候选依赖 Security Master、coverage 和 PIT。任一上游 fail closed 时，运维站必须显示
+`UPSTREAM_DATA_BLOCKED` 或等价的明确原因，不能把“没有候选快照”显示成茶杯柄算法 FAIL，也不能
+生成全零 session 记录。2026-09-01 的 v2 正属于缺少完整运行，因此观察仍为 `0/5`。
+
+FMP 身份漂移修复后，运维证据应公开 Security Master generation/manifest、coverage version、
+PIT version、显式 rebase 审计和完整 child hash 结论。当前恢复链绑定
+`b99fc58963604831b9534af9600e75f2` / `a8c3814e7fd444e9b5f0a12cb047aa7f` /
+`bbe1288de3684cc3ab6849954cbd9507`。普通日更发现同 target 绑定变化仍必须报错；只有人工审阅后的
+显式 rebase 可继续，避免页面“最新”掩盖父版本变化。
+
+资源监控还必须区分进程 RSS、脚本 `ru_maxrss` 与 systemd cgroup `MemoryPeak`。PIT 本次分别记录
+约 732.5 MiB 和 215.7 MiB，两者计量范围不同，不能只挑较小值展示。因子重建与候选准备重叠时，
+运维事件需记录受控停止、checkpoint 进度、恢复时间和候选 SLA；这种主动让路不应记为数据失败，
+但候选若错过截止时间仍必须按 SLA 判为失败。
+
+2026-09-02 的实际交接证明该状态模型生效：八因子在 `287/648` 受控暂停时，未完成 readiness 被
+临时屏蔽；候选卡片随后以 `SUCCESS` 记录 18:30:22 至 18:57:10 的真实运行、600 只候选、source
+2026-09-01 和 coverage `a8c3814e7fd444e9b5f0a12cb047aa7f`。候选峰值 604.5 MiB、swap 0，
+`MemoryHigh` 的临时 620 MiB 调整及恢复必须与硬上限 700 MiB 分开记录。
+
+盘中监控卡片仍为 DEGRADED，因为最近完整茶杯柄证据仍是 v1 的 2026-08-31 FAIL；开放 incident
+`CUP_HANDLE_SHADOW_SESSION_FAILED` 继续存在。今天候选成功没有解决该 incident，也没有新增 v2
+PASS。只有 2026-09-02 完整收盘后产生的 v2 session 结论才可改变观察进度。
+
+## 31. 2026-09-02 因子暖机失败的可观测性口径
+
+八因子进程“完成 648/648 分片”和“正式 publication 成功”是两层不同状态。本次计算层完成，但
+发布层因五个因子最新覆盖率为 0 而 FAIL；运维站必须显示 `PUBLICATION_GATE_REJECTED`、失败因子、
+latest warm-up eligible count、raw/clean coverage 和失败 generation，不能只显示 100% 进度。
+
+根因修复将输入方法从 V2 升为 `BROAD_FACTOR_INPUT_V3_EXACT_WARMUP_XNYS`。运维记录需同时展示
+输入指纹方法和 history start；若 checkpoint 方法不一致，应显示“不可恢复，创建新代次”，而不是
+卡在 648/648 或从旧分片继续。失败代次必须保留，新的 648 分片重算是合同变化的正常成本。
+
+2026-09-03 04:20 SGT 的一次性 timer 已作为独立任务证据注册。其成功标准是：触发器成功、正式
+因子服务新建 V3 generation、八因子全部 latest coverage 通过、publication 完成、readiness 只剩
+既有 PIT 行业历史 blocker。只看到 trigger service 退出 0 不代表重建完成。
+
+SG 完整测试还暴露 AppleDouble 元数据污染：`._*.py` 会让 AST 隔离测试发生 UTF-8 解码错误。
+这应归类为 `DEPLOYMENT_ARTIFACT_CONTAMINATION`，与因子回归失败分开；文件已备份隔离，正式 tests
+目录随后 651 项全部通过。后续从 macOS 部署必须排除 AppleDouble/xattr 伴生文件。

@@ -192,6 +192,9 @@ def _normalize_symbols(frame: pd.DataFrame | None) -> pd.DataFrame:
     out["ticker"] = (
         out["ticker"].astype(str).str.upper().str.replace(".", "-", regex=False)
     )
+    if "exchange" not in out.columns:
+        out["exchange"] = ""
+    out["exchange"] = out["exchange"].fillna("").astype(str).str.upper()
     out["security_id"] = out["security_id"].astype(object)
     out["ticker"] = out["ticker"].astype(object)
     out["effective_from"] = pd.to_datetime(
@@ -231,6 +234,31 @@ def _ticker_map(
             .astype(str)
             .to_dict()
         )
+    return mapping
+
+
+def _exchange_map(
+    *,
+    date: pd.Timestamp,
+    master: pd.DataFrame,
+    symbols: pd.DataFrame,
+) -> dict[str, str]:
+    mapping = dict(
+        zip(master["security_id"], master["primary_exchange"], strict=True)
+    )
+    if symbols.empty:
+        return mapping
+    active = symbols.loc[
+        (symbols["effective_from"].isna() | symbols["effective_from"].le(date))
+        & (symbols["effective_to"].isna() | symbols["effective_to"].ge(date))
+        & symbols["exchange"].ne("")
+    ].sort_values(["security_id", "effective_from"], na_position="first")
+    mapping.update(
+        active.drop_duplicates("security_id", keep="last")
+        .set_index("security_id")["exchange"]
+        .astype(str)
+        .to_dict()
+    )
     return mapping
 
 
@@ -287,6 +315,32 @@ def _compact_eligibility_strings(
     snapshot_dictionary = pd.Index(
         np.asarray(_SNAPSHOT_CATEGORIES, dtype=object), dtype=object
     )
+    dictionaries = {
+        "security_id": security_dictionary,
+        "ticker": ticker_dictionary,
+        "reason_codes": reason_dictionary,
+        "snapshot_type": snapshot_dictionary,
+        "source_data_version_id": pd.Index(
+            [str(parent_version_id)], dtype=object
+        ),
+    }
+    violations: list[str] = []
+    for column, dictionary in dictionaries.items():
+        raw = frame[column].astype(object)
+        missing_count = int(raw.isna().sum())
+        if missing_count:
+            violations.append(f"{column}=<NULL> ({missing_count} rows)")
+        unknown = raw.loc[raw.notna() & ~raw.isin(dictionary)]
+        if not unknown.empty:
+            samples = sorted({str(value) for value in unknown})[:8]
+            violations.append(
+                f"{column}={samples!r} ({len(unknown)} rows)"
+            )
+    if violations:
+        raise DataFoundationError(
+            "eligibility dictionary encoding encountered unknown or missing "
+            "values: " + "; ".join(violations)
+        )
     frame["security_id"] = pd.Categorical(
         frame["security_id"].astype(object), categories=security_dictionary
     )
@@ -301,16 +355,14 @@ def _compact_eligibility_strings(
     )
     frame["source_data_version_id"] = pd.Categorical(
         frame["source_data_version_id"].astype(object),
-        categories=pd.Index([str(parent_version_id)], dtype=object),
+        categories=dictionaries["source_data_version_id"],
     )
     encoded = [
         "security_id", "ticker", "reason_codes", "snapshot_type",
         "source_data_version_id",
     ]
     if frame[encoded].isna().any().any():
-        raise DataFoundationError(
-            "eligibility dictionary encoding encountered an unknown value"
-        )
+        raise AssertionError("validated eligibility dictionary encoding lost values")
     return frame
 
 
@@ -461,6 +513,7 @@ def _evaluate_month_end(
         symbols=symbols,
         session_bars=session_bars,
     )
+    exchanges = _exchange_map(date=date, master=master, symbols=symbols)
     audit = master.copy()
     audit["date"] = date
     audit["ticker"] = audit["security_id"].map(tickers).fillna(
@@ -487,7 +540,10 @@ def _evaluate_month_end(
     )
     accepted_types = {"STOCK"} | ({"ADR"} if include_adr else set())
     audit["asset_type_pass"] = audit["asset_type"].isin(accepted_types)
-    audit["exchange_pass"] = audit["primary_exchange"].isin(
+    selection_exchange = audit["security_id"].map(exchanges).fillna(
+        audit["primary_exchange"]
+    )
+    audit["exchange_pass"] = selection_exchange.isin(
         {"NYSE", "NASDAQ", "AMEX"}
     )
     audit["price_pass"] = audit["selection_price"].ge(float(min_price))

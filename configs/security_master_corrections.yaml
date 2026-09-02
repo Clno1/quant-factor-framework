@@ -70,6 +70,60 @@ reviewed_provider_identifier_conflicts:
       - "https://www.sec.gov/Archives/edgar/data/1907223/000121390026028158/ea0281637-8k_greenland.htm"
 
 reviewed_symbol_transitions:
+  - id: ugro_to_flzh_name_and_symbol_change
+    effective_date: "2026-06-16"
+    old_ticker: UGRO
+    new_ticker: FLZH
+    old_profile:
+      name_contains: "urban-gro"
+      asset_type: STOCK
+      exchange: NASDAQ
+      cik: "0001706524"
+      isin: US91704K3014
+      cusip: 91704K301
+      listing_date: "2019-11-14"
+      is_active: false
+    new_profile:
+      name_contains: "Flash Sports & Media"
+      asset_type: STOCK
+      exchange: OTC
+      cik: "0001706524"
+      isin: US91704K3014
+      cusip: 91704K301
+      listing_date: "2021-02-11"
+      is_active: true
+    reason: "SEC filings establish the urban-gro corporate name change and show FLZH as the registered common-stock trading symbol from 2026-06-16; FMP retained the issue identifiers but omitted the symbol-change event. The exact exchange values bind the provider's target-session state and do not rewrite historical exchange membership."
+    sources:
+      - "https://www.sec.gov/Archives/edgar/data/1706524/000121390026068776/ea0294769-8k_flash.htm"
+      - "https://www.sec.gov/Archives/edgar/data/1706524/000121390026069290/ea0295000-8k_flash.htm"
+
+  - id: svii_to_nucl_business_combination
+    effective_date: "2026-02-25"
+    old_ticker: SVII
+    new_ticker: NUCL
+    old_profile:
+      name_contains: "Spring Valley Acquisition"
+      asset_type: STOCK
+      exchange: NASDAQ
+      cik: "0002089283"
+      isin: US2697101093
+      cusip: 269710109
+      listing_date: "2022-10-28"
+      is_active: false
+    new_profile:
+      name_contains: "Eagle Nuclear Energy"
+      asset_type: STOCK
+      exchange: NASDAQ
+      cik: "0002089283"
+      isin: US2697101093
+      cusip: 269710109
+      listing_date: "2026-02-25"
+      is_active: true
+    reason: "The business combination closed on 2026-02-24 and SEC-filed primary evidence states that the combined company's common stock began Nasdaq trading as NUCL on 2026-02-25; FMP omitted the symbol-change event and reported the SVII delisting on the same inclusive boundary date."
+    sources:
+      - "https://www.sec.gov/Archives/edgar/data/2089283/000110465926022330/tm267670d1_ex99-6.htm"
+      - "https://www.sec.gov/Archives/edgar/data/2089283/000135445726000211/0001354457-26-000211-index.htm"
+
   - id: viaca_to_paraa_name_change
     effective_date: "2022-02-17"
     old_ticker: VIACA

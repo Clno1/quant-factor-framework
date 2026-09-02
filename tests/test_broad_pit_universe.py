@@ -11,6 +11,7 @@ import pytest
 from scripts.build_us_liquid_pit import _incremental_inputs_match
 
 from src.data.derived_universe import (
+    _compact_eligibility_strings,
     build_liquid_5m_candidate,
     historical_pit_bar_coverage_check,
     roll_forward_liquid_5m_candidate,
@@ -24,6 +25,86 @@ from src.data.foundation import (
 from src.data.membership_state import resolve_membership_asof
 from src.data.security_master_store import SecurityMasterGeneration
 from src.data.universe_publication import DerivedUniverseStore
+
+
+def test_eligibility_dictionary_error_identifies_column_and_values():
+    frame = pd.DataFrame([{
+        "security_id": "sec_aaa",
+        "ticker": "AAA",
+        "reason_codes": "UNREVIEWED_REASON",
+        "snapshot_type": "MONTH_END",
+        "source_data_version_id": "version-a",
+    }])
+
+    with pytest.raises(
+        DataFoundationError,
+        match=r"reason_codes=.*UNREVIEWED_REASON.*\(1 rows\)",
+    ):
+        _compact_eligibility_strings(
+            frame,
+            security_categories=["sec_aaa"],
+            ticker_categories=["AAA"],
+            parent_version_id="version-a",
+        )
+
+
+def test_month_end_exchange_gate_uses_point_in_time_symbol_exchange():
+    master = pd.DataFrame([{
+        "security_id": "sec_rename",
+        "current_ticker": "FLZH",
+        "asset_type": "STOCK",
+        "primary_exchange": "OTC",
+        "listing_date": "2019-11-14",
+        "delisting_date": None,
+        "trading_status": "ACTIVE",
+    }])
+    symbols = pd.DataFrame([
+        {
+            "security_id": "sec_rename",
+            "ticker": "UGRO",
+            "exchange": "NASDAQ",
+            "effective_from": "2019-11-14",
+            "effective_to": "2026-06-15",
+        },
+        {
+            "security_id": "sec_rename",
+            "ticker": "FLZH",
+            "exchange": "OTC",
+            "effective_from": "2026-06-16",
+            "effective_to": None,
+        },
+    ])
+    sessions = _sessions("2026-03-01", "2026-06-30")
+    bars = pd.DataFrame({
+        "date": sessions,
+        "security_id": "sec_rename",
+        "ticker": ["UGRO" if value < pd.Timestamp("2026-06-16") else "FLZH"
+                   for value in sessions],
+        "open": 10.0,
+        "high": 10.5,
+        "low": 9.5,
+        "close": 10.0,
+        "volume": 1_000_000.0,
+    })
+
+    candidate = build_liquid_5m_candidate(
+        bars,
+        master,
+        parent_version_id="coverage-v1",
+        target_session="2026-06-30",
+        history_start="2026-03-01",
+        research_start="2026-03-01",
+        symbol_history=symbols,
+        adv_sessions=2,
+        min_valid_sessions=2,
+        min_price=1.0,
+        min_adv20_usd=1.0,
+    )
+    rows = candidate.eligibility.loc[
+        candidate.eligibility["security_id"].astype(str).eq("sec_rename")
+    ].set_index("date")
+    assert bool(rows.loc[pd.Timestamp("2026-05-29"), "exchange_pass"])
+    assert not bool(rows.loc[pd.Timestamp("2026-06-30"), "exchange_pass"])
 
 
 def _sessions(start: str, end: str) -> pd.DatetimeIndex:

@@ -39,7 +39,7 @@ class FactorBlockResult:
     diagnostics: dict[str, Any]
 
 
-INPUT_FINGERPRINT_METHOD = "BROAD_FACTOR_INPUT_V2_XNYS_ONLY"
+INPUT_FINGERPRINT_METHOD = "BROAD_FACTOR_INPUT_V3_EXACT_WARMUP_XNYS"
 
 
 def _calendar() -> Any:
@@ -99,9 +99,15 @@ def output_months(
 
 
 def _lookback_start(first_output: pd.Timestamp, prior_sessions: int) -> pd.Timestamp:
+    """Return the first session after loading exactly ``prior_sessions`` before t.
+
+    ``exchange_calendars.sessions_window`` includes the anchor session.  Asking
+    it for ``-N`` therefore returns only ``N - 1`` sessions before the output
+    date, which is one observation short for exact momentum and return windows.
+    """
     calendar = _calendar()
     first = calendar.date_to_session(first_output, direction="none")
-    values = calendar.sessions_window(first, -int(prior_sessions))
+    values = calendar.sessions_window(first, -(int(prior_sessions) + 1))
     start = values[0]
     if getattr(start, "tzinfo", None) is not None:
         start = start.tz_localize(None)

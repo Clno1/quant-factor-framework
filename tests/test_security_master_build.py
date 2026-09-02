@@ -260,6 +260,70 @@ def test_provider_sources_require_matching_contract_and_hashes():
 def _reviewed_spac_profiles() -> pd.DataFrame:
     return pd.DataFrame([
         {
+            "ticker": "UGRO",
+            "name": "urban-gro, Inc.",
+            "asset_type": "STOCK",
+            "exchange": "NASDAQ",
+            "country": "US",
+            "currency": "USD",
+            "cik": "0001706524",
+            "isin": "US91704K3014",
+            "cusip": "91704K301",
+            "listing_date": "2019-11-14",
+            "sector": "Industrials",
+            "sub_industry": "Specialty Industrial Machinery",
+            "trading_status": "INACTIVE",
+            "is_active": False,
+        },
+        {
+            "ticker": "FLZH",
+            "name": "Flash Sports & Media, Inc.",
+            "asset_type": "STOCK",
+            "exchange": "OTC",
+            "country": "US",
+            "currency": "USD",
+            "cik": "0001706524",
+            "isin": "US91704K3014",
+            "cusip": "91704K301",
+            "listing_date": "2021-02-11",
+            "sector": "Communication Services",
+            "sub_industry": "Broadcasting",
+            "trading_status": "ACTIVE",
+            "is_active": True,
+        },
+        {
+            "ticker": "SVII",
+            "name": "Spring Valley Acquisition Corp. II",
+            "asset_type": "STOCK",
+            "exchange": "NASDAQ",
+            "country": "US",
+            "currency": "USD",
+            "cik": "0002089283",
+            "isin": "US2697101093",
+            "cusip": "269710109",
+            "listing_date": "2022-10-28",
+            "sector": "Financial Services",
+            "sub_industry": "Shell Companies",
+            "trading_status": "INACTIVE",
+            "is_active": False,
+        },
+        {
+            "ticker": "NUCL",
+            "name": "Eagle Nuclear Energy Corp.",
+            "asset_type": "STOCK",
+            "exchange": "NASDAQ",
+            "country": "US",
+            "currency": "USD",
+            "cik": "0002089283",
+            "isin": "US2697101093",
+            "cusip": "269710109",
+            "listing_date": "2026-02-25",
+            "sector": "Energy",
+            "sub_industry": "Uranium",
+            "trading_status": "ACTIVE",
+            "is_active": True,
+        },
+        {
             "ticker": "VIACA",
             "name": "Paramount Global",
             "asset_type": "STOCK",
@@ -406,13 +470,16 @@ def test_reviewed_security_master_transitions_are_source_backed_and_exact():
     assert path.name == "security_master_corrections.yaml"
     assert len(digest) == 64
     assert set(zip(corrected["old_ticker"], corrected["new_ticker"])) == {
+        ("UGRO", "FLZH"),
+        ("SVII", "NUCL"),
         ("VIACA", "PARAA"),
         ("UCBI", "UCB"),
         ("HSPT", "SLBT"),
         ("VACH", "VRXA"),
     }
     assert set(corrected["date"].dt.date.astype(str)) == {
-        "2022-02-17", "2024-08-06", "2026-06-11", "2026-06-15",
+        "2022-02-17", "2024-08-06", "2026-02-25", "2026-06-11",
+        "2026-06-15", "2026-06-16",
     }
     assert {item["action"] for item in audit} == {"REVIEWED_EVENT_ADDED"}
     assert all(item["sources"] for item in audit)
@@ -423,10 +490,20 @@ def test_reviewed_security_master_transitions_are_source_backed_and_exact():
         delisted_companies=pd.DataFrame(),
         target_session="2026-08-12",
         minimum_active_stocks=2,
+        reviewed_identity_continuity={
+            (
+                str(row.old_ticker),
+                str(row.new_ticker),
+                pd.Timestamp(row.date).normalize(),
+            )
+            for row in corrected.itertuples(index=False)
+        },
     )
     assert candidate.quality["status"] == "PASS"
     assert candidate.quality["identity_security_coverage"] == 1.0
     for old_ticker, new_ticker in (
+        ("UGRO", "FLZH"),
+        ("SVII", "NUCL"),
         ("VIACA", "PARAA"),
         ("UCBI", "UCB"),
         ("HSPT", "SLBT"),
@@ -436,6 +513,27 @@ def test_reviewed_security_master_transitions_are_source_backed_and_exact():
             candidate.symbols["ticker"].isin([old_ticker, new_ticker])
         ]
         assert aliases["security_id"].nunique() == 1
+    svii_aliases = candidate.symbols.loc[
+        candidate.symbols["ticker"].isin(["SVII", "NUCL"])
+    ].set_index("ticker")
+    assert svii_aliases.loc["SVII", "effective_to"] == pd.Timestamp(
+        "2026-02-24"
+    )
+    assert svii_aliases.loc["NUCL", "effective_from"] == pd.Timestamp(
+        "2026-02-25"
+    )
+    ugro_aliases = candidate.symbols.loc[
+        candidate.symbols["ticker"].isin(["UGRO", "FLZH"])
+    ].set_index("ticker")
+    assert set(ugro_aliases.index) == {"UGRO", "FLZH"}
+    assert ugro_aliases.loc["UGRO", "effective_to"] == pd.Timestamp(
+        "2026-06-15"
+    )
+    assert ugro_aliases.loc["UGRO", "exchange"] == "NASDAQ"
+    assert ugro_aliases.loc["FLZH", "effective_from"] == pd.Timestamp(
+        "2026-06-16"
+    )
+    assert ugro_aliases.loc["FLZH", "exchange"] == "OTC"
 
 
 def test_reviewed_security_master_transition_fails_on_provider_drift():

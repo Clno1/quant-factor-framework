@@ -256,3 +256,45 @@ bar，就仅使用这些真实成交聚合 OHLCV，并记录 `source_minute_coun
 95%，缺口股票比例不超过 5%；缺口过多时分别产生
 `INSUFFICIENT_EVALUABLE_TICKER_COVERAGE` 和 `EXCESSIVE_MINUTE_DATA_GAPS`，因此错误去重不会
 降低质量门槛。发送开关继续保持 false。
+
+## 15. 2026-09-02 v2 首个运行日前的上游恢复
+
+`daily-cup-5m-handle-shadow-v2` 当前仍为 `0/5`，不是已经失败 0 次，也不是沿用 v1 的
+2026-08-31 失败结果。2026-09-01 没有产生 v2 完整日结，原因是候选准备依赖的全美宽基数据链在
+Security Master 身份门禁处 fail closed；缺少真实候选快照时不得启动或补记盘中观察。
+
+上游根因是 FMP 没有提供 `UGRO -> FLZH` 和 `SVII -> NUCL` 的可靠换码历史，同时当前证券资料把
+后继代码标为 OTC。系统已根据 SEC 文件增加精确纠正规则，并修复 PIT 交易所口径：历史日期使用
+当时生效 ticker 的交易所，而不是用当前后继 ticker 的 OTC 状态覆盖整段历史。该修复不会让 OTC
+阶段进入 `US_LIQUID_5M`，也不会猜测缺失的身份关系。
+
+2026-09-01 的正式上游版本已恢复到 Security Master
+`b99fc58963604831b9534af9600e75f2`、coverage
+`a8c3814e7fd444e9b5f0a12cb047aa7f` 和 PIT
+`bbe1288de3684cc3ab6849954cbd9507`。八因子正在从认证 checkpoint 重建；候选准备必须在其自己的
+资源窗口内完成，盘中监控仍按 21:20 SGT 启动。只有完整收盘后的 v2 日结同时满足周期覆盖、实际
+评估、错误率、P95、序列上限、可评估覆盖率和缺口比例，才可记为第一个通过日。发送继续保持
+`delivery_enabled=false`。
+
+18:30 SGT 的 v2 候选准备已按时触发并于 18:57:10 成功完成。快照 session 为 2026-09-02、
+source 为 2026-09-01，精确绑定 coverage `a8c3814e7fd444e9b5f0a12cb047aa7f` 和 bars index
+SHA-256 `3364b06f795790e2a93182461d70f5739b5af47e6382ede96b3a6f9e296b3b5f`；日线评估
+2,848 只、合格 1,314 只、冻结 600 只。候选计算耗时 1,606.824 秒，systemd 峰值 604.5 MiB、
+swap 0。原 `MemoryHigh=500M` 触发持续 cgroup reclaim，运行中仅把软高水位临时提高到 620 MiB，
+`MemoryMax=700M` 和禁用 swap 未变；完成后已恢复 500 MiB。该候选成功只满足盘前输入门槛，不能
+代替盘中评估或收盘后的 session PASS。
+
+## 16. 2026-09-02 盘中前最终交接
+
+20:28 SGT 核查时，`quant-intraday-momentum-monitor.service` 尚未运行，timer 明确等待 21:20
+SGT；这属于盘前正常等待。2026-09-02 候选快照已成功冻结 600 只，v2 算法和参数版本已写入快照，
+发送配置仍为 false。状态接口继续展示 v1 的 2026-08-31 FAIL，是因为 v2 尚无完整日结，不能用
+“等待下一次运行”覆盖最后失败证据。
+
+上游八因子虽然完成计算，publication 因暖机窗口 off-by-one 被严格拒绝。该问题不影响今天已经
+冻结的候选和今晚分钟监控；修复后的八因子重建安排在 2026-09-03 04:20 SGT，即盘中服务正常收盘
+日结之后。若今晚服务没有实际产生 `daily-cup-5m-handle-shadow-v2` 的 cycles、evaluations、
+data_gaps 和 session observation，则 2026-09-02 仍不得计数。
+
+明日验收必须报告 v2 的候选、命中、拒绝、等待、不可评估、错误、唯一缺口分类、可评估覆盖率、
+缺口比例、P95 和最大 bar 数。满足全部门槛才记为 1/5；无信号仍不能表述为 0% 误报。

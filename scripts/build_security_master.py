@@ -654,6 +654,7 @@ def _prepare_research_scope(
     *,
     history_start: pd.Timestamp,
     target_session: pd.Timestamp,
+    reviewed_transition_tickers: set[str] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
     """Limit global FMP directories to the approved US-equity V1 scope."""
     profiles = profiles.copy()
@@ -672,7 +673,14 @@ def _prepare_research_scope(
             history_start, target_session
         )
     ].copy()
+    reviewed_tickers = {
+        str(value).strip().upper()
+        for value in (reviewed_transition_tickers or set())
+    }
     main_exchange = profiles["exchange"].isin({"NASDAQ", "NYSE", "AMEX"})
+    admitted_exchange = main_exchange | profiles["ticker"].isin(
+        reviewed_tickers
+    )
     event_tickers = set(scoped_changes["old_ticker"].astype(str)) | set(
         scoped_changes["new_ticker"].astype(str)
     )
@@ -687,7 +695,8 @@ def _prepare_research_scope(
         | profiles["ticker"].isin(delisted_tickers)
     )
     scoped_profiles = profiles.loc[
-        main_exchange & ((asset_allowed & (active | historical)) | benchmark)
+        admitted_exchange
+        & ((asset_allowed & (active | historical)) | benchmark)
     ].copy()
 
     # Keep only symbol-change ancestry that can be reached from a retained
@@ -974,6 +983,14 @@ def run_build(
         correction_registry,
         target_session=target_session,
     )
+    reviewed_symbol_continuity = {
+        (
+            str(item["old_ticker"]).upper(),
+            str(item["new_ticker"]).upper(),
+            pd.Timestamp(item["effective_date"]).normalize(),
+        )
+        for item in correction_audit
+    }
     (
         reviewed_identity_continuity,
         identifier_conflict_audit,
@@ -989,6 +1006,11 @@ def run_build(
         delisted,
         history_start=history_start,
         target_session=target_session,
+        reviewed_transition_tickers={
+            ticker
+            for old_ticker, new_ticker, _event_date in reviewed_symbol_continuity
+            for ticker in (old_ticker, new_ticker)
+        },
     )
     gc.collect()
     source_duration = time.perf_counter() - source_started
@@ -1009,7 +1031,9 @@ def run_build(
             settings.minimum_classification_coverage
         ),
         research_history_policy=history_policy_registry,
-        reviewed_identity_continuity=reviewed_identity_continuity,
+        reviewed_identity_continuity=(
+            reviewed_identity_continuity | reviewed_symbol_continuity
+        ),
     )
     build_duration = time.perf_counter() - build_started
     if source_failures:

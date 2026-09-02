@@ -81,6 +81,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--output-dir", default="data/lake/staging/us_equity_coverage_incremental"
     )
+    parser.add_argument(
+        "--force-security-master-rebase",
+        action="store_true",
+        help=(
+            "explicitly rebuild a same-session coverage publication after a "
+            "reviewed Security Master replacement; normal validation remains "
+            "mandatory"
+        ),
+    )
     parser.add_argument("--publish", action="store_true")
     parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
@@ -415,6 +424,51 @@ def _sessions_after_parent(
     return _sessions(parent + pd.Timedelta(days=1), requested)
 
 
+def _refresh_sessions_for_binding(
+    *,
+    parent_target: str | pd.Timestamp,
+    target: str | pd.Timestamp,
+    binding_changed: bool,
+    force_security_master_rebase: bool,
+) -> pd.DatetimeIndex:
+    """Resolve refresh sessions, including a reviewed same-session repair."""
+    parent = pd.Timestamp(parent_target).normalize()
+    requested = pd.Timestamp(target).normalize()
+    if parent > requested:
+        raise DataFoundationError(
+            "target session predates the published coverage version"
+        )
+    if parent < requested:
+        return _sessions_after_parent(parent, requested)
+    if not binding_changed:
+        return pd.DatetimeIndex([])
+    if not force_security_master_rebase:
+        raise DataFoundationError(
+            "same-session coverage is bound to a different Security Master; "
+            "run with --force-security-master-rebase after reviewed repair "
+            "validation"
+        )
+    return _sessions(requested, requested)
+
+
+def _combine_normalized_sources(
+    history_source: pd.DataFrame,
+    recent_source: pd.DataFrame,
+) -> pd.DataFrame:
+    """Combine optional history with EOD rows without degrading date dtype."""
+    combined = pd.concat(
+        [history_source, recent_source],
+        ignore_index=True,
+    )
+    dates = pd.to_datetime(combined["date"], errors="coerce")
+    if dates.isna().any():
+        raise DataFoundationError(
+            "coverage source contains missing or invalid dates"
+        )
+    combined["date"] = dates.dt.normalize()
+    return combined
+
+
 def _parent_partition_paths(
     parent: object,
     *,
@@ -475,8 +529,6 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
         require_price_semantics=True,
     )
     parent_target = pd.Timestamp(parent.target_session).normalize()
-    if parent_target > target:
-        raise DataFoundationError("target session predates the published coverage version")
     if int(args.overlap_calendar_days) < 1:
         raise ValueError("overlap-calendar-days must be positive")
     target_sessions = _sessions(target, target)
@@ -493,24 +545,28 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
         raise DataFoundationError(
             "target session exceeds the published Security Master generation"
         )
-    if parent_target == target:
-        if (
-            parent_manifest.get("security_master_generation_id")
-            != security_generation.generation_id
-            or parent_manifest.get("security_master_manifest_sha256")
-            != security_generation.manifest_sha256
-        ):
-            raise DataFoundationError(
-                "same-session coverage is bound to a different Security Master; "
-                "run an explicit repair instead of silently reusing it"
-            )
+    security_master_rebase = (
+        parent_manifest.get("security_master_generation_id")
+        != security_generation.generation_id
+        or parent_manifest.get("security_master_manifest_sha256")
+        != security_generation.manifest_sha256
+    )
+    refresh_sessions = _refresh_sessions_for_binding(
+        parent_target=parent_target,
+        target=target,
+        binding_changed=security_master_rebase,
+        force_security_master_rebase=bool(
+            getattr(args, "force_security_master_rebase", False)
+        ),
+    )
+    same_session_rebase = parent_target == target and security_master_rebase
+    if refresh_sessions.empty:
         return {
             "status": "NOOP",
             "target_session": target.date().isoformat(),
             "parent_dataset_version_id": parent.version_id,
             "message": "coverage is already published for the target session",
         }, 0
-    refresh_sessions = _sessions_after_parent(parent_target, target)
     if refresh_sessions.empty or refresh_sessions[-1] != target:
         raise DataFoundationError(
             "no complete XNYS sessions exist after the parent coverage version"
@@ -580,12 +636,6 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
         history_start=str(settings.history_start),
         history_end=history_delta_end,
     )
-    security_master_rebase = (
-        parent_manifest.get("security_master_generation_id")
-        != security_generation.generation_id
-        or parent_manifest.get("security_master_manifest_sha256")
-        != security_generation.manifest_sha256
-    )
     identity_delta_audit = {
         "schema_version": 1,
         "parent_dataset_version_id": parent.version_id,
@@ -594,6 +644,7 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
         ),
         "security_master_generation_id": security_generation.generation_id,
         "security_master_rebase": security_master_rebase,
+        "explicit_same_session_rebase": same_session_rebase,
         "identity_delta_security_ids": identity_delta_ids,
         "identity_delta_security_count": len(identity_delta_ids),
         "history_delta_end": history_delta_end.date().isoformat(),
@@ -675,8 +726,9 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
         if not history_delta.empty
         else pd.DataFrame(columns=recent_source.columns)
     )
-    mapped_source = pd.concat(
-        [history_source, recent_source], ignore_index=True
+    mapped_source = _combine_normalized_sources(
+        history_source,
+        recent_source,
     )
     duplicate_source = mapped_source.loc[
         mapped_source.duplicated(["date", "security_id"], keep=False)
@@ -749,6 +801,7 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
             "security_master_generation_id"
         ),
         "security_master_rebase": security_master_rebase,
+        "explicit_same_session_rebase": same_session_rebase,
         "identity_delta_security_count": len(identity_delta_ids),
         "identity_delta_security_ids": identity_delta_ids,
         "identity_delta_history_rows": len(history_delta),
@@ -897,6 +950,8 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
             quality_lineage={
                 "policy": "PROVIDER_BAD_BAR_QUARANTINE_V1",
                 "parent_dataset_version_id": parent.version_id,
+                "security_master_rebase": security_master_rebase,
+                "explicit_same_session_rebase": same_session_rebase,
                 "source_row_count": len(mapped_source),
                 "accepted_row_count": len(mapped),
                 "quarantined_row_count": len(quarantine),

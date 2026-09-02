@@ -937,3 +937,68 @@ timer 分别等待 18:30 与 21:20 SGT。
 DEGRADED，并产生 `CUP_HANDLE_SHADOW_SESSION_FAILED` 事件；只有后续同算法版本的完整日 PASS
 才解除。详情页新增证据交易日、最近完整日结论、不可评估数、可评估覆盖率、缺口股票数与比例、唯一
 缺口事件和缺口分类。
+
+## 33. 2026-09-02 FMP 身份漂移与宽基上游恢复
+
+2026-09-01 的茶杯柄 v2 没有运行，直接原因不是分钟检测器，而是候选准备所依赖的宽基生产链在
+Security Master 门禁处停止。FMP 当前资料把同一经济身份暴露为 `UGRO`/`FLZH`，但没有给出可供
+程序自动证明的完整换码事件；类似问题此前还出现在 `SVII`/`NUCL`。系统没有用 ticker 相似度或
+listing fallback 猜测历史，而是依据 SEC 8-K 增加精确、带生效日的纠正规则。
+
+修复同时纠正了 PIT 交易所语义：`UGRO` 在 2026-06-15 前按历史 Nasdaq 状态参与资格判断，
+`FLZH` 从 2026-06-16 起保持 OTC 并被主交易所门槛排除。两次使用同一冻结 FMP 源构建的五张
+Parquet 表哈希完全一致，正式 Security Master generation 为
+`b99fc58963604831b9534af9600e75f2`，manifest SHA-256 为
+`545875e2b0e591295103221a11a0b33c34e29db00512937367388c2285aa652a`。
+
+同 target 已有 coverage 绑定旧主表时，生产脚本现在要求显式
+`--force-security-master-rebase`，并把 rebase 事实写入审计；普通日更仍然 fail closed。显式重绑完成
+后正式 coverage 为 `a8c3814e7fd444e9b5f0a12cb047aa7f`，10,447,745 行、7,976 只证券、
+93 个分片，完整 child hash 验证通过；systemd 峰值 687.4 MiB、无 swap。随后全量 PIT 发布为
+`bbe1288de3684cc3ab6849954cbd9507`，当前成员 2,849，membership 226,095 行，历史日线覆盖门禁
+通过；脚本 `ru_maxrss` 为 732.5 MiB，cgroup 峰值为 215.7 MiB，两种统计口径均保留。
+
+八因子 generation `2db3832266ed462cb6d47a49777a6b4c` 正从认证 checkpoint 构建 648 个
+factor-month 分片。由于 SG 只有约 2 GiB 内存且无 swap，18:30 候选准备和因子重建不得无监控地
+并行争抢资源；必要时先停止因子服务，候选完成后从 checkpoint 恢复。茶杯柄 v2 仍为 `0/5`，
+2026-09-01 缺少完整运行不得计数，发送保持关闭。
+
+生产备份位于：
+
+```text
+/home/projects/quant-backups/ugro-flzh-pit-exchange-20260902T1230CST
+```
+
+旧 coverage/PIT/factor generation、原始 staging 和身份审计不得删除或改写。
+
+18:24 SGT 为避免 2 GiB、无 swap 的机器同时运行八因子和候选准备，八因子在认证 checkpoint
+`287/648` 处受控停止；readiness 被临时 runtime mask，因而没有把人工停止误报成正式完成。
+18:30 候选服务准时启动，18:57:10 成功生成 session 2026-09-02 的 600 只候选，绑定 source
+2026-09-01 和 coverage `a8c3814e7fd444e9b5f0a12cb047aa7f`。日线杯体评估 2,848 只，合格
+1,314 只；耗时 1,606.824 秒、峰值 604.5 MiB、swap 0。
+
+候选运行时确认软高水位 500 MiB 触发大量 `memory.events.high` 并进入 cgroup 回收节流。仅将本次
+runtime `MemoryHigh` 临时提高到 620 MiB，保留 700 MiB 硬上限、单核和 swap 禁用；完成后已恢复
+500 MiB。19:00 SGT readiness mask 已解除，八因子从 `287/648` 继续，后续发布、readiness 和
+shadow 仍由原 OnSuccess 链执行。
+
+## 34. 2026-09-02 八因子发布拒绝与凌晨重建
+
+恢复后的八因子任务完成了 648/648 个分片，但 publication gate 正确拒绝发布：9 月月初单交易日
+分片中，四个动量因子和 REVERSAL 的暖机资格为 0，另三个因子正常。根因是 XNYS
+`sessions_window` 包含锚定输出日，旧 `-N` 调用实际只加载 N-1 个历史交易日。这不是 FMP、PIT、
+磁盘或内存故障，也不能通过降低 latest coverage 门槛解决。
+
+修复已把合同升级到 `BROAD_FACTOR_INPUT_V3_EXACT_WARMUP_XNYS`，旧失败 generation
+`2db3832266ed462cb6d47a49777a6b4c` 保留为审计证据。SG 定向回归 53 passed，完整正式测试目录
+651 passed。第一次完整测试失败的原因是 9 个 macOS AppleDouble 元数据文件被隔离测试误当源码；
+文件已移入备份目录而非删除，重新运行后无业务失败。
+
+一次性 `quant-broad-factor-warmup-rebuild-trigger.timer` 已安装、启用并通过
+`systemd-analyze verify`，触发时间为 2026-09-03 04:20 SGT。它只 reset failed 并启动现有
+`quant-broad-factor-data.service`，不会绕过服务原有资源、flock、publication 或 readiness 合同。
+该时间位于茶杯柄收盘日结之后、次日核心行情任务之前。若茶杯柄监控异常延迟，必须优先检查资源并
+停止重建触发，禁止两项重任务并行。
+
+截至 20:33 SGT，2026-09-02 茶杯柄 v2 候选已就绪，盘中服务仍等待 21:20 SGT；观察保持 0/5，
+发送保持关闭。候选成功不能替代完整盘中日结。
