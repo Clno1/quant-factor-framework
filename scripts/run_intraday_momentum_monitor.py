@@ -18,7 +18,7 @@ if str(ROOT) not in sys.path:
 from src.alerts.discord import DiscordNotifier  # noqa: E402
 from src.breakouts.live.service import IntradayMomentumMonitor  # noqa: E402
 from src.breakouts.live.cup_handle import CUP_HANDLE_ALGORITHM_VERSION  # noqa: E402
-from src.breakouts.live.session import previous_xnys_sessions  # noqa: E402
+from src.breakouts.live.session import completed_xnys_sessions  # noqa: E402
 from src.breakouts.live.settings import IntradayMonitorSettings  # noqa: E402
 from src.breakouts.live.state import IntradayMonitorState  # noqa: E402
 from src.utils.env import load_local_env  # noqa: E402
@@ -60,14 +60,14 @@ def main() -> int:
         load_local_env()
     settings = IntradayMonitorSettings.load()
     state = IntradayMonitorState(settings.state_path)
-    reference_date = datetime.now(ZoneInfo(settings.timezone)).strftime("%Y-%m-%d")
-    expected_sessions = previous_xnys_sessions(
-        reference_date,
+    now = datetime.now(ZoneInfo(settings.timezone))
+    expected_sessions = completed_xnys_sessions(
+        now,
         settings.required_shadow_sessions,
     )
     promotion = state.promotion_status(expected_sessions)
-    cup_expected_sessions = previous_xnys_sessions(
-        reference_date,
+    cup_expected_sessions = completed_xnys_sessions(
+        now,
         settings.cup_required_shadow_sessions,
     )
     cup_promotion = state.cup_handle_promotion_status(

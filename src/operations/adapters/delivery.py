@@ -34,7 +34,7 @@ from src.operations.models import (
     RunStage,
 )
 from src.utils.market_calendar import is_xnys_session
-from src.breakouts.live.session import previous_xnys_sessions
+from src.breakouts.live.session import completed_xnys_sessions
 
 
 PREMARKET_DB = PROJECT_ROOT / "outputs" / "premarket_digest" / "state.sqlite3"
@@ -900,7 +900,7 @@ def _collect_intraday(
     cup_latency_p95 = _p95(
         float(row.get("latency_ms") or 0.0) for row in cup_evaluations
     )
-    cup_expected_shadow = previous_xnys_sessions(expected, 5)
+    cup_expected_shadow = completed_xnys_sessions(now, 5)
     cup_by_session = {
         str(row.get("session_date") or ""): row
         for row in cup_observations_for_version

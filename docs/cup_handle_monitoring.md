@@ -298,3 +298,36 @@ data_gaps 和 session observation，则 2026-09-02 仍不得计数。
 
 明日验收必须报告 v2 的候选、命中、拒绝、等待、不可评估、错误、唯一缺口分类、可评估覆盖率、
 缺口比例、P95 和最大 bar 数。满足全部门槛才记为 1/5；无信号仍不能表述为 0% 误报。
+
+## 17. 2026-09-03 v2 首个完整交易日通过
+
+`daily-cup-5m-handle-shadow-v2` 的 2026-09-02 完整日结为 PASS，因此独立观察正式记为 `1/5`，
+还需要 4 个不同且连续运行的完整 XNYS 交易日。候选快照绑定 coverage
+`a8c3814e7fd444e9b5f0a12cb047aa7f`、PIT `US_LIQUID_5M` 版本
+`bbe1288de3684cc3ab6849954cbd9507`，并保存 membership、eligibility、Security Master 与 manifest
+哈希。日线阶段评估 2,848 只、合格 1,314 只、冻结 600 只；盘中记录 71/78 个五分钟周期，
+周期覆盖率 91.03%。
+
+盘中共评估 2,840 次：命中 0、拒绝 2,242、等待 548、不可评估 50、错误 0。可评估证券为
+56/58，即 96.55%，超过 95% 门槛；缺口证券为 2/58，即 3.45%，低于 5% 门槛；检测 P95 为
+0.595 ms，最大序列 77 根，也分别满足 250 ms 和 96 根门槛。前八原因是
+`HANDLE_TOO_SHALLOW=1961`、`INSUFFICIENT_COMPLETED_5M_BARS=319`、`STALE_QUOTE=196`、
+`HANDLE_VOLUME_NOT_CONTRACTING=156`、`RIM_NOT_BROKEN=125`、
+`UNRESOLVED_5M_SOURCE_GAP=50`、`NO_COMPLETED_5M_BARS=32`、
+`STALE_COMPLETED_5M_BAR=1`。
+
+`cup_handle_data_gaps` 保存 15 个唯一缺口：UAN 有 5 个 `NO_TRADE_CONFIRMED` 和 9 个
+`UNRESOLVED_SOURCE_GAP`，AD 有 1 个 `UNRESOLVED_SOURCE_GAP`；
+`PROVIDER_GAP_CONFIRMED=0`。同一缺口后续只更新观察次数，没有重复制造错误，也没有补造 OHLCV。
+
+状态命令与运维适配器此前使用 `previous_xnys_sessions()`，在纽约午夜前会错误排除已经收盘并完成
+日结的当前交易日，因此新加坡上午曾显示 `0/5`。现已统一改用“XNYS 收盘加 5 分钟后即视为完整”
+的 `completed_xnys_sessions()`；SG 定向测试 2 项通过，CLI 与运维快照均已显示 `1/5`。部署前备份：
+
+```text
+/home/projects/quant-backups/cup-shadow-completed-session-20260903T115615CST
+```
+
+同一服务中的 legacy 动量日结在 2026-09-02 因 70 个错误周期判定 FAIL，所以运维任务总卡片仍可能
+显示 DEGRADED；这不改变茶杯柄 v2 的 PASS 和 `1/5`。两条观察不能混合计数。发送继续保持关闭。
+MDB 回放仍为 v1、110 根完整五分钟 bar、0 信号且误报代理为 null，不能解释为 0% 误报。

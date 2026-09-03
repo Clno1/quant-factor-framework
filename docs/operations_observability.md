@@ -706,3 +706,21 @@ latest warm-up eligible count、raw/clean coverage 和失败 generation，不能
 SG 完整测试还暴露 AppleDouble 元数据污染：`._*.py` 会让 AST 隔离测试发生 UTF-8 解码错误。
 这应归类为 `DEPLOYMENT_ARTIFACT_CONTAMINATION`，与因子回归失败分开；文件已备份隔离，正式 tests
 目录随后 651 项全部通过。后续从 macOS 部署必须排除 AppleDouble/xattr 伴生文件。
+
+## 32. 2026-09-03 茶杯柄完整交易日计数口径
+
+茶杯柄 v2 的 2026-09-02 日结为 PASS，真实进度是 `1/5`。旧状态命令按纽约“日期”调用
+`previous_xnys_sessions()`，即使当日已经收盘并完成日结，也会一直排除当天直到纽约午夜；这导致
+新加坡 04:05 至 12:00 左右出现最多约 8 小时的进度滞后。修复后 CLI 与 watchdog 共用
+`completed_xnys_sessions()`：只有 XNYS 收盘加 5 分钟后才纳入当天，盘中不提前计数，收盘后也不再
+等待午夜。
+
+当前运维快照公开的茶杯柄证据为：`1/5`、最近完整日 2026-09-02 PASS、命中 0、拒绝 2,242、
+等待 548、不可评估 50、错误 0、可评估覆盖率 96.55%、缺口证券比例 3.45%、P95 0.595 ms、
+最大 77 根。15 个唯一缺口按 `NO_TRADE_CONFIRMED=5`、`UNRESOLVED_SOURCE_GAP=10`、
+`PROVIDER_GAP_CONFIRMED=0` 展示，不将重复观察当作新事件。
+
+同一 systemd 服务仍保留 legacy 动量循环，其 2026-09-02 日结因 70 个错误周期为 FAIL，因而任务
+总卡片目前为 DEGRADED。页面和事故解释必须明确：这是 legacy 子流程失败，茶杯柄 v2 本身已经
+PASS；legacy 记录不得阻止或补充茶杯柄 `1/5` 计数。后续可将两个子流程拆成独立任务状态，但在拆分
+前至少要同时展示两套结论，不能只显示总卡片颜色。

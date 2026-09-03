@@ -1002,3 +1002,24 @@ shadow 仍由原 OnSuccess 链执行。
 
 截至 20:33 SGT，2026-09-02 茶杯柄 v2 候选已就绪，盘中服务仍等待 21:20 SGT；观察保持 0/5，
 发送保持关闭。候选成功不能替代完整盘中日结。
+
+## 35. 2026-09-03 茶杯柄 v2 首日生产验收
+
+2026-09-02 茶杯柄 v2 完整日结通过，独立 shadow 为 `1/5`，剩余 4 个通过日。候选服务 exit 0，
+耗时 1,606.824 秒、峰值 604.5 MiB、swap 0；盘中服务 exit 0，运行约 6 小时 45 分，峰值
+143.2 MiB、swap 0。候选绑定 coverage `a8c3814e7fd444e9b5f0a12cb047aa7f` 和 PIT
+`bbe1288de3684cc3ab6849954cbd9507` 的完整哈希合同。
+
+盘中 2,840 次评估包含拒绝 2,242、等待 548、不可评估 50、命中 0、错误 0；71/78 周期、
+96.55% 可评估覆盖率、3.45% 缺口证券比例、0.595 ms P95 和 77 根最大序列均通过门槛。唯一缺口
+事件共 15 个，只涉及 AD 与 UAN：`NO_TRADE_CONFIRMED=5`、
+`UNRESOLVED_SOURCE_GAP=10`、`PROVIDER_GAP_CONFIRMED=0`。
+
+修复了新加坡上午的 shadow 进度少算一天问题：完整交易日现在按 XNYS 收盘加 5 分钟判断，不再等
+纽约午夜。SG 备份为 `/home/projects/quant-backups/cup-shadow-completed-session-20260903T115615CST`，
+两个定向测试通过，CLI 和运维快照均显示 `1/5`。候选、盘中、watchdog 和运维 Web timer/service
+均健康；茶杯柄发送仍为 false。
+
+运维任务总卡片当前仍为 DEGRADED，是 legacy 动量同日 70 个错误周期导致，不是茶杯柄 v2 失败。
+茶杯柄 PASS 台账与 legacy 动量 FAIL 台账必须继续分开解释和计数。MDB 回放仍为 0 信号且误报代理
+为 null。

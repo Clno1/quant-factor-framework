@@ -33,6 +33,7 @@ from src.breakouts.live.rolling import RollingIntradayBars
 from src.breakouts.live.selector import select_active_pool
 from src.breakouts.live.session import (
     expected_source_session,
+    completed_xnys_sessions,
     previous_xnys_sessions,
     xnys_session_schedule,
 )
@@ -263,6 +264,19 @@ class SettingsAndSelectorTests(unittest.TestCase):
         self.assertEqual(
             previous_xnys_sessions("2026-07-28", 3),
             ["2026-07-23", "2026-07-24", "2026-07-27"],
+        )
+
+    def test_completed_sessions_include_current_only_after_finalization(self):
+        before_close = datetime.fromisoformat("2026-07-28T19:00:00+00:00")
+        after_finalization = datetime.fromisoformat("2026-07-28T20:06:00+00:00")
+
+        self.assertEqual(
+            completed_xnys_sessions(before_close, 3),
+            ["2026-07-23", "2026-07-24", "2026-07-27"],
+        )
+        self.assertEqual(
+            completed_xnys_sessions(after_finalization, 3),
+            ["2026-07-24", "2026-07-27", "2026-07-28"],
         )
 
     def test_stale_daily_coverage_fails_before_scanning(self):

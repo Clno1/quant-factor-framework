@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -97,8 +97,57 @@ def previous_xnys_sessions(
     return normalized
 
 
+def completed_xnys_sessions(
+    as_of: datetime,
+    count: int,
+    *,
+    finalization_delay_minutes: int = 5,
+    timezone: str = "America/New_York",
+    calendar: Any | None = None,
+) -> list[str]:
+    """Return the latest fully closed XNYS sessions, including today when final."""
+    if count < 1:
+        return []
+    if as_of.tzinfo is None:
+        raise ValueError("as_of must be timezone-aware")
+
+    local = as_of.astimezone(ZoneInfo(timezone))
+    session_date = local.date().isoformat()
+    label = pd.Timestamp(session_date).normalize()
+    exchange = _exchange_calendar(calendar)
+    if bool(exchange.is_session(label)):
+        schedule = xnys_session_schedule(
+            session_date,
+            timezone=timezone,
+            calendar=exchange,
+        )
+        finalized_at = schedule.closes_at + timedelta(
+            minutes=max(0, int(finalization_delay_minutes))
+        )
+        latest = (
+            label
+            if local >= finalized_at
+            else pd.Timestamp(exchange.previous_session(label))
+        )
+    else:
+        latest = pd.Timestamp(
+            exchange.date_to_session(label, direction="previous")
+        )
+
+    sessions = [latest]
+    while len(sessions) < count:
+        sessions.append(pd.Timestamp(exchange.previous_session(sessions[-1])))
+    normalized = []
+    for value in reversed(sessions):
+        if value.tzinfo is not None:
+            value = value.tz_localize(None)
+        normalized.append(value.normalize().strftime("%Y-%m-%d"))
+    return normalized
+
+
 __all__ = [
     "XnysSessionSchedule",
+    "completed_xnys_sessions",
     "expected_source_session",
     "previous_xnys_sessions",
     "xnys_session_schedule",

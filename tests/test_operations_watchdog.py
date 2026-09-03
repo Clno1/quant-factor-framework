@@ -409,13 +409,17 @@ def test_intraday_exposes_cup_handle_shadow_metrics(monkeypatch, tmp_path: Path)
                 ("2026-08-12", "REJECTED", "RIM_NOT_BROKEN", 3.0, 20),
             ],
         )
+        connection.execute(
+            "INSERT INTO cup_handle_session_observations VALUES (?, ?, ?)",
+            ("2026-08-12", "daily-cup-5m-handle-shadow-v1", "PASS"),
+        )
     monkeypatch.setattr("src.operations.adapters.delivery.INTRADAY_DB", database)
     registry = OperationsRegistry("configs/operations.yaml")
 
     result = collect_delivery_evidence(
         [registry.get("intraday_momentum")],
-        now=datetime(2026, 8, 12, 16, 0, tzinfo=timezone.utc),
-        observed_at="2026-08-12T16:00:00+00:00",
+        now=datetime(2026, 8, 12, 21, 30, tzinfo=timezone.utc),
+        observed_at="2026-08-12T21:30:00+00:00",
     )
 
     metrics = result.snapshots[0].metrics
@@ -424,6 +428,8 @@ def test_intraday_exposes_cup_handle_shadow_metrics(monkeypatch, tmp_path: Path)
     assert metrics["茶杯柄主要拒绝原因"] == {"RIM_NOT_BROKEN": 2}
     assert metrics["茶杯柄检测延迟P95毫秒"] == 2.9
     assert metrics["茶杯柄最大序列长度"] == 20
+    assert metrics["茶杯柄影子验收进度"] == "1/5"
+    assert "2026-08-12" not in metrics["茶杯柄影子缺失交易日"]
 
 
 def test_intraday_keeps_latest_failed_cup_session_visible(monkeypatch, tmp_path: Path):
