@@ -194,6 +194,39 @@ def load_security_master_corrections(
                 raise ValueError(
                     f"{correction_id}: {side}.name_contains is required"
                 )
+        lifecycle = item.get("provider_lifecycle")
+        if lifecycle is not None:
+            required = {
+                "inactive_on_or_after",
+                "delisted_exchange",
+                "delisted_name_contains",
+            }
+            if not isinstance(lifecycle, dict) or required - set(lifecycle):
+                raise ValueError(
+                    f"{correction_id}: provider_lifecycle must bind an exact "
+                    "provider delisting record"
+                )
+            inactive_on_or_after = pd.to_datetime(
+                lifecycle["inactive_on_or_after"], errors="coerce"
+            )
+            if pd.isna(inactive_on_or_after) or inactive_on_or_after <= effective:
+                raise ValueError(
+                    f"{correction_id}: provider_lifecycle date must be after "
+                    "the symbol transition"
+                )
+            if item["new_profile"].get("is_active") is not True:
+                raise ValueError(
+                    f"{correction_id}: provider_lifecycle requires an active "
+                    "new_profile baseline"
+                )
+            if not all(
+                str(lifecycle[field]).strip()
+                for field in ("delisted_exchange", "delisted_name_contains")
+            ):
+                raise ValueError(
+                    f"{correction_id}: provider_lifecycle evidence fields "
+                    "cannot be empty"
+                )
         identifiers.add(correction_id)
         pairs.add((old_ticker, new_ticker))
     continuity_pairs: set[tuple[str, str]] = set()
@@ -461,8 +494,10 @@ def apply_reviewed_symbol_transitions(
     registry: dict[str, Any],
     *,
     target_session: pd.Timestamp,
+    delisted: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
     """Add only exact, reviewed symbol transitions omitted by the provider."""
+    target_session = pd.Timestamp(target_session).normalize()
     corrected = changes.copy()
     audit: list[dict[str, Any]] = []
     for item in registry.get("reviewed_symbol_transitions") or []:
@@ -485,10 +520,67 @@ def apply_reviewed_symbol_transitions(
             expectation=dict(item["old_profile"]),
             correction_id=correction_id,
         )
+        new_expectation = dict(item["new_profile"])
+        lifecycle_audit: dict[str, Any] | None = None
+        lifecycle = item.get("provider_lifecycle")
+        if lifecycle is not None:
+            inactive_on_or_after = pd.Timestamp(
+                lifecycle["inactive_on_or_after"]
+            ).normalize()
+            if target_session >= inactive_on_or_after:
+                if delisted is None or delisted.empty:
+                    raise ValueError(
+                        f"{correction_id}: provider delisting evidence is required"
+                    )
+                required_columns = {
+                    "ticker", "name", "exchange", "delisted_date",
+                }
+                if missing := required_columns - set(delisted.columns):
+                    raise ValueError(
+                        f"{correction_id}: provider delisting evidence is "
+                        f"missing columns {sorted(missing)}"
+                    )
+                ticker_rows = delisted.loc[
+                    delisted["ticker"].fillna("").astype(str).str.upper().eq(
+                        new_ticker
+                    )
+                ].copy()
+                dates = pd.to_datetime(
+                    ticker_rows["delisted_date"], errors="coerce"
+                ).dt.normalize()
+                exact = ticker_rows.loc[dates.eq(inactive_on_or_after)].copy()
+                expected_exchange = _profile_value(
+                    lifecycle["delisted_exchange"]
+                ).upper()
+                expected_name = _profile_value(
+                    lifecycle["delisted_name_contains"]
+                ).upper()
+                exact = exact.loc[
+                    exact["exchange"].fillna("").astype(str).str.upper().eq(
+                        expected_exchange
+                    )
+                    & exact["name"].fillna("").astype(str).str.upper().str.contains(
+                        expected_name,
+                        regex=False,
+                    )
+                ]
+                if len(exact) != 1:
+                    raise ValueError(
+                        f"{correction_id}: exact provider delisting record drifted"
+                    )
+                new_expectation["is_active"] = False
+                lifecycle_audit = {
+                    "inactive_on_or_after": (
+                        inactive_on_or_after.date().isoformat()
+                    ),
+                    "delisted_exchange": expected_exchange,
+                    "delisted_name": _profile_value(exact.iloc[0].get("name")),
+                    "provider_status": "INACTIVE",
+                }
         new_row = _verify_reviewed_profile(
             profiles,
             ticker=new_ticker,
-            expectation=dict(item["new_profile"]),
+            expectation=new_expectation,
             correction_id=correction_id,
         )
         shared_keys = [
@@ -535,6 +627,7 @@ def apply_reviewed_symbol_transitions(
             "old_ticker": old_ticker,
             "new_ticker": new_ticker,
             "shared_keys": shared_keys,
+            "provider_lifecycle": lifecycle_audit,
             "reason": str(item["reason"]),
             "sources": [str(source) for source in item["sources"]],
         })
@@ -982,6 +1075,7 @@ def run_build(
         changes,
         correction_registry,
         target_session=target_session,
+        delisted=delisted,
     )
     reviewed_symbol_continuity = {
         (

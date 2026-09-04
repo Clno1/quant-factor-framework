@@ -553,6 +553,89 @@ def test_reviewed_security_master_transition_fails_on_provider_drift():
         )
 
 
+def test_reviewed_transition_accepts_exact_later_provider_delisting():
+    registry, _path, _digest = load_security_master_corrections(
+        "configs/security_master_corrections.yaml"
+    )
+    profiles = _reviewed_spac_profiles()
+    profiles.loc[profiles["ticker"].eq("FLZH"), [
+        "is_active", "trading_status",
+    ]] = [False, "INACTIVE"]
+    delisted = pd.DataFrame([{
+        "ticker": "FLZH",
+        "name": "Flash Sports & Media, Inc.",
+        "exchange": "OTC",
+        "ipo_date": "2021-02-11",
+        "delisted_date": "2026-08-26",
+    }])
+
+    _corrected, audit = apply_reviewed_symbol_transitions(
+        profiles,
+        pd.DataFrame(columns=[
+            "date", "old_ticker", "new_ticker", "company_name",
+        ]),
+        registry,
+        target_session=pd.Timestamp("2026-09-03"),
+        delisted=delisted,
+    )
+
+    flzh = next(item for item in audit if item["new_ticker"] == "FLZH")
+    assert flzh["provider_lifecycle"] == {
+        "inactive_on_or_after": "2026-08-26",
+        "delisted_exchange": "OTC",
+        "delisted_name": "Flash Sports & Media, Inc.",
+        "provider_status": "INACTIVE",
+    }
+
+
+def test_reviewed_transition_rejects_unproven_later_inactive_status():
+    registry, _path, _digest = load_security_master_corrections(
+        "configs/security_master_corrections.yaml"
+    )
+    profiles = _reviewed_spac_profiles()
+    profiles.loc[profiles["ticker"].eq("FLZH"), [
+        "is_active", "trading_status",
+    ]] = [False, "INACTIVE"]
+
+    with pytest.raises(ValueError, match="provider delisting evidence is required"):
+        apply_reviewed_symbol_transitions(
+            profiles,
+            pd.DataFrame(columns=[
+                "date", "old_ticker", "new_ticker", "company_name",
+            ]),
+            registry,
+            target_session=pd.Timestamp("2026-09-03"),
+            delisted=pd.DataFrame(),
+        )
+
+
+def test_reviewed_transition_rejects_mismatched_delisting_evidence():
+    registry, _path, _digest = load_security_master_corrections(
+        "configs/security_master_corrections.yaml"
+    )
+    profiles = _reviewed_spac_profiles()
+    profiles.loc[profiles["ticker"].eq("FLZH"), [
+        "is_active", "trading_status",
+    ]] = [False, "INACTIVE"]
+    delisted = pd.DataFrame([{
+        "ticker": "FLZH",
+        "name": "Flash Sports & Media, Inc.",
+        "exchange": "NASDAQ",
+        "delisted_date": "2026-08-26",
+    }])
+
+    with pytest.raises(ValueError, match="exact provider delisting record drifted"):
+        apply_reviewed_symbol_transitions(
+            profiles,
+            pd.DataFrame(columns=[
+                "date", "old_ticker", "new_ticker", "company_name",
+            ]),
+            registry,
+            target_session=pd.Timestamp("2026-09-03"),
+            delisted=delisted,
+        )
+
+
 def _reviewed_identifier_conflict_profiles() -> pd.DataFrame:
     common = {
         "asset_type": "STOCK",

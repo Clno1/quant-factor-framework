@@ -743,3 +743,25 @@ MDB 回放仍为 v1 的零信号样本，`false_positive_rate_proxy=null`；生�
 候选 unit 的持久软高水位已从 500 MiB 调整为 620 MiB，硬上限仍为 700 MiB。watchdog 应把下一次
 18:30 SGT 的完成时间、峰值内存与快照生成时间作为修复验收；单纯 timer 触发或盘中回退成功不算
 候选 SLA 恢复。
+
+## 34. 2026-09-05 上游缺跑必须与零信号分离
+
+2026-09-04 没有 v2 `cup_handle_cycles`、`cup_handle_evaluations`、
+`cup_handle_session_observations` 或 `cup_handle_data_gaps`。这四张表的全零不是“执行后没有命中”，
+而是正式 coverage 过期导致候选和盘中任务都 fail closed。页面必须显示上游阻断或任务未运行，
+不得生成全零 PASS/FAIL 日结，也不得把该日计入 `2/5`。
+
+当前运维快照把 `intraday_candidate_prepare` 与 `intraday_momentum` 标为 STALE，并保留三个
+`CRITICAL OPEN` 事故：候选 systemd 失败、盘中 systemd 失败和心跳中断。后续 timer 的 SCHEDULED
+状态不能清除 2026-09-04 的证据；只有修复后的上游发布成功、候选成功且新的完整交易日日结形成后，
+才可按事故指纹解决。运维页面还应把准确依赖链展示为 Security Master -> coverage -> PIT/候选 ->
+盘中评估，而不是把上游身份门禁误报成茶杯柄算法错误。
+
+本次 Security Master 修复的可观测合同新增 `provider_lifecycle` 审计，记录精确退市日、交易所、
+公司名和 INACTIVE 状态。两次同源构建五张 Parquet 哈希一致，第二冻结源也通过；这组证据与
+`655 passed` 回归结果必须和正式发布状态分开显示。截至核查时修复已验证但正式 coverage 尚未更新，
+下一生产验收点是 2026-09-05 11:31 SGT 日更。
+
+茶杯柄最近有效证据仍是 2026-09-03 PASS：54 只候选、2,840 次评估、1 命中、2,356 拒绝、
+476 等待、7 不可评估、0 错误，P95 0.583 ms、最大 77 根。MDB 报告仍是 v1 的 0 信号，
+`false_positive_rate_proxy=null`；零信号与 0% 误报必须继续分开。

@@ -1045,3 +1045,27 @@ P95 0.583 ms、最大 77 根均通过。CQP 的两个唯一缺口均为 `UNRESOL
 持久 unit 已将候选服务 `MemoryHigh` 调整为 620 MiB，保留 700 MiB 硬上限、单核、无 swap 和
 1 小时超时；这是复用 2026-09-02 已成功完成候选构建的资源口径。下一次 18:30 SGT 运行必须
 重新核对完成时间、`memory.events.high` 增量、峰值和候选快照生成时间，失败时不得由盘中回退掩盖。
+
+## 37. 2026-09-05 FLZH 生命周期门禁与茶杯柄缺跑
+
+2026-09-04 宽基日更连续两次在 Security Master 阶段失败，正式 coverage 因而停在
+2026-09-02 版本 `fc81ee7a559b4509a74576791633c3ba`。这不是内存或网络问题：资源预检为 PASS，
+宽基服务失败前峰值 556.6 MiB、无 swap；准确错误是
+`ugro_to_flzh_name_and_symbol_change: FLZH provider is_active drifted`。随后 18:30 候选准备和
+21:20 盘中监控都因 coverage 过期而 fail closed，2026-09-04 没有茶杯柄候选、评估或日结，不能
+计入 v2 shadow。当前通过日仍为 2026-09-02、2026-09-03，即 `2/5`。
+
+两份不可变 FMP 冻结源都证明这是稳定的供应商生命周期变化：FLZH 与 UGRO 继续共享 CUSIP/ISIN，
+换码日仍为 2026-06-16，但 FLZH 当前 profile 为 INACTIVE，退市表精确记录其于 2026-08-26 从
+OTC 退市。配置和构建器现只在 ticker、日期、交易所及公司名四项证据全部匹配时接受 inactive；
+不是把 `is_active` 改成任意布尔值，也没有降低身份覆盖、PIT 或普通股门槛。
+
+部署前备份为 `/home/projects/quant-backups/flzh-lifecycle-20260905T004551CST`。同一失败冻结源重建
+两次均 PASS，五张候选 Parquet 逐表哈希完全一致；第二份独立冻结源也 PASS，活跃普通股均为
+5,350。Security Master 定向测试 14 项、下游宽基与 Web 82 项、SG 完整回归 655 项全部通过。
+修复已部署，但正式数据指针尚未前移；`quant-us-equity-coverage.timer` 将在 2026-09-05 11:31
+SGT 运行修复后的全链。完成前不得将上游或茶杯柄写成已恢复。
+
+相关 timer 均为 enabled/active，资源检查有约 1,200 MiB 可用内存和 35.9 GiB 可用磁盘。
+watchdog 与运维 Web 正常；运维台账保留候选和盘中服务的 `CRITICAL OPEN` 事故。茶杯柄发送仍为
+false，下一可计数的完整 XNYS 交易日必须重新满足 v2 全部质量门槛。

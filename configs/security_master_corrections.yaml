@@ -92,6 +92,10 @@ reviewed_symbol_transitions:
       cusip: 91704K301
       listing_date: "2021-02-11"
       is_active: true
+    provider_lifecycle:
+      inactive_on_or_after: "2026-08-26"
+      delisted_exchange: OTC
+      delisted_name_contains: "Flash Sports & Media"
     reason: "SEC filings establish the urban-gro corporate name change and show FLZH as the registered common-stock trading symbol from 2026-06-16; FMP retained the issue identifiers but omitted the symbol-change event. The exact exchange values bind the provider's target-session state and do not rewrite historical exchange membership."
     sources:
       - "https://www.sec.gov/Archives/edgar/data/1706524/000121390026068776/ea0294769-8k_flash.htm"

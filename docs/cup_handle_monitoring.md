@@ -361,3 +361,37 @@ CTNM 在 15:10 ET 的完整五分钟 bar 形成首个 v2 shadow 命中，信号�
 已把候选服务的持久 `MemoryHigh` 从 500 MiB 提高到经过 2026-09-02 生产验证的 620 MiB；
 `MemoryMax=700M`、单核、禁用 swap 和 1 小时超时保持不变。该调整只减少软高水位回收，不放宽
 算法或数据门槛；2026-09-04 18:30 SGT 的下一次候选运行用于验证 SLA 是否恢复。
+
+## 19. 2026-09-05 上游阻断与 v2 观察进度
+
+`daily-cup-5m-handle-shadow-v2` 当前仍只有 2026-09-02、2026-09-03 两个 PASS，进度为 `2/5`，
+剩余 3 个通过日。2026-09-04 不是“检测后失败”，而是没有形成候选快照、盘中评估或完整日结，
+因此不得计数，也不得把全零指标解释为零信号。直接原因是正式 `US_EQUITY_COVERAGE` 停在
+2026-09-02；候选服务于 18:30 SGT fail closed，盘中服务从 21:20 起重试四次后触发 start limit，
+错误均为“coverage 过期，期望 2026-09-03”。
+
+共享上游停滞的根因位于 Security Master。FMP 在两份独立冻结源中都把 FLZH 从活跃改为不活跃，
+同时继续提供 `UGRO -> FLZH` 换码、完全一致的 CUSIP/ISIN，以及 FLZH 于 2026-08-26 从 OTC
+退市的记录。原纠正规则只允许换码后的活跃基线，因此正确地拒绝了未审阅的生命周期变化。修复没有
+允许任意 `is_active` 漂移，而是要求目标日在 2026-08-26 之后时同时精确匹配 ticker、退市日、
+OTC 和公司名，缺少任一冻结证据仍报错。
+
+同一冻结源两次候选构建均 PASS，五张 Parquet 的 SHA-256 逐表完全一致；第二份独立冻结源也 PASS，
+活跃普通股数量同为 5,350。FLZH 审计明确保存 `inactive_on_or_after=2026-08-26`、
+`delisted_exchange=OTC`、供应商公司名和 `provider_status=INACTIVE`。SG 定向测试 96 项通过，完整
+回归 `655 passed`。部署前备份位于：
+
+```text
+/home/projects/quant-backups/flzh-lifecycle-20260905T004551CST
+```
+
+截至本次核查，正式 coverage 仍为 2026-09-02 版本 `fc81ee7a559b4509a74576791633c3ba`；修复后的
+日更将在 2026-09-05 11:31 SGT 既定盘后窗口运行，不能在任务完成前宣称生产已经恢复。候选、盘中、
+watchdog、运维 Web 和宽基 timer 均为 enabled/active；两个茶杯柄执行服务保留 2026-09-04 的
+failed 证据。发送继续保持 `delivery_enabled=false`。
+
+最近两个有效 v2 日的汇总不变：2026-09-02 为 2,840 次评估、0 命中、2,242 拒绝、548 等待、
+50 不可评估、0 错误；2026-09-03 为 2,840 次评估、1 命中、2,356 拒绝、476 等待、7 不可评估、
+0 错误。唯一缺口分类合计为 `NO_TRADE_CONFIRMED=5`、`UNRESOLVED_SOURCE_GAP=12`、
+`PROVIDER_GAP_CONFIRMED=0`。MDB 回放仍为 v1、0 信号且误报代理为 null；CTNM 后续结果尚未成熟，
+不能表述为 0% 误报。

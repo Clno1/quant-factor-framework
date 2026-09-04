@@ -1032,3 +1032,22 @@ checkpoint 保留在 `.staging_2db3832266ed462cb6d47a49777a6b4c`，不得删除�
 一次性 persistent timer 已通过 `systemd-analyze verify`，将在 2026-09-03 04:20 SGT 触发现有
 `quant-broad-factor-data.service`。服务继续使用单线程 BLAS、700 MiB soft high、900 MiB hard max、
 flock 和原 OnSuccess readiness 链；成功前不得手工发布或绕过覆盖率门禁。
+
+## 27. 2026-09-05 FMP 退市状态漂移的严格处理
+
+2026-09-03 目标日的两次宽基日更都在 Security Master 阶段 fail closed。FMP 不再把 FLZH 标记为
+活跃，同时仍返回 `UGRO -> FLZH`、一致的 CUSIP/ISIN，以及 FLZH 在 2026-08-26 从 OTC 退市的
+记录。旧规则只描述换码后的活跃 profile，因此把这次变化识别为未审阅漂移是正确行为；错误不能通过
+删除规则、接受任意 active 状态或复用旧 Security Master 解决。
+
+纠正规则现增加有界 `provider_lifecycle`：仅当目标日不早于 2026-08-26，且同一不可变 provider
+source 中存在 FLZH、精确退市日、OTC、公司名四项完全匹配的退市记录时，才把预期 profile 改为
+INACTIVE。早于该日期仍要求活跃基线，缺字段、多行、名称、交易所或日期漂移均继续失败。SEC 换码
+证据、供应商 CUSIP/ISIN 和原始冻结源都被保留，未猜测历史或降低 100% 身份门槛。
+
+生产前验证使用 2026-09-03 的真实失败冻结源。同源两次构建均为 PASS，五张 Parquet 的 SHA-256
+逐表一致；第二份独立冻结源也 PASS，两组活跃普通股数量均为 5,350。部署备份为
+`/home/projects/quant-backups/flzh-lifecycle-20260905T004551CST`，SG 完整回归为 `655 passed`。
+截至核查时正式 coverage 仍停在 2026-09-02 版本 `fc81ee7a559b4509a74576791633c3ba`；
+2026-09-05 11:31 SGT 的正常日更才是正式恢复验收，完成前不得声称 coverage、PIT、八因子或依赖它们
+的茶杯柄候选已经恢复。
