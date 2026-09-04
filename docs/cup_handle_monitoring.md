@@ -331,3 +331,33 @@ data_gaps 和 session observation，则 2026-09-02 仍不得计数。
 同一服务中的 legacy 动量日结在 2026-09-02 因 70 个错误周期判定 FAIL，所以运维任务总卡片仍可能
 显示 DEGRADED；这不改变茶杯柄 v2 的 PASS 和 `1/5`。两条观察不能混合计数。发送继续保持关闭。
 MDB 回放仍为 v1、110 根完整五分钟 bar、0 信号且误报代理为 null，不能解释为 0% 误报。
+
+## 18. 2026-09-04 v2 第二个完整交易日通过
+
+`daily-cup-5m-handle-shadow-v2` 的 2026-09-03 日结为 PASS，独立观察为 `2/5`，还需 3 个通过日。
+日线候选快照绑定 coverage `fc81ee7a559b4509a74576791633c3ba`、PIT
+`1750d58d3160438093f03a0360f692c9`、Security Master
+`5748aeacb53142f4ade15038f0b98ba2` 及 membership、eligibility、manifest 哈希。日线评估 2,848 只，
+合格 1,329 只，冻结 600 只。
+
+盘中记录 71/78 个五分钟周期，共评估 2,840 次：命中 1、拒绝 2,356、等待 476、不可评估 7、
+错误 0。可评估覆盖率为 53/54，即 98.15%；缺口证券比例为 1/54，即 1.85%；P95 为
+0.583 ms，最大序列 77 根。两个唯一缺口都来自 CQP，分类均为
+`UNRESOLVED_SOURCE_GAP`；没有伪造或前向填充 OHLCV。前八拒绝原因为
+`HANDLE_TOO_SHALLOW=2075`、`INSUFFICIENT_COMPLETED_5M_BARS=349`、
+`HANDLE_VOLUME_NOT_CONTRACTING=148`、`RIM_NOT_BROKEN=132`、`STALE_QUOTE=123`、
+`UNRESOLVED_5M_SOURCE_GAP=7`、`NO_COMPLETED_5M_BARS=3`、
+`BREAKOUT_ALREADY_OCCURRED=1`。
+
+CTNM 在 15:10 ET 的完整五分钟 bar 形成首个 v2 shadow 命中，信号和 outbox 均保存为
+`SHADOW`，没有向 Discord 发送。现有 MDB 回放仍是 v1、0 信号、误报代理 null；CTNM 尚未形成
+已完成的后续结果，因此也不能声称误报率为 0%。
+
+18:30 SGT 候选服务本次在 1 小时后超时，峰值 558.1 MiB、CPU 41 分 13 秒、swap 0。它受
+`MemoryHigh=500M` 持续回收影响，未在盘前窗口保存快照；盘中服务随后以更高内存额度重建快照，
+导致只覆盖 71/78 个五分钟周期。虽然本日仍满足所有严格门槛并可计数，但候选准备 SLA 已失败，
+下一个交易日前应优化构建内存或调整受控资源窗口，不能依赖盘中回退。
+
+已把候选服务的持久 `MemoryHigh` 从 500 MiB 提高到经过 2026-09-02 生产验证的 620 MiB；
+`MemoryMax=700M`、单核、禁用 swap 和 1 小时超时保持不变。该调整只减少软高水位回收，不放宽
+算法或数据门槛；2026-09-04 18:30 SGT 的下一次候选运行用于验证 SLA 是否恢复。
