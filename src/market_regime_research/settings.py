@@ -472,6 +472,11 @@ def _validate(settings: MarketRegimeResearchSettings) -> None:
     if settings.pit.min_snapshot_members > settings.pit.max_snapshot_members:
         raise ValueError("PIT min_snapshot_members cannot exceed max_snapshot_members")
     parse_date_str(settings.screening.holdout_start)
+    if settings.screening.embargo_sessions < max(settings.labels.horizons):
+        raise ValueError(
+            "screening embargo_sessions must be at least the maximum label horizon "
+            "to keep outcome windows outside validation and sealed holdout data"
+        )
     parse_date_str(settings.screening.first_validation_start)
     if (
         parse_date_str(settings.screening.first_validation_start)

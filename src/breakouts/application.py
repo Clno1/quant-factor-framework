@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+import hashlib
+import json
 import threading
 from typing import Any
 
@@ -9,7 +11,9 @@ import pandas as pd
 
 from src.breakouts.daily_data import load_breakout_daily_dataset
 from src.breakouts.broad_daily_data import load_broad_breakout_universe
-from src.breakouts.scan_cache import load_scan_cache, save_scan_cache
+from src.breakouts.scan_cache import (
+    load_scan_cache, save_scan_cache, request_scan_build, process_scan_build_requests,
+)
 from src.breakouts.scanner import (
     BreakoutFilters,
     load_market_regime,
@@ -118,6 +122,9 @@ def resolve_breakout_universe(
         return {
             "universe": universe,
             "label": watchlist.name,
+            "watchlist_snapshot_sha256": hashlib.sha256(
+                json.dumps(snapshot, sort_keys=True, ensure_ascii=True, default=str).encode("utf-8")
+            ).hexdigest(),
             "tickers": [ticker for ticker in tickers if ticker],
             "names": names,
             "sectors": {},
@@ -205,12 +212,18 @@ def build_breakout_scan(
     view: str,
     dataset_version_id: str | None = None,
     market_dataset_version_id: str | None = None,
+    watchlist_snapshot_sha256: str | None = None,
 ) -> dict[str, Any]:
     context = resolve_breakout_universe(
         universe,
         enabled_universes=enabled_universes,
         dataset_version_id=dataset_version_id,
     )
+    if (
+        watchlist_snapshot_sha256 is not None
+        and context.get("watchlist_snapshot_sha256") != watchlist_snapshot_sha256
+    ):
+        raise BreakoutApplicationError("股票池已变更，请刷新页面提交当前股票池扫描")
 
     filters = BreakoutFilters(
         min_return_20d=min_return_20d,
@@ -386,19 +399,27 @@ def get_breakout_scan(
         "dataset_version_id": context["dataset_version_id"],
         "market_dataset_version_id": market_version_id,
     }
-    is_watchlist = normalized_universe.lower().startswith("watchlist:")
-    if not force and not is_watchlist:
+    if context.get("watchlist_snapshot_sha256"):
+        parameters["watchlist_snapshot_sha256"] = context["watchlist_snapshot_sha256"]
+    if not force:
         cached = load_scan_cache(parameters)
         if cached is not None:
             return cached
 
     if not allow_build:
+        job = request_scan_build(
+            parameters, enabled_universes=normalized_enabled, force=force,
+        )
+        if job["status"] == "FAILED" and job["attempts"] >= 3:
+            raise BreakoutScanNotReadyError(
+                f"后台扫描失败：{job.get('error', '')}；请检查后台任务后重试"
+            )
         raise BreakoutScanNotReadyError(
-            "茶杯柄候选尚未由后台任务生成；网页不会现场执行全美股票扫描，请等待下一次后台发布"
+            "扫描已提交后台任务，请稍后刷新页面读取结果"
         )
 
     with _SCAN_LOCK:
-        if not force and not is_watchlist:
+        if not force:
             cached = load_scan_cache(parameters)
             if cached is not None:
                 return cached
@@ -406,9 +427,12 @@ def get_breakout_scan(
             **parameters,
             enabled_universes=normalized_enabled,
         )
-        if not is_watchlist:
-            save_scan_cache(parameters, scan)
+        save_scan_cache(parameters, scan)
         return scan
+
+
+def process_pending_scan_requests(*, limit: int = 1) -> list[dict[str, Any]]:
+    return process_scan_build_requests(build_breakout_scan, limit=limit)
 
 
 __all__ = [
@@ -420,6 +444,7 @@ __all__ = [
     "breakout_universe_options",
     "build_breakout_scan",
     "get_breakout_scan",
+    "process_pending_scan_requests",
     "normalize_breakout_universe",
     "resolve_breakout_universe",
 ]

@@ -35,7 +35,7 @@ from src.data.broad_coverage import (  # noqa: E402
     select_coverage_securities,
     split_coverage_bar_quality,
 )
-from src.data.fmp import get_canonical_historical_ohlcv  # noqa: E402
+from src.data.fmp import get_coverage_historical_ohlcv  # noqa: E402
 from src.data.price_semantics import (  # noqa: E402
     FMP_CANONICAL_SOURCE,
     build_price_semantics_contract,
@@ -56,7 +56,7 @@ from src.utils.io import atomic_save_json  # noqa: E402
 from src.utils.market_calendar import latest_publishable_xnys_session  # noqa: E402
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -269,11 +269,11 @@ def _fetch_security(
     for row in aliases.itertuples(index=False):
         start = pd.Timestamp(row.fetch_start).date().isoformat()
         end = pd.Timestamp(row.fetch_end).date().isoformat()
-        frame = get_canonical_historical_ohlcv(str(row.ticker), start, end)
+        frame = get_coverage_historical_ohlcv(str(row.ticker), start, end)
         if frame is None or frame.empty:
             fallback = str(current_ticker).strip().upper()
             if fallback and fallback != str(row.ticker):
-                frame = get_canonical_historical_ohlcv(fallback, start, end)
+                frame = get_coverage_historical_ohlcv(fallback, start, end)
                 if frame is not None and not frame.empty:
                     fallbacks.append({
                         "requested_ticker": str(row.ticker),
@@ -796,6 +796,11 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
             bar_quarantine_path=quarantine_path,
             quality_lineage={
                 "policy": "PROVIDER_BAD_BAR_QUARANTINE_V1",
+                "nominal_price_source": {
+                    "field": "unadjusted_close",
+                    "endpoint": "FMP/stable/historical-price-eod/non-split-adjusted",
+                    "scope": "full_backfill_history",
+                },
                 "source_row_count": source_rows,
                 "accepted_row_count": accepted_rows,
                 "quarantined_row_count": len(quarantine),

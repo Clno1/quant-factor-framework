@@ -627,6 +627,20 @@ def load_published_bundle(
         current_only=False,
         version=version,
     )
+    if membership is None and "is_current_member" in universe_metadata.columns:
+        # Static universes can carry extra benchmark bars. Resolve the bound
+        # benchmark first, then exclude support assets from the research basket.
+        universe_metadata = universe_metadata.loc[
+            universe_metadata["is_current_member"].fillna(False).astype(bool)
+        ].copy()
+        members = pd.Index(universe_metadata["ticker"].astype(str))
+        members = prices.execution_close.columns.intersection(members)
+        wide = {
+            key: (frame.reindex(members) if key in {"sector", "market_cap"}
+                  else frame.reindex(columns=members))
+            for key, frame in wide.items()
+        }
+        prices = PriceSemantics.from_wide(wide)
     factor_generations = {
         factor_id: str(payload.get("generation_id") or "")
         for factor_id, payload in (

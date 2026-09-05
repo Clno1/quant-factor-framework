@@ -357,8 +357,14 @@ def _average_precision(y_true: np.ndarray, probability: np.ndarray) -> float:
         return float("nan")
     order = np.argsort(-probability, kind="mergesort")
     ordered = y_true[order]
-    precision = np.cumsum(ordered) / np.arange(1, len(ordered) + 1)
-    return float(np.sum(precision * ordered) / positives)
+    # A threshold admits all equal-score samples together. Row-wise precision
+    # would grant a ranking advantage solely from their input order.
+    scores = probability[order]
+    ends = np.r_[np.flatnonzero(np.diff(scores)), len(scores) - 1]
+    true_positives = np.cumsum(ordered)[ends]
+    precision = true_positives / (ends + 1)
+    recall_gain = np.diff(np.r_[0., true_positives]) / positives
+    return float(np.sum(precision * recall_gain))
 
 
 def _roc_auc(y_true: np.ndarray, score: np.ndarray) -> float:
@@ -1269,6 +1275,8 @@ def run_univariate_screening(
     registry_metadata: Mapping[str, Any] | None = None,
 ) -> ScreeningOutputs:
     """Evaluate every candidate without reading or scoring the sealed holdout."""
+    if candidates and settings.embargo_sessions < max(candidate.horizon for candidate in candidates):
+        raise DataContractError("embargo_sessions must cover every candidate label horizon")
     if features.empty or labels.empty:
         raise DataContractError("Features and labels must be non-empty")
     if not features.index.equals(labels.index):

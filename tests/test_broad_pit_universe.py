@@ -101,6 +101,7 @@ def _bars() -> pd.DataFrame:
                 "security_id": security_id,
                 "ticker": ticker,
                 "close": 10.0,
+                "unadjusted_close": 10.0,
                 "volume": 1_000_000.0,
             })
     return pd.DataFrame(rows)
@@ -168,6 +169,44 @@ def test_month_end_snapshot_is_rebuilt_exactly_from_eligibility_audit():
         monthly.sort_values(["date", "security_id"]).reset_index(drop=True),
         expected.sort_values(["date", "security_id"]).reset_index(drop=True),
     )
+
+
+def test_midmonth_roll_forward_without_events_retains_the_baseline():
+    bars = _bars()
+    common = dict(history_start="2019-11-01", research_start="2020-01-01")
+    previous = build_liquid_5m_candidate(
+        bars, _master(), parent_version_id="old", target_session="2020-02-20", **common)
+    rolled = roll_forward_liquid_5m_candidate(
+        previous.membership, previous.eligibility, _master(),
+        parent_version_id="new", previous_target_session="2020-02-20",
+        target_session="2020-02-21", refresh_start="2020-02-19",
+        bar_loader=lambda start, end: bars.loc[bars.date.between(start, end)], **common)
+    rebuilt = build_liquid_5m_candidate(
+        bars, _master(), parent_version_id="new", target_session="2020-02-21", **common)
+    assert rolled.passed
+    pd.testing.assert_frame_equal(rolled.membership, rebuilt.membership)
+    assert set(resolve_membership_asof(rolled.membership, pd.Timestamp("2020-02-21")).ticker) == {"AAA"}
+
+
+def test_future_split_cannot_change_historical_nominal_price_eligibility():
+    bars = _bars()
+    bars.loc[bars.security_id.eq("sec_aaa"), "close"] = 2.
+    bars.loc[bars.security_id.eq("sec_aaa"), "unadjusted_close"] = 2.
+    bars.loc[bars.security_id.eq("sec_aaa"), "volume"] = 3_000_000.
+    common = dict(parent_version_id="test", target_session="2020-03-31",
+                  history_start="2019-11-01", research_start="2020-01-01")
+    before = build_liquid_5m_candidate(bars, _master(), **common)
+    bars.loc[bars.security_id.eq("sec_aaa"), "close"] /= 10
+    bars.loc[bars.security_id.eq("sec_aaa"), "volume"] *= 10
+    after = build_liquid_5m_candidate(bars, _master(), **common)
+    assert "AAA" in set(after.membership.ticker)
+    pd.testing.assert_frame_equal(before.membership, after.membership)
+    assert after.eligibility.loc[after.eligibility.security_id.eq("sec_aaa"), "selection_price"].eq(2.).all()
+    with pytest.raises(DataFoundationError, match="unadjusted_close"):
+        build_liquid_5m_candidate(bars.drop(columns="unadjusted_close"), _master(), **common)
+    bars.loc[bars.date.eq("2020-01-31"), "unadjusted_close"] = float("nan")
+    with pytest.raises(DataFoundationError, match="unadjusted_close"):
+        build_liquid_5m_candidate(bars, _master(), **common)
 
 
 def test_historical_pit_daily_bar_coverage_is_measured_from_latest_snapshot():

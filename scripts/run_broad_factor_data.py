@@ -138,9 +138,22 @@ def _checkpoint_identity(
     start: pd.Timestamp,
     reuse_publication_id: str | None,
 ) -> dict[str, Any]:
+    instances = {factor_id: get_factor(factor_id) for factor_id in factors}
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "input_fingerprint_method": INPUT_FINGERPRINT_METHOD,
+        "calculation_contract": json.loads(json.dumps({
+            "preprocessing": dict(CONFIG.preprocessing),
+            "factors": {
+                factor_id: {
+                    "module": instances[factor_id].__class__.__module__,
+                    "class": instances[factor_id].__class__.__qualname__,
+                    "parameters": dict(vars(instances[factor_id])),
+                    "direction": int(instances[factor_id].direction),
+                    "inputs": list(instances[factor_id].inputs),
+                } for factor_id in factors
+            },
+        }, sort_keys=True, default=str)),
         "generation_id": generation_id,
         "parent_dataset_version_id": parent.version_id,
         "parent_dataset_manifest_sha256": parent.manifest_checksum_sha256,

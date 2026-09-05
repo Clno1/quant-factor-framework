@@ -142,9 +142,12 @@ class PaperNotificationState:
         source_id: str,
         payload: dict[str, Any],
         baseline: bool = False,
+        reuse_existing: bool = False,
     ) -> bool:
         if kind not in _KINDS:
             raise ValueError(f"Unsupported paper notification kind: {kind}")
+        if reuse_existing and kind != KIND_DAILY_SUMMARY:
+            raise ValueError("Only daily summaries may reuse an already frozen payload")
         encoded = _payload_json(payload)
         digest = payload_hash(payload)
         timestamp = _now()
@@ -159,12 +162,16 @@ class PaperNotificationState:
                 if (
                     str(row["kind"]) != kind
                     or str(row["source_id"]) != source_id
-                    or str(row["payload_hash"]) != digest
+                    or row["account_id"] != account_id
+                    or str(row["target_session"]) != target_session
+                    or (not reuse_existing and str(row["payload_hash"]) != digest)
                 ):
                     raise RuntimeError(
                         "Paper notification identity already exists with different "
                         f"immutable content: {delivery_id}"
                     )
+                if payload_hash(json.loads(row["payload_json"])) != row["payload_hash"]:
+                    raise RuntimeError(f"Paper notification payload checksum mismatch: {delivery_id}")
                 return False
             connection.execute(
                 """

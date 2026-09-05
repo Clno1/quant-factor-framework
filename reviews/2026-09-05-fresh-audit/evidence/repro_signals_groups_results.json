@@ -1,0 +1,89 @@
+{
+  "command": "/private/tmp/quant_fresh_audit_20260905/light-venv/bin/python /private/tmp/quant_fresh_audit_20260905/repro_signals_groups.py",
+  "cwd": "/private/tmp/quant_fresh_audit_20260905/repo",
+  "exit_code": 0,
+  "results": [
+    {
+      "check": "rolling",
+      "result": {
+        "correction_merge_count": 0,
+        "retained_close": 105.0,
+        "expected_final_close": 95.0,
+        "retained_volume": 100.0,
+        "expected_final_volume": 1000.0,
+        "metrics_last_price": 105.0
+      }
+    },
+    {
+      "check": "outcomes",
+      "result": {
+        "execution_date": "2026-07-28",
+        "entry_open": 100.0,
+        "entry_total_return_open": 100.0,
+        "censored_entry": false,
+        "h1_exit_date": "2026-07-29",
+        "h1_gross_return": 0.0,
+        "h1_net_return": 0.0,
+        "h1_mae": -0.5,
+        "h1_mfe": 0.5,
+        "h1_censored": false,
+        "held_session_only_mae": -0.01,
+        "held_session_only_mfe": 0.01
+      }
+    },
+    {
+      "check": "censored",
+      "result": {
+        "only_event_on": "2026-04-23",
+        "actual_error_type": "AttributeError",
+        "actual_error": "'numpy.float64' object has no attribute 'dropna'",
+        "expected": "one censored event, zero realized observations"
+      }
+    },
+    {
+      "check": "watchlist",
+      "result": {
+        "ordinary_scan_succeeds": true,
+        "watchlist_error": "茶杯柄候选尚未由后台任务生成；网页不会现场执行全美股票扫描，请等待下一次后台发布",
+        "watchlist_cache_reads": 0
+      }
+    },
+    {
+      "check": "stale_quote",
+      "result": {
+        "batch_session": "2026-07-28",
+        "stale_quote_time": "2026-07-27T15:59:00-04:00",
+        "stale_row_data_date": "2026-07-28",
+        "stale_row_strict_pass": true,
+        "stale_row_signal": "CANDIDATE",
+        "strict_count": 2
+      }
+    },
+    {
+      "check": "zero_cup_volume",
+      "result": {
+        "zero_handle_and_breakout_volume": true,
+        "actual_outcome": "MATCH",
+        "breakout_volume_ratio": "inf",
+        "actual_persistence_error": "Out of range float values are not JSON compliant: inf"
+      }
+    },
+    {
+      "check": "mapping_ignored",
+      "result": {
+        "configured_map": "/private/tmp/quant_fresh_audit_20260905/audit-mapping-94mmg5af/custom.yaml",
+        "direct_provider_version": "audit-custom-v2",
+        "service_provider_version": "2026-07-16"
+      }
+    },
+    {
+      "check": "optional_benchmark",
+      "result": {
+        "configured_require_benchmark": false,
+        "stocks_valid": true,
+        "actual_error": "A required published market-data version is unavailable",
+        "expected": "valid stock returns with unavailable benchmark"
+      }
+    }
+  ]
+}

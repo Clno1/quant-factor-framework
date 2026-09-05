@@ -2,11 +2,9 @@
 """Incrementally publish US_EQUITY_COVERAGE from FMP dated EOD bulk rows.
 
 FMP documents EOD bulk as one dated market-wide ingestion per trading day.
-This writer therefore fetches only sessions newer than the immutable parent
-publication.  Security Master identity deltas use canonical per-symbol history
-through the parent target, keeping the two provider sources non-overlapping.
-Older authenticated Parquet partitions are reused unless an identity rebase
-requires a bounded monthly rewrite.
+Each update also downloads a fresh overlap to authenticate price/volume units.
+Corporate-action scale changes rebase older monthly partitions before appending
+new sessions. Month-end nominal close is sourced separately for PIT selection.
 """
 from __future__ import annotations
 
@@ -23,6 +21,7 @@ import tempfile
 import time
 from uuid import uuid4
 
+import numpy as np
 import pandas as pd
 
 
@@ -42,13 +41,16 @@ from src.data.broad_coverage import (  # noqa: E402
     select_coverage_securities,
     split_coverage_bar_quality,
 )
-from src.data.fmp import get_canonical_historical_ohlcv, get_eod_bulk  # noqa: E402
+from src.data.fmp import (  # noqa: E402
+    get_coverage_historical_ohlcv, get_eod_bulk, get_unadjusted_historical_close,
+)
 from src.data.price_semantics import build_price_semantics_contract  # noqa: E402
 from src.data.foundation import (  # noqa: E402
     DataFoundationError,
     MarketDataCatalog,
     MarketDataReader,
     QualityCheck,
+    _rebase_parent_to_fetched_scale,
 )
 from src.data.security_master_store import SecurityMasterStore  # noqa: E402
 from src.data.universe_ids import US_EQUITY_COVERAGE  # noqa: E402
@@ -59,7 +61,7 @@ from src.utils.market_calendar import latest_publishable_xnys_session  # noqa: E
 
 
 PROVIDER_CACHE_SCHEMA_VERSION = 1
-PROVIDER_CACHE_METHOD = "FMP_COVERAGE_PROVIDER_CACHE_V2"
+PROVIDER_CACHE_METHOD = "FMP_COVERAGE_PROVIDER_CACHE_V3_RECONCILED"
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -70,8 +72,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=int(CONFIG.data.foundation.overlap_calendar_days),
         help=(
-            "Deprecated compatibility option. Broad EOD bulk is append-only by "
-            "published session; historical reconciliation is a separate job."
+            "Fresh historical overlap used to authenticate the parent's price "
+            "and volume scales before publishing an incremental version."
         ),
     )
     parser.add_argument(
@@ -202,7 +204,7 @@ def _load_or_fetch_history_delta(
     security_ids: list[str],
     history_start: str | pd.Timestamp,
     history_end: pd.Timestamp,
-    fetcher=get_canonical_historical_ohlcv,
+    fetcher=get_coverage_historical_ohlcv,
 ) -> tuple[pd.DataFrame, list[dict], list[dict], bool]:
     if not security_ids:
         return pd.DataFrame(), [], [], False
@@ -457,6 +459,75 @@ def _parent_partition_paths(
     return unchanged, replaced, rebuild_months
 
 
+def _coverage_rebase_audit(
+    previous_overlap: pd.DataFrame,
+    fresh: pd.DataFrame,
+    *,
+    parent_security_ids: set[str],
+) -> list[dict]:
+    """Authenticate each continuing stable identity, independently of its alias."""
+    continuing = set(fresh["security_id"].astype(str)) & parent_security_ids
+    missing = continuing - set(previous_overlap["security_id"].astype(str))
+    if missing:
+        raise DataFoundationError(
+            f"continuing securities lack an overlap anchor: {sorted(missing)[:20]}; "
+            "extend overlap or rebuild coverage"
+        )
+    previous = previous_overlap.copy()
+    current = fresh.loc[fresh["security_id"].astype(str).isin(continuing)].copy()
+    # A ticker can change or be reused. Scale authentication uses security_id.
+    previous["ticker"] = previous["security_id"].astype(str)
+    current["ticker"] = current["security_id"].astype(str)
+    # The shared authenticator scans its parent table per ticker. Partition it
+    # first so broad coverage does not perform a whole-pool scan for every name.
+    parent_groups = previous.groupby("ticker", sort=False).indices
+    audit = []
+    for security_id, fresh_rows in current.groupby("ticker", sort=False):
+        _, rows = _rebase_parent_to_fetched_scale(
+            previous.iloc[parent_groups[security_id]], fresh_rows,
+        )
+        for row in rows:
+            # This helper only sees the overlap. The writer subsequently scales
+            # every retained parent month, so its old-row count is inapplicable.
+            row.pop("older_rows_rebased", None)
+            audit.append({**row, "security_id": security_id})
+    return audit
+
+
+def _rebase_coverage_partition(previous: pd.DataFrame, audit: list[dict]) -> pd.DataFrame:
+    """Scale an old monthly partition; nominal historical prices never change."""
+    out = previous.copy()
+    if out.empty:
+        return out
+    for field in ("open", "high", "low", "close", "adj_close", "volume"):
+        factors = {row["security_id"]: row["scales"][field] for row in audit}
+        scale = out["security_id"].astype(str).map(factors).fillna(1.)
+        out[field] = pd.to_numeric(out[field], errors="coerce") * scale
+    return out
+
+
+def _attach_month_end_nominal_close(
+    frame: pd.DataFrame,
+    *,
+    after: pd.Timestamp,
+    target: pd.Timestamp,
+    fetcher=get_unadjusted_historical_close,
+) -> pd.DataFrame:
+    """Fetch original dollar prices only for newly completed month-end snapshots."""
+    out = frame.copy()
+    future = _sessions(after + pd.Timedelta(days=1), target + pd.Timedelta(days=40))
+    month_ends = pd.Series(future, index=future.to_period("M")).groupby(level=0).max()
+    month_ends = month_ends.loc[month_ends.le(target)]
+    needed = out["date"].isin(month_ends)
+    for ticker, rows in out.loc[needed].groupby("ticker", sort=False):
+        nominal = fetcher(str(ticker), str(rows.date.min().date()), str(rows.date.max().date()))
+        prices = rows["date"].map(nominal)
+        if prices.isna().any() or not np.isfinite(prices).all() or prices.le(0).any():
+            raise DataFoundationError(f"{ticker}: incomplete month-end unadjusted prices")
+        out.loc[rows.index, "unadjusted_close"] = prices
+    return out
+
+
 def run(args: argparse.Namespace) -> tuple[dict, int]:
     started = time.perf_counter()
     target = (
@@ -510,11 +581,16 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
             "parent_dataset_version_id": parent.version_id,
             "message": "coverage is already published for the target session",
         }, 0
-    refresh_sessions = _sessions_after_parent(parent_target, target)
-    if refresh_sessions.empty or refresh_sessions[-1] != target:
+    new_sessions = _sessions_after_parent(parent_target, target)
+    if new_sessions.empty or new_sessions[-1] != target:
         raise DataFoundationError(
             "no complete XNYS sessions exist after the parent coverage version"
         )
+    refresh_start = max(
+        pd.Timestamp(parent.min_date),
+        parent_target - pd.Timedelta(days=int(args.overlap_calendar_days)),
+    )
+    refresh_sessions = _sessions(refresh_start, target)
     refresh_start = refresh_sessions[0]
     settings = CONFIG.data.broad_coverage
     security_universe = select_coverage_securities(
@@ -547,7 +623,7 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
         parent_presence_ids = {
             str(row[0])
             for row in connection.execute(
-                "SELECT DISTINCT security_id FROM read_parquet(?, hive_partitioning=false)",
+                "SELECT DISTINCT security_id FROM read_parquet(?, hive_partitioning=false, union_by_name=true)",
                 [[str(path) for path in parent_paths]],
             ).fetchall()
         }
@@ -694,6 +770,10 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
                 "bulk EOD and identity-delta history conflict for "
                 f"{int(conflicts.sum())} date/security keys"
             )
+        if "unadjusted_close" in mapped_source.columns:
+            mapped_source["unadjusted_close"] = mapped_source.groupby(
+                ["date", "security_id"], sort=False
+            )["unadjusted_close"].ffill()
         mapped_source = mapped_source.drop_duplicates(
             ["date", "security_id"], keep="last"
         )
@@ -717,6 +797,15 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
             if not check.passed
         )
         raise DataFoundationError(f"provider bad-bar quarantine rejected: {detail}")
+    mapped = _attach_month_end_nominal_close(mapped, after=parent_target, target=target)
+    broad_reader = BroadCoverageReader(market_reader=market_reader)
+    previous_overlap = broad_reader.load_bars(start=refresh_start, end=parent_target, version=parent)
+    adjustment_audit = _coverage_rebase_audit(
+        previous_overlap, mapped, parent_security_ids=parent_presence_ids,
+    )
+    changed_scales = [row for row in adjustment_audit if any(
+        not np.isclose(value, 1., rtol=1e-12, atol=0.) for value in row["scales"].values()
+    )]
     affected_months = {
         str(period)
         for period in pd.period_range(refresh_start, target, freq="M")
@@ -724,7 +813,7 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
     affected_months.update(
         mapped["date"].dt.to_period("M").astype(str).unique().tolist()
     )
-    if security_master_rebase:
+    if security_master_rebase or changed_scales:
         affected_months.update({
             f"{int(entry['year']):04d}-{int(entry['month']):02d}"
             for entry in json.loads(
@@ -734,7 +823,6 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
     unchanged_paths, _replaced_paths, rebuild_months = _parent_partition_paths(
         parent, affected_months=affected_months
     )
-    broad_reader = BroadCoverageReader(market_reader=market_reader)
     rebuilt_paths: list[Path] = []
     checkpoint_path = run_dir / "checkpoint.json"
     checkpoint = {
@@ -749,6 +837,7 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
             "security_master_generation_id"
         ),
         "security_master_rebase": security_master_rebase,
+        "price_scale_reconciliation": adjustment_audit,
         "identity_delta_security_count": len(identity_delta_ids),
         "identity_delta_security_ids": identity_delta_ids,
         "identity_delta_history_rows": len(history_delta),
@@ -798,12 +887,19 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
                 old = old.loc[
                     old["security_id"].astype(str).isin(security_id_set)
                 ].copy()
+                old = _rebase_coverage_partition(old, adjustment_audit)
             delta = mapped.loc[
                 mapped["date"].dt.to_period("M").eq(period)
             ].copy()
             if old.empty and delta.empty:
                 continue
             combined = pd.concat([old, delta], ignore_index=True)
+            # EOD overlap may not include the independently sourced nominal
+            # field. Preserve it from the same historical date/security key.
+            if "unadjusted_close" in combined.columns:
+                combined["unadjusted_close"] = combined.groupby(
+                    ["date", "security_id"], sort=False
+                )["unadjusted_close"].ffill()
             combined = (
                 combined.drop_duplicates(["date", "security_id"], keep="last")
                 .sort_values(["date", "security_id"])
@@ -839,7 +935,7 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
     try:
         if candidate_paths:
             rows = connection.execute(
-                "SELECT DISTINCT security_id FROM read_parquet(?, hive_partitioning=false)",
+                "SELECT DISTINCT security_id FROM read_parquet(?, hive_partitioning=false, union_by_name=true)",
                 [[str(path) for path in candidate_paths]],
             ).fetchall()
             presence_ids = {str(row[0]) for row in rows}
@@ -896,7 +992,20 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
             bar_quarantine_path=quarantine_path,
             quality_lineage={
                 "policy": "PROVIDER_BAD_BAR_QUARANTINE_V1",
+                "nominal_price_source": {
+                    "field": "unadjusted_close",
+                    "endpoint": "FMP/stable/historical-price-eod/non-split-adjusted",
+                    "scope": "new_completed_month_ends_and_identity_delta_history",
+                },
                 "parent_dataset_version_id": parent.version_id,
+                "price_scale_reconciliation": {
+                    "method": "FRESH_OVERLAP_BY_SECURITY_ID_V1",
+                    "parent_manifest_sha256": parent.manifest_checksum_sha256,
+                    "overlap_start": refresh_start.date().isoformat(),
+                    "overlap_end": parent_target.date().isoformat(),
+                    "changed_security_count": len(changed_scales),
+                    "audit": adjustment_audit,
+                },
                 "source_row_count": len(mapped_source),
                 "accepted_row_count": len(mapped),
                 "quarantined_row_count": len(quarantine),

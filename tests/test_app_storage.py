@@ -47,6 +47,34 @@ def test_sqlite_records_and_frames_round_trip(tmp_path):
     }
 
 
+def test_frame_read_uses_one_snapshot_during_concurrent_replacement(tmp_path, monkeypatch):
+    reader = AppDatabase(tmp_path / "app.sqlite3")
+    writer = AppDatabase(reader.path)
+    old = pd.DataFrame([{"ticker": "AAA"}])
+    new = pd.DataFrame([{"ticker": "AAA"}, {"ticker": "BBB"}])
+    writer.put_frame("paper", "one", "positions", old)
+    reader.initialize()
+    connect = reader._connect
+    class Connection:
+        def __init__(self):
+            self.inner = connect()
+        def execute(self, sql, *args):
+            cursor = self.inner.execute(sql, *args)
+            if "SELECT columns_json" in sql:
+                class Cursor:
+                    def fetchone(self):
+                        row = cursor.fetchone()
+                        writer.put_frame("paper", "one", "positions", new)
+                        return row
+                return Cursor()
+            return cursor
+        def close(self):
+            self.inner.close()
+    monkeypatch.setattr(reader, "_connect", Connection)
+    pd.testing.assert_frame_equal(reader.get_frame("paper", "one", "positions"), old)
+    pd.testing.assert_frame_equal(writer.get_frame("paper", "one", "positions"), new)
+
+
 def test_data_request_retries_then_becomes_terminal(tmp_path):
     database = AppDatabase(tmp_path / "app.sqlite3")
     request = database.enqueue_data_request(

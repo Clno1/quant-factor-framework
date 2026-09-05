@@ -113,6 +113,68 @@ def _bars(security_id: str, ticker: str, dates: list[str]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+@pytest.mark.parametrize("price_scale, volume_scale, adjusted_scale", [(.5, 2., .5), (1., 1., .9)])
+def test_incremental_reconciliation_preserves_total_return_across_months(
+    tmp_path, price_scale, volume_scale, adjusted_scale,
+):
+    from scripts.update_us_equity_coverage import _coverage_rebase_audit, _rebase_coverage_partition
+    from src.data.price_semantics import PriceSemantics
+
+    old = _bars("sec_aaa", "OLD_ALIAS", ["2024-01-30", "2024-01-31"])
+    old["unadjusted_close"] = old["close"]
+    fresh = _bars("sec_aaa", "AAA", ["2024-01-30", "2024-01-31", "2024-02-01"])
+    fresh.loc[:, ["open", "high", "low", "close"]] *= price_scale
+    fresh["adj_close"] *= adjusted_scale
+    fresh["volume"] *= volume_scale
+    old["date"] = pd.to_datetime(old.date)
+    fresh["date"] = pd.to_datetime(fresh.date)
+    audit = _coverage_rebase_audit(old, fresh, parent_security_ids={"sec_aaa"})
+    # Model separate old/new monthly partitions; both must share new units.
+    january = _rebase_coverage_partition(old, audit)
+    pd.testing.assert_series_equal(january.unadjusted_close, old.unadjusted_close)
+    assert (january.close * january.volume).to_list() == pytest.approx((old.close * old.volume).to_list())
+    february = fresh.loc[fresh.date.eq("2024-02-01")].copy()
+    paths = []
+    for name, frame in (("jan", january), ("feb", february)):
+        path = tmp_path / f"{name}.parquet"
+        normalize_coverage_bars(frame, target_session="2024-02-01", ingestion_run_id="new").to_parquet(path, index=False)
+        paths.append(path)
+    catalog = MarketDataCatalog(tmp_path / "catalog.duckdb")
+    publication = BroadCoverageStore(catalog=catalog, lake_dir=tmp_path / "lake").publish_partitions(
+        paths, security_universe=_universe().iloc[:1], target_session="2024-02-01",
+        security_master=_security_generation(), price_semantics=_price_semantics())
+    loaded = BroadCoverageReader(market_reader=MarketDataReader(catalog=catalog)).load_bars(version=publication.version)
+    wide = {c: loaded.pivot(index="date", columns="security_id", values=c) for c in ("open", "close", "adj_close", "volume")}
+    assert PriceSemantics.from_wide(wide).total_returns.iloc[-1, 0] == pytest.approx(0.)
+
+
+def test_incremental_reconciliation_rejects_missing_and_inconsistent_anchors():
+    from scripts.update_us_equity_coverage import _coverage_rebase_audit
+    old = _bars("sec_aaa", "AAA", ["2024-01-30", "2024-01-31"])
+    fresh = _bars("sec_aaa", "AAA", ["2024-02-01"])
+    with pytest.raises(DataFoundationError, match="overlap anchor"):
+        _coverage_rebase_audit(old, fresh, parent_security_ids={"sec_aaa"})
+    fresh = old.copy()
+    fresh.loc[0, "adj_close"] *= .5
+    with pytest.raises(DataFoundationError, match="non-uniform"):
+        _coverage_rebase_audit(old, fresh, parent_security_ids={"sec_aaa"})
+
+
+def test_new_month_end_fetches_nominal_prices_without_rewriting_return_prices():
+    from scripts.update_us_equity_coverage import _attach_month_end_nominal_close
+    bars = _bars("sec_aaa", "AAA", ["2024-01-30", "2024-01-31", "2024-02-01"])
+    bars["date"] = pd.to_datetime(bars.date)
+    bars["unadjusted_close"] = float("nan")
+    calls = []
+    def fetcher(symbol, start, end):
+        calls.append((symbol, start, end))
+        return pd.Series([100.], index=pd.to_datetime(["2024-01-31"]))
+    result = _attach_month_end_nominal_close(bars, after=pd.Timestamp("2024-01-29"), target=pd.Timestamp("2024-02-01"), fetcher=fetcher)
+    assert calls == [("AAA", "2024-01-31", "2024-01-31")]
+    assert result.loc[result.date.eq("2024-01-31"), "unadjusted_close"].iloc[0] == 100.
+    pd.testing.assert_series_equal(result.close, bars.close)
+
+
 def test_coverage_selection_keeps_adr_but_excludes_non_equity_instruments():
     master = pd.DataFrame([
         {

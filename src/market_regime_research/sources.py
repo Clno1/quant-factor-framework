@@ -967,6 +967,15 @@ def prepare_market_sources(
         # Cboe bundle so one manifest still binds all columns to one fetch.
         if not required_cboe_columns.issubset(cached_volatility.columns):
             volatility_downloaded = True
+        else:
+            cached_volatility = _validate_volatility_contract(cached_volatility)
+            try:
+                _require_volatility_freshness(
+                    cached_volatility.loc[cached_volatility.index <= end_date],
+                    expected_end=end_date,
+                )
+            except DataContractError:
+                volatility_downloaded = True
     if volatility_downloaded:
         volatility, volatility_metadata = fetch_cboe_volatility_history()
     else:

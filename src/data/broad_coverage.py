@@ -59,6 +59,7 @@ COVERAGE_BAR_COLUMNS = [
     "close",
     "adj_close",
     "volume",
+    "unadjusted_close",
     "source",
     "source_asof",
     "ingestion_run_id",
@@ -134,6 +135,9 @@ def normalize_coverage_bars(
     )
     for column in ("open", "high", "low", "close", "adj_close", "volume"):
         out[column] = pd.to_numeric(out[column], errors="coerce")
+    out["unadjusted_close"] = pd.to_numeric(
+        out.get("unadjusted_close", pd.Series(np.nan, index=out.index)), errors="coerce"
+    )
     out["source"] = str(source).upper()
     out["source_asof"] = target
     out["ingestion_run_id"] = str(ingestion_run_id)
@@ -768,7 +772,7 @@ class BroadCoverageStore:
                 connection.execute("SET max_temp_directory_size = '12GB'")
                 connection.execute("SET preserve_insertion_order = false")
                 connection.execute(f"SET temp_directory = '{escaped_temp}'")
-                connection.read_parquet(path_values).create_view("bars")
+                connection.read_parquet(path_values, union_by_name=True).create_view("bars")
                 row = connection.execute(
                 """
                 SELECT count(*) AS rows,
@@ -1157,7 +1161,7 @@ class BroadCoverageStore:
                                 COPY (
                                     SELECT *
                                     FROM read_parquet(
-                                        ?, hive_partitioning = false
+                                        ?, hive_partitioning = false, union_by_name = true
                                     )
                                     WHERE date >= ? AND date <= ?
                                     ORDER BY date, security_id
@@ -1423,10 +1427,16 @@ class BroadCoverageReader:
         connection = duckdb.connect()
         try:
             connection.execute("SET threads = 1")
-            connection.read_parquet([str(path) for path in paths]).create_view(
+            relation = connection.read_parquet([str(path) for path in paths], union_by_name=True)
+            available_columns = set(relation.columns)
+            relation.create_view(
                 "coverage_bars"
             )
-            projection = ", ".join(f'"{column}"' for column in selected_columns)
+            projection = ", ".join(
+                'CAST(NULL AS DOUBLE) AS "unadjusted_close"'
+                if column == "unadjusted_close" and column not in available_columns
+                else f'"{column}"' for column in selected_columns
+            )
             order_by = "ORDER BY date, security_id" if ordered else ""
             frame = connection.execute(
                 f"SELECT {projection} FROM coverage_bars {where} {order_by}",

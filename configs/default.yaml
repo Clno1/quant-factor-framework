@@ -100,7 +100,7 @@ data:
   # coverage 宽表载入内存；正式发布必须绑定一个 Security Master generation。
   broad_coverage:
     name: "US_EQUITY_COVERAGE"
-    methodology_version: "BROAD_COVERAGE_V2_QUARANTINE"
+    methodology_version: "BROAD_COVERAGE_V3_NOMINAL_PRICE"
     history_start: "2019-01-01"
     shard_size: 100
     max_workers: 2
@@ -125,7 +125,7 @@ data:
     adv_sessions: 20
     min_valid_sessions: 15
     include_adr: false
-    methodology_version: "US_LIQUID_5M_PIT_V2_COMPACT_EVENTS"
+    methodology_version: "US_LIQUID_5M_PIT_V3_NOMINAL_PRICE"
     snapshot_dir: "data/lake/universes"
 
   # 宽基因子数据与完整 IC/置信研究分开发布。首次回填和日常增量都按

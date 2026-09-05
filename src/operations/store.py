@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 import sqlite3
 import threading
-from typing import Any, Iterable, Iterator
+from typing import Any, Callable, Iterable, Iterator
 from urllib.parse import quote
 
 from src.operations.models import (
@@ -700,8 +700,34 @@ class OperationsStore:
 class OperationsReader:
     """Read-only access to the watchdog's atomically published snapshot."""
 
-    def __init__(self, snapshot_path: str | Path):
+    def __init__(
+        self, snapshot_path: str | Path, *, max_snapshot_age_seconds: float = 180,
+        clock: Callable[[], datetime] | None = None,
+    ):
         self.snapshot_path = Path(snapshot_path).resolve()
+        self.max_snapshot_age_seconds = max(1., float(max_snapshot_age_seconds))
+        self.clock = clock or (lambda: datetime.now(timezone.utc))
+
+    def _snapshot_freshness(self, observed_at: str | None) -> dict[str, Any]:
+        now = self.clock()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        age: float | None = None
+        try:
+            observed = datetime.fromisoformat(str(observed_at).replace("Z", "+00:00"))
+            if observed.tzinfo is None:
+                observed = observed.replace(tzinfo=timezone.utc)
+            age = (now - observed).total_seconds()
+        except (ValueError, TypeError):
+            pass
+        stale = age is None or age > self.max_snapshot_age_seconds or age < -self.max_snapshot_age_seconds
+        return {
+            "status": "STALE" if stale else "SUCCESS",
+            "age_seconds": age,
+            "max_age_seconds": self.max_snapshot_age_seconds,
+            "checked_at": now.isoformat(timespec="seconds"),
+            "reason": "运维采集快照已过期，当前状态需要重新采集确认" if stale else "",
+        }
 
     def available(self) -> bool:
         return self.snapshot_path.is_file()
@@ -749,6 +775,7 @@ class OperationsReader:
             return {
                 "available": False,
                 "snapshot_at": None,
+                "snapshot_freshness": self._snapshot_freshness(None),
                 "jobs": [],
                 "freshness": [],
                 "projects": [],
@@ -788,6 +815,25 @@ class OperationsReader:
                 + [str(item.get("observed_at") or "") for item in freshness]
                 + [""],
             ) or None
+            watchdog = next((job for job in jobs if job["job_id"] == "operations_watchdog"), None)
+            if watchdog and watchdog.get("observed_at"):
+                snapshot_at = watchdog["observed_at"]
+            snapshot_freshness = self._snapshot_freshness(snapshot_at)
+            if snapshot_freshness["status"] == "STALE":
+                if watchdog is not None:
+                    watchdog["reported_status"] = watchdog.get("status")
+                    watchdog["status"] = "STALE"
+                    watchdog["status_reason"] = snapshot_freshness["reason"]
+                incidents.insert(0, {
+                    "incident_id": "operations_snapshot_stale",
+                    "fingerprint": "operations_snapshot_stale",
+                    "code": "OPS_SNAPSHOT_STALE", "status": "OPEN", "severity": "CRITICAL",
+                    "job_id": "operations_watchdog" if watchdog is not None else None,
+                    "title": "运维采集已失联", "detail": snapshot_freshness["reason"],
+                    "first_seen_at": snapshot_at,
+                    "last_seen_at": snapshot_freshness["checked_at"],
+                    "metadata": {"derived_at_read": True, **snapshot_freshness},
+                })
             counts: dict[str, int] = {}
             for item in jobs:
                 status = str(item.get("status") or "UNKNOWN")
@@ -795,6 +841,7 @@ class OperationsReader:
             return {
                 "available": True,
                 "snapshot_at": snapshot_at,
+                "snapshot_freshness": snapshot_freshness,
                 "jobs": jobs,
                 "freshness": freshness,
                 "projects": projects,
@@ -857,9 +904,16 @@ class OperationsReader:
                 SELECT * FROM job_runs WHERE job_id=?
                 ORDER BY COALESCE(started_at, observed_at) DESC LIMIT ?
             """, [job_id, max(1, int(run_limit))]).fetchall()]
+            snapshot = self._snapshot(snapshot_row) if snapshot_row else None
+            if snapshot is not None and job_id == "operations_watchdog":
+                freshness = self._snapshot_freshness(snapshot.get("observed_at"))
+                if freshness["status"] == "STALE":
+                    snapshot["reported_status"] = snapshot["status"]
+                    snapshot["status"] = "STALE"
+                    snapshot["status_reason"] = freshness["reason"]
             return {
                 "definition": definition,
-                "snapshot": self._snapshot(snapshot_row) if snapshot_row else None,
+                "snapshot": snapshot,
                 "runs": runs,
             }
         finally:
@@ -923,16 +977,20 @@ class OperationsReader:
     def incidents(self, *, include_resolved: bool = False) -> list[dict[str, Any]]:
         if not self.available():
             return []
+        if not include_resolved:
+            return self.overview()["incidents"]
         db = self._connect()
         try:
             clause = "" if include_resolved else "WHERE status IN ('OPEN','ACKNOWLEDGED')"
-            return [self._incident(row) for row in db.execute(f"""
+            persisted = [self._incident(row) for row in db.execute(f"""
                 SELECT * FROM incidents {clause}
                 ORDER BY CASE severity WHEN 'CRITICAL' THEN 0 WHEN 'WARNING' THEN 1 ELSE 2 END,
                          last_seen_at DESC LIMIT 500
             """).fetchall()]
         finally:
             db.close()
+        derived = [item for item in self.overview()["incidents"] if item["metadata"].get("derived_at_read")]
+        return persisted + derived
 
 
 __all__ = [

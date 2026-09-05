@@ -133,6 +133,7 @@ def _validate_full_pit_feature_coverage(
     features: FeatureBundle,
     *,
     minimum_coverage: float,
+    instrument_starts: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Reject a nominal full-PIT run whose cross-sectional history is partial."""
     groups: dict[str, list[str]] = {}
@@ -151,13 +152,34 @@ def _validate_full_pit_feature_coverage(
     }
     failures: dict[str, float] = {}
     for group, columns in sorted(groups.items()):
-        coverage = features.values[columns].notna().mean()
+        coverage_by_column: dict[str, float] = {}
+        expected_ranges: dict[str, dict[str, Any]] = {}
+        definitions = {item.feature_name: item for item in features.registry}
+        for column in columns:
+            values = features.values[column]
+            starts = [
+                pd.Timestamp(instrument_starts[instrument])
+                for instrument in definitions[column].instrument.split("/")
+                if instrument_starts and instrument in instrument_starts
+            ]
+            if starts:
+                values = values.loc[values.index >= max(starts)]
+            # Use the configured availability contract, never the first observed
+            # valid value: otherwise a missing prefix could silently lower the bar.
+            coverage_by_column[column] = float(values.notna().mean()) if len(values) else 0.0
+            expected_ranges[column] = {
+                "start": values.index.min().date().isoformat() if len(values) else None,
+                "expected_sessions": len(values),
+                "missing_sessions": int(values.isna().sum()),
+            }
+        coverage = pd.Series(coverage_by_column)
         minimum = float(coverage.min())
         diagnostics["groups"][group] = {
             "columns": len(columns),
             "minimum": minimum,
             "median": float(coverage.median()),
             "maximum": float(coverage.max()),
+            "expected_ranges": expected_ranges,
         }
         if minimum < float(minimum_coverage):
             failures[group] = minimum
@@ -690,6 +712,10 @@ def run_market_regime_research(
         diagnostics["full_pit_coverage"] = _validate_full_pit_feature_coverage(
             features,
             minimum_coverage=settings.screening.minimum_feature_coverage,
+            instrument_starts={
+                **{instrument.symbol: instrument.start for instrument in settings.instruments},
+                "SP500_PIT": settings.pit.start,
+            },
         )
     manifest = _input_manifest(
         settings,

@@ -207,10 +207,13 @@ class GroupAnalyticsService:
     ) -> None:
         self.settings = settings or load_group_analytics_settings()
         self.classification_provider = (
-            classification_provider or FMPCurrentClassificationProvider()
+            classification_provider or FMPCurrentClassificationProvider(
+                group_id_mapping_path=self.settings.group_id_mapping_path,
+            )
         )
         self.market_provider = market_provider or PublishedEODMarketDataProvider(
-            universe=self.settings.default_universe
+            universe=self.settings.default_universe,
+            require_benchmark=self.settings.inputs.require_benchmark,
         )
         self.artifact_store = artifact_store or FileGroupArtifactStore(self.settings)
         self._now = now

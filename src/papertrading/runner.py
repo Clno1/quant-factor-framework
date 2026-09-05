@@ -77,6 +77,9 @@ def _state_from_fill_ledger(
     account: dict[str, Any],
     fills: pd.DataFrame,
     cash_events: pd.DataFrame | None = None,
+    *,
+    asof: str | pd.Timestamp | None = None,
+    validate_cash: bool = True,
 ) -> tuple[float, dict[str, dict[str, float]]]:
     """Rebuild cash and positions from append-only fill and cash ledgers."""
     cash = float(account.get("initial_cash", 0.0) or 0.0)
@@ -90,12 +93,35 @@ def _state_from_fill_ledger(
         raise ValueError("Duplicate fill_id detected in paper-trading ledger")
     sort_columns = [
         column
-        for column in ("fill_date", "filled_at", "fill_id")
+        for column in ("fill_date", "filled_at")
         if column in ledger.columns
     ]
     if sort_columns:
         ledger = ledger.sort_values(sort_columns, kind="stable")
-    for row in ledger.to_dict(orient="records"):
+    timeline = []
+    for ordinal, row in enumerate(ledger.to_dict(orient="records")):
+        event_date = pd.Timestamp(row.get("fill_date") or pd.Timestamp.min)
+        timeline.append((event_date, 1, ordinal, row))
+    if cash_events is not None and not cash_events.empty:
+        events = cash_events.copy()
+        if "event_id" not in events.columns or "date" not in events.columns:
+            raise ValueError("Paper cash-event ledger has no event_id/date")
+        if events["event_id"].astype(str).duplicated().any():
+            raise ValueError("Duplicate event_id detected in paper cash-event ledger")
+        amounts = pd.to_numeric(events.get("amount"), errors="coerce")
+        event_dates = pd.to_datetime(events["date"], errors="coerce")
+        if amounts.isna().any() or (~np.isfinite(amounts)).any() or event_dates.isna().any():
+            raise ValueError("Paper cash-event ledger contains invalid amounts/dates")
+        for ordinal, (date, amount) in enumerate(zip(event_dates, amounts)):
+            timeline.append((pd.Timestamp(date), 0, ordinal, {"amount": float(amount)}))
+    for event_date, event_kind, _, row in sorted(timeline, key=lambda item: item[:3]):
+        if asof is not None and event_date > pd.Timestamp(asof):
+            continue
+        if event_kind == 0:
+            cash += row["amount"]
+            if validate_cash and cash < -1e-8:
+                raise ValueError(f"Paper cash-event ledger uses unavailable cash: date={event_date.date()} cash={cash}")
+            continue
         ticker = str(row.get("ticker") or "")
         side = str(row.get("side") or "").upper()
         quantity = float(row.get("quantity", 0.0) or 0.0)
@@ -105,7 +131,9 @@ def _state_from_fill_ledger(
             or quantity * fill_price
         )
         fee = float(row.get("fee", 0.0) or 0.0)
-        if not ticker or side not in {"BUY", "SELL"} or quantity <= 0:
+        if (not ticker or side not in {"BUY", "SELL"}
+                or not np.isfinite([quantity, fill_price, notional, fee]).all()
+                or quantity <= 0 or fill_price <= 0 or notional <= 0 or fee < 0):
             raise ValueError(f"Invalid fill ledger row: {row}")
         if side == "BUY":
             cash -= notional + fee
@@ -139,16 +167,10 @@ def _state_from_fill_ledger(
                     "quantity": remaining,
                     "avg_price": float(old["avg_price"]),
                 }
-    if cash_events is not None and not cash_events.empty:
-        events = cash_events.copy()
-        if "event_id" not in events.columns:
-            raise ValueError("Paper cash-event ledger has no event_id")
-        if events["event_id"].astype(str).duplicated().any():
-            raise ValueError("Duplicate event_id detected in paper cash-event ledger")
-        amounts = pd.to_numeric(events.get("amount"), errors="coerce")
-        if amounts.isna().any() or (~np.isfinite(amounts)).any():
-            raise ValueError("Paper cash-event ledger contains invalid amounts")
-        cash += float(amounts.sum())
+        if validate_cash and cash < -1e-8:
+            raise ValueError(
+                f"Paper fill ledger uses unavailable cash: date={event_date.date()} cash={cash}"
+            )
     return float(cash), positions
 
 
@@ -278,14 +300,18 @@ def _accrue_dividend_cash_events(
     account: dict[str, Any],
     target: TargetResult,
     fills: pd.DataFrame,
+    asof: str | None = None,
+    persist: bool = True,
+    existing_override: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Append deterministic dividend events for shares held before each ex-date."""
     account_id = str(account["id"])
-    existing = load_table(account_id, "cash_events")
-    if target.total_return_close_prices.empty or fills is None or fills.empty:
+    existing = (existing_override.copy() if existing_override is not None
+                else load_table(account_id, "cash_events"))
+    if getattr(target, "total_return_close_prices", pd.DataFrame()).empty or fills is None or fills.empty:
         return existing
     distributions = _derived_dividend_cash_per_share(target)
-    cutoff = pd.Timestamp(target.decision_date).normalize()
+    cutoff = pd.Timestamp(asof or target.decision_date).normalize()
     bounded = distributions.loc[distributions.index <= cutoff]
     candidate_locations = np.argwhere(bounded.gt(0).to_numpy())
     existing_by_id = (
@@ -299,7 +325,9 @@ def _accrue_dividend_cash_events(
         ticker = str(bounded.columns[col_no])
         amount_per_share = float(bounded.iat[row_no, col_no])
         eligible_fills = _fills_before_ex_date(fills, ex_date)
-        _, held = _state_from_fill_ledger(account, eligible_fills)
+        # Only quantities are needed to derive entitlements. Dividend cash can
+        # itself fund later fills, and is reconstructed after this derivation.
+        _, held = _state_from_fill_ledger(account, eligible_fills, validate_cash=False)
         quantity = float((held.get(ticker) or {}).get("quantity", 0.0) or 0.0)
         if quantity <= 1e-12:
             continue
@@ -347,7 +375,8 @@ def _accrue_dividend_cash_events(
         output = output.sort_values(["date", "ticker", "event_id"]).reset_index(
             drop=True
         )
-        save_table(account_id, "cash_events", output)
+        if persist:
+            save_table(account_id, "cash_events", output)
         return output
     return existing
 
@@ -359,6 +388,7 @@ def _first_open_after(
     *,
     cutoff: str,
     after_date: str | None = None,
+    not_before: str | None = None,
 ) -> tuple[str | None, float | None]:
     if open_prices is None or open_prices.empty or ticker not in open_prices.columns:
         return None, None
@@ -371,6 +401,8 @@ def _first_open_after(
         & (open_prices.index <= pd.Timestamp(cutoff)),
         ticker,
     ].dropna()
+    if not_before is not None:
+        after = after.loc[after.index >= pd.Timestamp(not_before)]
     after = after[after > 0]
     if after.empty:
         return None, None
@@ -480,6 +512,79 @@ def _mark_equity(
     return positions_df, equity
 
 
+def _validate_execution_units(
+    *, account: dict[str, Any], target: TargetResult,
+    fills: pd.DataFrame, orders: pd.DataFrame,
+) -> None:
+    """Block unsupported share-unit changes before any new account postings.
+
+    Compare the same historical executable bar across immutable versions, not
+    today's price against cost basis. Dividends and ordinary price moves do not
+    change this anchor. Closed position cycles no longer carry share units.
+    """
+    cutoff = pd.Timestamp(target.decision_date)
+    if account.get("last_mark_date") and pd.Timestamp(account["last_mark_date"]) > cutoff:
+        raise ValueError("Cannot run a paper account before its last committed mark")
+    anchors: dict[str, list[dict]] = {}
+    quantities: dict[str, float] = {}
+    if not fills.empty:
+        dates = pd.to_datetime(fills["fill_date"], errors="coerce")
+        if dates.isna().any() or dates.gt(cutoff).any():
+            raise ValueError("Paper fill history is invalid or ahead of the requested as-of")
+        sort_columns = [column for column in ("fill_date", "filled_at") if column in fills]
+        for row in fills.sort_values(sort_columns, kind="stable").to_dict("records"):
+            ticker = str(row["ticker"])
+            delta = float(row["quantity"]) * (1 if row["side"] == "BUY" else -1)
+            quantities[ticker] = quantities.get(ticker, 0.) + delta
+            if row["side"] == "BUY":
+                anchors.setdefault(ticker, []).append({
+                    "date": row["fill_date"], "price": row.get("raw_open_price"),
+                    "version": row.get("dataset_version_id"), "field": "open",
+                })
+            if quantities[ticker] <= 1e-9:
+                anchors.pop(ticker, None)
+    if not orders.empty and "status" in orders:
+        for row in orders.loc[orders.status.eq(ORDER_PENDING)].to_dict("records"):
+            if not fills.empty and "order_id" in fills:
+                completed = pd.to_numeric(fills.loc[
+                    fills.order_id.eq(row.get("order_id")), "quantity"
+                ], errors="coerce").sum()
+                if completed >= float(row.get("quantity") or 0.) - 1e-9:
+                    continue
+            anchors.setdefault(str(row["ticker"]), []).append({
+                "date": row["decision_date"], "price": row.get("ref_price"),
+                "version": row.get("dataset_version_id"), "field": "close",
+            })
+    contract = getattr(target, "data_contract", {})
+    current_version = contract.get("dataset_version_id")
+    for ticker, observations in anchors.items():
+        for anchor in observations:
+            if current_version and anchor["version"] == current_version:
+                continue  # The same immutable publication preserves share units.
+            date = pd.Timestamp(anchor["date"])
+            frame = target.open_prices if anchor["field"] == "open" else target.prices
+            observed = (frame.loc[date, ticker] if date in frame.index and ticker in frame.columns else np.nan)
+            if pd.isna(observed) and current_version and contract.get("data_universe"):
+                from src.data.foundation import MarketDataReader
+                reader = MarketDataReader()
+                version = reader.require_version(contract["data_universe"], current_version, require_price_semantics=True)
+                wide = reader.load_wide_tables(contract["data_universe"], tickers=[ticker], start=date, end=date, version=version)
+                frame = wide[anchor["field"]]
+                observed = frame.loc[date, ticker] if date in frame.index and ticker in frame.columns else np.nan
+            reference = pd.to_numeric(anchor["price"], errors="coerce")
+            if not np.isfinite(reference) or not np.isfinite(observed) or reference <= 0 or observed <= 0:
+                raise ValueError(
+                    f"PAPER_PRICE_UNITS_UNVERIFIED: {ticker} {date.date()}; "
+                    "a held position or pending order lacks a verifiable execution-price anchor"
+                )
+            if not np.isclose(float(observed), float(reference), rtol=1e-5, atol=1e-8):
+                raise ValueError(
+                    f"PAPER_PRICE_UNITS_CHANGED: {ticker} {date.date()} "
+                    f"old={reference} current={observed}; split/unit adjustments are not supported; "
+                    "reconcile the account and pending orders before resuming"
+                )
+
+
 def _fill_pending_orders(
     *,
     account: dict[str, Any],
@@ -500,11 +605,33 @@ def _fill_pending_orders(
         ((execution.get("slippage") or {}).get("adv_window", 20)) or 20
     )
     existing_fills = load_table(account_id, "fills")
+    cash_events = load_table(account_id, "cash_events")
     fills: list[dict[str, Any]] = []
 
+    committed_dates = [str(account.get("last_mark_date") or "")]
+    for frame, column in ((existing_fills, "fill_date"), (cash_events, "date")):
+        if not frame.empty and column in frame:
+            committed_dates.extend(frame[column].dropna().astype(str))
+    committed_through = max(committed_dates) or None
+    if committed_through and pd.Timestamp(committed_through) > pd.Timestamp(cutoff):
+        raise ValueError("Cannot insert paper trades before already committed account history")
+
     pending_idx = orders.index[orders["status"].astype(str) == ORDER_PENDING].tolist()
-    # Sells first, then buys, so rebalances can fund purchases.
-    pending_idx.sort(key=lambda i: 0 if str(orders.loc[i, "side"]) == "SELL" else 1)
+    def scheduled_open(index):
+        order = orders.loc[index]
+        prior = (existing_fills.loc[existing_fills["order_id"].astype(str).eq(str(order.get("order_id") or ""))]
+                 if not existing_fills.empty and "order_id" in existing_fills else pd.DataFrame())
+        last = str(prior.fill_date.max()) if not prior.empty and "fill_date" in prior else None
+        try:
+            day, _ = _first_open_after(target.open_prices, str(order.get("decision_date") or ""),
+                                      str(order.get("ticker") or ""), cutoff=cutoff, after_date=last,
+                                      not_before=committed_through)
+        except (ValueError, TypeError):
+            day = None
+        return (day or "9999-12-31", 0 if str(order.get("side")).upper() == "SELL" else 1)
+    # Funding can move between orders at the same open, never back in time.
+    pending_idx.sort(key=scheduled_open)
+    execution_date: str | None = None
     for idx in pending_idx:
         row = orders.loc[idx]
         ticker = str(row.get("ticker") or "")
@@ -516,6 +643,7 @@ def _fill_pending_orders(
             not order_id
             or not ticker
             or side not in ("BUY", "SELL")
+            or not decision_date
             or total_requested <= 0
         ):
             orders.loc[idx, "status"] = ORDER_REJECTED
@@ -556,9 +684,23 @@ def _fill_pending_orders(
             ticker,
             cutoff=cutoff,
             after_date=last_fill_date,
+            not_before=committed_through,
         )
         if fill_date is None or raw_open is None:
             continue
+        if fill_date != execution_date:
+            current_ledger = (pd.concat([existing_fills, pd.DataFrame(fills)], ignore_index=True)
+                              if fills else existing_fills)
+            cash_events = _accrue_dividend_cash_events(
+                account=account, target=target, fills=current_ledger,
+                asof=fill_date, persist=False, existing_override=cash_events,
+            )
+            cash, current_positions = _state_from_fill_ledger(
+                account, current_ledger, cash_events, asof=fill_date,
+            )
+            positions_map.clear()
+            positions_map.update(current_positions)
+            execution_date = fill_date
         volume = _trailing_volume_before(
             target.volumes,
             fill_date,
@@ -675,6 +817,8 @@ def _fill_pending_orders(
             "decision_date": decision_date,
             "fill_date": fill_date,
             "filled_at": now_iso(),
+            "dataset_version_id": getattr(target, "data_contract", {}).get("dataset_version_id"),
+            "data_universe": getattr(target, "data_contract", {}).get("data_universe"),
         }
         fills.append(fill_record)
         cumulative_quantity = already_filled + float(qty)
@@ -722,6 +866,10 @@ def _fill_pending_orders(
             else fills_df
         )
         save_table(account_id, "fills", out)
+    if not cash_events.empty:
+        # Cash entitlements may depend on fills made earlier in this batch.
+        # Persist fills first; a retry can deterministically recover the events.
+        save_table(account_id, "cash_events", cash_events)
     # Publish the order projection after fills. If this write fails, the next
     # run reconstructs filled_quantity from the durable fill ledger.
     save_table(account_id, "orders", orders)
@@ -797,6 +945,8 @@ def _create_rebalance_orders(
             "quantity": qty,
             "filled_quantity": 0,
             "ref_price": ref_price,
+            "dataset_version_id": getattr(target, "data_contract", {}).get("dataset_version_id"),
+            "data_universe": getattr(target, "data_contract", {}).get("data_universe"),
             "target_weight": target_by_ticker.get(ticker, 0.0),
             "current_value": current_value,
             "target_value": target_value,
@@ -887,15 +1037,16 @@ def _run_account_once_locked(
                 f"{target.tickers_missing[:20]}"
             )
         fill_ledger = load_table(account_id, "fills")
-        cash_events = _accrue_dividend_cash_events(
-            account=account,
-            target=target,
-            fills=fill_ledger,
+        _validate_execution_units(
+            account=account, target=target, fills=fill_ledger,
+            orders=load_table(account_id, "orders"),
         )
+        cash_events = load_table(account_id, "cash_events")
         cash, positions_map = _state_from_fill_ledger(
             account,
             fill_ledger,
             cash_events,
+            validate_cash=False,
         )
 
         cash, fills, _ = _fill_pending_orders(

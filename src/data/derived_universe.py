@@ -118,7 +118,7 @@ def _month_end_sessions(sessions: pd.DatetimeIndex) -> pd.DatetimeIndex:
 
 def _normalize_bars(frame: pd.DataFrame, target: pd.Timestamp) -> pd.DataFrame:
     required = {
-        "date", "security_id", "ticker", "close", "volume",
+        "date", "security_id", "ticker", "close", "volume", "unadjusted_close",
     }
     missing = sorted(required - set(frame.columns))
     if missing:
@@ -134,6 +134,7 @@ def _normalize_bars(frame: pd.DataFrame, target: pd.Timestamp) -> pd.DataFrame:
     out["ticker"] = out["ticker"].astype(object)
     out["close"] = pd.to_numeric(out["close"], errors="coerce")
     out["volume"] = pd.to_numeric(out["volume"], errors="coerce")
+    out["unadjusted_close"] = pd.to_numeric(out["unadjusted_close"], errors="coerce")
     out = out.loc[out["date"].le(target)].copy()
     if out["date"].isna().any() or out["security_id"].eq("").any():
         raise DataFoundationError("coverage bars contain invalid identities or dates")
@@ -413,6 +414,10 @@ def _compact_membership_timeline(
         active = active.loc[~active.index.astype(str).isin(removed_ids)].copy()
 
     if not membership_rows:
+        if initial_active is not None:
+            # No new snapshot/removal is a valid incremental delta. The caller
+            # retains the authenticated baseline; do not invent a new snapshot.
+            return pd.DataFrame(columns=_MEMBERSHIP_COLUMNS), forced_audits
         raise DataFoundationError("no securities passed broad PIT eligibility")
     membership = (
         pd.concat(membership_rows, ignore_index=True)
@@ -452,9 +457,15 @@ def _evaluate_month_end(
         valid_sessions_20d=("date", "nunique"),
     )
     session_bars = valid.loc[valid["date"].eq(date)].copy()
+    nominal = session_bars["unadjusted_close"]
+    if nominal.isna().any() or not np.isfinite(nominal).all() or nominal.le(0).any():
+        raise DataFoundationError(
+            f"{date.date()}: missing/invalid unadjusted_close for PIT selection; "
+            "rebuild coverage from the unadjusted-price source, never use split-adjusted close"
+        )
     prices = session_bars.drop_duplicates("security_id", keep="last").set_index(
         "security_id"
-    )["close"]
+    )["unadjusted_close"]
     tickers = _ticker_map(
         date=date,
         master=master,
@@ -916,10 +927,11 @@ def build_liquid_5m_candidate(
         ),
     )
     methodology = {
-        "methodology_version": "US_LIQUID_5M_PIT_V2_COMPACT_EVENTS",
+        "methodology_version": "US_LIQUID_5M_PIT_V3_NOMINAL_PRICE",
         "reconstitution": "XNYS_MONTH_END_PLUS_CONFIRMED_DELISTING_EXIT",
         "membership_storage": "COMPLETE_MONTH_END_PLUS_REMOVAL_EVENTS",
-        "adv_price": "UNADJUSTED_CLOSE",
+        "selection_price": "UNADJUSTED_CLOSE",
+        "adv_price": "SPLIT_ADJUSTED_CLOSE_TIMES_SPLIT_ADJUSTED_VOLUME",
         "adv_sessions": int(adv_sessions),
         "min_valid_sessions": int(min_valid_sessions),
         "min_price": float(min_price),
@@ -1067,7 +1079,8 @@ def roll_forward_liquid_5m_candidate(
     )
     audits.extend(forced_audits)
     rolled_membership = (
-        pd.concat([retained_membership, rebuilt_membership], ignore_index=True)
+        (retained_membership.copy() if rebuilt_membership.empty
+         else pd.concat([retained_membership, rebuilt_membership], ignore_index=True))
         .assign(source_data_version_id=parent_version_id)
         .sort_values(["date", "security_id"])
         .reset_index(drop=True)
@@ -1192,13 +1205,14 @@ def roll_forward_liquid_5m_candidate(
         ),
     )
     methodology = {
-        "methodology_version": "US_LIQUID_5M_PIT_V2_COMPACT_EVENTS",
+        "methodology_version": "US_LIQUID_5M_PIT_V3_NOMINAL_PRICE",
         "reconstitution": "XNYS_MONTH_END_PLUS_CONFIRMED_DELISTING_EXIT",
         "membership_storage": "COMPLETE_MONTH_END_PLUS_REMOVAL_EVENTS",
         "calculation_mode": "INCREMENTAL_OVERLAP_REBUILD",
         "refresh_start": refresh.date().isoformat(),
         "previous_target_session": previous_target.date().isoformat(),
-        "adv_price": "UNADJUSTED_CLOSE",
+        "selection_price": "UNADJUSTED_CLOSE",
+        "adv_price": "SPLIT_ADJUSTED_CLOSE_TIMES_SPLIT_ADJUSTED_VOLUME",
         "adv_sessions": int(adv_sessions),
         "min_valid_sessions": int(min_valid_sessions),
         "min_price": float(min_price),

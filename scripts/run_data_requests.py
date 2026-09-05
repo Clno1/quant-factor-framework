@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Process queued custom-universe requests through the sole FMP writer."""
+"""Process custom-universe data requests, then one queued published-data scan."""
 from __future__ import annotations
 
 import argparse
@@ -26,6 +26,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     from src.data.request_worker import process_pending_data_requests
+    from src.breakouts.application import process_pending_scan_requests
     from src.storage import DATA_REQUEST_FAILED
     from src.utils.env import load_local_env
 
@@ -36,7 +37,13 @@ def main(argv: list[str] | None = None) -> int:
             f"request={result.request_id} status={result.status} "
             f"details={result.payload}"
         )
-    return 1 if any(r.status == DATA_REQUEST_FAILED for r in results) else 0
+    scans = process_pending_scan_requests(limit=1)
+    for scan in scans:
+        print(f"scan={scan['request_id']} status={scan['status']} error={scan.get('error')}")
+    return int(
+        any(r.status == DATA_REQUEST_FAILED for r in results)
+        or any(scan["status"] == "FAILED" for scan in scans)
+    )
 
 
 if __name__ == "__main__":

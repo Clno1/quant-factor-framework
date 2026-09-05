@@ -112,7 +112,13 @@ def create_app(
     credentials: tuple[str, str] | None | object = ...,
 ) -> FastAPI:
     selected_registry = registry or operations_registry()
-    selected_reader = reader or OperationsReader(selected_registry.settings.snapshot_path)
+    selected_reader = reader or OperationsReader(
+        selected_registry.settings.snapshot_path,
+        max_snapshot_age_seconds=(
+            selected_registry.settings.watchdog_interval_seconds
+            + selected_registry.settings.heartbeat_grace_seconds
+        ),
+    )
     app = FastAPI(
         title="Quant Operations",
         description="Read-only operational evidence console",
@@ -138,10 +144,12 @@ def create_app(
     })
 
     def render(request: Request, template: str, **context: Any) -> HTMLResponse:
+        overview = selected_reader.overview()
         return templates.TemplateResponse(
             request,
             template,
-            {"page": "", "title": "运维总览", **context},
+            {"page": "", "title": "运维总览",
+             "snapshot_freshness": overview["snapshot_freshness"], **context},
         )
 
     @app.get("/", response_class=HTMLResponse)
@@ -273,9 +281,14 @@ def create_app(
 
     @app.get("/healthz", response_class=JSONResponse)
     def health() -> JSONResponse:
+        overview = selected_reader.overview()
+        freshness = overview["snapshot_freshness"]
         return JSONResponse({
-            "status": "ok" if selected_reader.available() else "initializing",
-            "snapshot_available": selected_reader.available(),
+            "status": ("initializing" if not overview["available"] else
+                       "degraded" if freshness["status"] == "STALE" else "ok"),
+            "live": True,
+            "snapshot_available": overview["available"],
+            "snapshot_freshness": freshness,
         })
 
     @app.get("/favicon.ico", include_in_schema=False)

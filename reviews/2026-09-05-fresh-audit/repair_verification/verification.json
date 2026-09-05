@@ -1,0 +1,250 @@
+{
+  "baseline_commit": "1149764d13539da6159ab0e927594d49d1f181f0",
+  "scope": "root repository; existing quant-factor-framework copy excluded",
+  "test_runtime": "/private/tmp/quant_fresh_audit_20260905/fast-venv/bin/python",
+  "test_workdir": "/private/tmp/quant_repair_20260905/repo",
+  "test_result": {
+    "name": "pytest",
+    "errors": "0",
+    "failures": "0",
+    "skipped": "0",
+    "tests": "723",
+    "time": "28.247",
+    "timestamp": "2026-09-05T23:29:46.777778+08:00",
+    "hostname": "ZHIHONGHUO-MC1"
+  },
+  "pytest": "723 passed, 2 pre-existing dependency deprecation warnings in 28.25s",
+  "compileall": "PASS: src scripts tests in isolated repository",
+  "diff_check": "PASS",
+  "remote_heads_observed": [
+    "main",
+    "master",
+    "cursor/document-main-branch-16f3"
+  ],
+  "source_files": [
+    {
+      "path": "configs/default.yaml",
+      "sha256": "fff2b4c6a4362e575ee0de86660c7043563d194be963f2befc536f796807f5ee"
+    },
+    {
+      "path": "scripts/backfill_us_equity_coverage.py",
+      "sha256": "e0ad6726ff9b4ad4ea86323368a78fc8d0be953e96432b57792105fa81c1b8e3"
+    },
+    {
+      "path": "scripts/build_us_liquid_pit.py",
+      "sha256": "482943218fa280c806d224f23281b68579dbfaa156a47be2f4d847b0f9e80167"
+    },
+    {
+      "path": "scripts/run_broad_factor_data.py",
+      "sha256": "146f36fc540bbf8f40f0007efa5f8efc4aaadbe8d6f0ce71ae2454b0efbb7a6b"
+    },
+    {
+      "path": "scripts/run_data_requests.py",
+      "sha256": "89c95f24c518157802540f639714f809eef979fa4d9b58f96fe4f010d61d0a3f"
+    },
+    {
+      "path": "scripts/update_us_equity_coverage.py",
+      "sha256": "2ade01b6e63ba12fac46e2715cfe3eb7a0e04de622b5d4f96c250a7c454c0171"
+    },
+    {
+      "path": "src/alerts/config.py",
+      "sha256": "d6916a75654b86c24886cd8bab44bce5fef342b4b41b1c3543be363c72740de8"
+    },
+    {
+      "path": "src/alerts/engine.py",
+      "sha256": "4338faab3a3a116c7984870f552f8078940cc5e7f92dd71490444ffe104f488b"
+    },
+    {
+      "path": "src/backtest/double_sort.py",
+      "sha256": "4bcf7239f86e11977aedad4273fa41500929bee55b5faa9986afe2f8c3d927b6"
+    },
+    {
+      "path": "src/backtest/metrics.py",
+      "sha256": "ae5b4f6bb0398d41c0ff7cfa8cf41f920d425d9c163a7562c1b1d87176039d27"
+    },
+    {
+      "path": "src/backtest/quintile_v2.py",
+      "sha256": "606fb22d0380e12bb68eed3d2123bb98e42eb0dcb76982fa95e30d056da67735"
+    },
+    {
+      "path": "src/breakouts/application.py",
+      "sha256": "9bc5cd58109cb020a8857cd27f891e2ecfd274058e2485f5e728e7d78ddecbd9"
+    },
+    {
+      "path": "src/breakouts/historical_backtest.py",
+      "sha256": "1ef65570a2a4b0852ae014f10d38f24003bdddc75776ba68ee95fcf7dffc11aa"
+    },
+    {
+      "path": "src/breakouts/live/cup_handle.py",
+      "sha256": "ae8dd6484aab93ad61d45bb490d264138862c509d02382c5d43ed846158dd6bc"
+    },
+    {
+      "path": "src/breakouts/live/rolling.py",
+      "sha256": "eb9efc8a0f40ee140b123139a76ea8a16043f2e8c94c79349bbed358f07f160b"
+    },
+    {
+      "path": "src/breakouts/scan_cache.py",
+      "sha256": "6a9a5bf58d186830d1a8e11b112a1c1790cc7158e6aed2122cf88b365388f8cc"
+    },
+    {
+      "path": "src/data/access.py",
+      "sha256": "298a425d8ca81617fcccf8f4daec4717d3e3ea4e29b53f927092a523d8a8043b"
+    },
+    {
+      "path": "src/data/broad_coverage.py",
+      "sha256": "ed64beb9af95910de696f2346923f8133f93009a3a252c6520932a81d9c5f4c8"
+    },
+    {
+      "path": "src/data/derived_universe.py",
+      "sha256": "5bbf4f17870589648c852143bf7817f8fd9a4d9aec51d387838a411774d8ec62"
+    },
+    {
+      "path": "src/data/fmp.py",
+      "sha256": "198fdc5d2451ee0a584e699a209ca7327028a5cefe546d410096927020230818"
+    },
+    {
+      "path": "src/data/foundation.py",
+      "sha256": "637bb86ef3ffd2a361be7d50a2ddadaf09c78ab7195ca0272647fac433b94d05"
+    },
+    {
+      "path": "src/group_analytics/adapters.py",
+      "sha256": "38971d4621bb1731f54dfc9cf4843d023ecce4d4fb5e9f1a4760ff380f1c8044"
+    },
+    {
+      "path": "src/group_analytics/service.py",
+      "sha256": "6db2fdf7d96e7594dc62c33576f7cdc94b5d5f4756412ab2c1b58b0d413b1967"
+    },
+    {
+      "path": "src/market_regime_research/__init__.py",
+      "sha256": "a727d3fb0286dd95e49f001c940da36ebf46fefbd4f6296bd9b0877a334ff27a"
+    },
+    {
+      "path": "src/market_regime_research/pipeline.py",
+      "sha256": "9f4ec4f9fc76a5862d4fc198f5b3c6fce96617ea160eda466b849c36aada45ac"
+    },
+    {
+      "path": "src/market_regime_research/screening.py",
+      "sha256": "e94cab5df9b6cfc3398ead6b0c88d013314ab3066001afffca3dda23b2207845"
+    },
+    {
+      "path": "src/market_regime_research/settings.py",
+      "sha256": "3e525c095663e9e965352ab9aab33cc616902cb37def4e7bb749bfd103b337db"
+    },
+    {
+      "path": "src/market_regime_research/sources.py",
+      "sha256": "8815a5d1300ba7db552329aa9ed9bc6162776cb0d08ba365f3fcae69a735cb7b"
+    },
+    {
+      "path": "src/operations/store.py",
+      "sha256": "9df7d3bc3304eddc4a3e85cb5679721b3fb1dd8634c7559ccd0e67ee924c9a85"
+    },
+    {
+      "path": "src/operations_web/app.py",
+      "sha256": "bbf38bc16c9ffa539b42fd11ef607472053bd928b0e1485cefe7d2b4f8b1c9a3"
+    },
+    {
+      "path": "src/operations_web/static/css/operations.css",
+      "sha256": "424f4b46d2efa81feaab2fd0547de03dbb08fcea47049c991474a99fe1b3ac07"
+    },
+    {
+      "path": "src/operations_web/static/js/operations.js",
+      "sha256": "dcd72be43bceefc8436af9f76591b4ffea1ce280f91f829abef11b352d3c4140"
+    },
+    {
+      "path": "src/operations_web/templates/base.html",
+      "sha256": "4af7fdccf2611566322dc61ca54e194e5403ce9b836e4e2cccf4673c1d00787f"
+    },
+    {
+      "path": "src/papertrading/notification_state.py",
+      "sha256": "fefa8ccc8be4ddee4c60d95431f4c528349f398a5838dc03978518cfceec16d5"
+    },
+    {
+      "path": "src/papertrading/notifications.py",
+      "sha256": "c6f739625a12d70f0402df158978c49eeb1892f000308d12f37b51a5e05d69d8"
+    },
+    {
+      "path": "src/papertrading/runner.py",
+      "sha256": "26fb79123f8ece3a9601c4f307ff7a602ce57bba04867497d371bf110c43b360"
+    },
+    {
+      "path": "src/storage/app_db.py",
+      "sha256": "e6d1786c1756d75e76b9be440400992c4bbccbf9ae2fd7243c78d597125b8cbe"
+    },
+    {
+      "path": "src/visualization/plots_mpl.py",
+      "sha256": "cc75d07128ded1ce86244dbb8f130839bf361515d73ad3390e28bdeb9a69efeb"
+    },
+    {
+      "path": "src/visualization/plots_plotly.py",
+      "sha256": "b5000941ad33cb2de77dddc3027be486a46c378b3e269bbdbda7a44ded449748"
+    },
+    {
+      "path": "src/webapp/routes.py",
+      "sha256": "10d391e400558aa6302e127040eb25da637002cea966dfcf75d2eb6d02526dbb"
+    },
+    {
+      "path": "src/webapp/templates/backtest_list.html",
+      "sha256": "922e09df300b72c419d4dd2eed0a6f1ffb2c2d07de54921238c8a026468781cd"
+    },
+    {
+      "path": "src/webapp/templates/paper_detail.html",
+      "sha256": "be9be287256c0dc46d97fafec75f1b2ecd58a5353acc1e669d94d5c006aac7b8"
+    },
+    {
+      "path": "src/webapp/templates/paper_list.html",
+      "sha256": "bb9dec03eb4c92441f258785185df40533cadb056a0a32cd19907c1f206a8cd0"
+    },
+    {
+      "path": "src/webapp/templates/strategy_detail.html",
+      "sha256": "a8b5b3876385badfb2c34aa814ceb0497a4ecf064febb2ced00005cf9f23ef19"
+    },
+    {
+      "path": "src/webapp/templates/strategy_list.html",
+      "sha256": "efe95fe44c73bb7edd54bb2e66172d51d749bec40e4beb6d48eba7f29fd070d7"
+    },
+    {
+      "path": "tests/test_app_storage.py",
+      "sha256": "60c9673ab9aa7d33a1f46d4af907e2d755d8cd6aba41edfb10206194e6d54059"
+    },
+    {
+      "path": "tests/test_broad_coverage.py",
+      "sha256": "538de655afb5f6f54dca9d29a77d4932126411ae494938b17395dccd4cc3d6e5"
+    },
+    {
+      "path": "tests/test_broad_operations.py",
+      "sha256": "70cbb7aac40d2e7af99dd27e0a7df1546189a755b265ba7730001c8795a30a29"
+    },
+    {
+      "path": "tests/test_broad_pit_universe.py",
+      "sha256": "4d8cf57e1e5ad0ecc054e8dd538acdac00a73f9080e36466a98fe1714563121d"
+    },
+    {
+      "path": "tests/test_data_price_boundaries.py",
+      "sha256": "7816c3f37f7a8f677d5636fb6d56edc9c2b9e86d83771ffb5da222e7319f3d92"
+    },
+    {
+      "path": "tests/test_formal_backtest_accounting.py",
+      "sha256": "dd14f653928f19127e2c61368c84f7152ed0fabe37310a9f26422ed6a7cde613"
+    },
+    {
+      "path": "tests/test_paper_notifications.py",
+      "sha256": "0fe3f42b62d3221d0cbd192ad8223c5914abe8ce9c429955cddb4834837769b6"
+    },
+    {
+      "path": "tests/test_paper_trading_integrity.py",
+      "sha256": "12b36a26f51a82318fa0b6cdb2677bde268efeb89158e256f08032c2c7cb3c96"
+    },
+    {
+      "path": "tests/test_research_operations_audit_boundaries.py",
+      "sha256": "1579f9f14f9e78a29a2f9713c4f5e12f84dfc9d74f2edb84e7e0806f31a7e8b7"
+    },
+    {
+      "path": "tests/test_signal_audit_boundaries.py",
+      "sha256": "92734df751ec3876642753ef6a495b0c372da49d01103389ed7482702e22eae1"
+    },
+    {
+      "path": "tests/test_web_audit_boundaries.py",
+      "sha256": "c54fdd3946d6a4230666b982fa426e0c1574d1224b19ed301695f84ceed08204"
+    }
+  ]
+}

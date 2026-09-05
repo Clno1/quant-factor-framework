@@ -12,6 +12,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from plotly.utils import PlotlyJSONEncoder
 
+from src.backtest.metrics import drawdown_series
+
 # 主题色
 _BG = "#0E1117"
 _PANEL = "#1A1F2E"
@@ -439,10 +441,7 @@ def plot_factor_latest_distribution_plotly(
 
 
 def plot_drawdown_plotly(daily_ret: pd.Series, title: str = "多空回撤") -> go.Figure:
-    r = daily_ret.dropna()
-    nav = (1.0 + r).cumprod()
-    peak = nav.cummax()
-    dd = nav / peak - 1.0
+    dd = drawdown_series(daily_ret)
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=dd.index, y=dd.values, mode="lines", fill="tozeroy",

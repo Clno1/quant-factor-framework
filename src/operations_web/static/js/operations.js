@@ -48,6 +48,11 @@
       const response = await fetch("/api/overview", { cache: "no-store" });
       if (!response.ok) return;
       const payload = await response.json();
+      const warning = document.querySelector("[data-snapshot-warning]");
+      if (warning) {
+        warning.hidden = payload.snapshot_freshness.status !== "STALE";
+        warning.querySelector("[data-snapshot-warning-text]").textContent = payload.snapshot_freshness.reason;
+      }
       const snapshot = document.querySelector("[data-snapshot-at]");
       if (snapshot) snapshot.textContent = formatTime(payload.snapshot_at);
       const incidents = document.querySelector("[data-summary='open_incidents']");

@@ -57,16 +57,20 @@ class RollingIntradayBars:
             return len(incoming)
 
         new_rows = incoming.loc[~incoming.index.isin(self._frame.index)]
-        if new_rows.empty:
+        overlap = incoming.index.intersection(self._frame.index)
+        old_values, new_values = self._frame.loc[overlap], incoming.loc[overlap]
+        changed = ~((old_values == new_values) | (old_values.isna() & new_values.isna())).all(axis=1)
+        revised_count = int(changed.sum())
+        if new_rows.empty and not revised_count:
             return 0
-        append_only = bool(new_rows.index.min() > self._frame.index.max())
-        self._frame = pd.concat([self._frame, new_rows])
+        append_only = not revised_count and bool(new_rows.index.min() > self._frame.index.max())
+        self._frame = pd.concat([self._frame, incoming])
         self._frame = self._frame[~self._frame.index.duplicated(keep="last")].sort_index()
         if not append_only:
             self._reset_derived(self._derived_interval or 5)
         self._cached_key = None
         self._cached_metrics = None
-        return len(new_rows)
+        return len(new_rows) + revised_count
 
     def observe_quote(
         self,

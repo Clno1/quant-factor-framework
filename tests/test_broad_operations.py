@@ -51,6 +51,23 @@ def test_resource_guard_reports_memory_and_disk(tmp_path):
     assert report["checks"]["disk"]["observed_gb"] > 0
 
 
+def test_factor_resume_rejects_changed_preprocessing(tmp_path, monkeypatch):
+    from scripts.run_broad_factor_data import _checkpoint_identity, _load_checkpoint
+    from src.config import CONFIG
+
+    kwargs = dict(generation_id="g1", parent=SimpleNamespace(version_id="p1", manifest_checksum_sha256="pm", target_session=pd.Timestamp("2024-02-01").date()),
+                  universe_version=SimpleNamespace(universe_version_id="u1", membership_sha256="m1", eligibility_sha256="e1"),
+                  security_generation=SimpleNamespace(generation_id="s1", manifest_sha256="sm"),
+                  factors=["MOM_1M"], start=pd.Timestamp("2024-01-01"), reuse_publication_id=None)
+    identity = _checkpoint_identity(**kwargs)
+    path = tmp_path / "checkpoint.json"
+    path.write_text(json.dumps({**identity, "completed": {"MOM_1M:2024-01": {"sha256": "old"}}}))
+    assert _load_checkpoint(path, identity)["completed"]
+    monkeypatch.setitem(CONFIG["preprocessing"], "winsorize_n", float(CONFIG.preprocessing.winsorize_n) + 1.)
+    with pytest.raises(DataFoundationError, match="calculation_contract"):
+        _load_checkpoint(path, _checkpoint_identity(**kwargs))
+
+
 def test_broad_runtime_units_cover_every_post_coverage_stage():
     assert "quant-market-data.service" in _ROLLOUT_RUNTIME_UNITS
     assert "quant-factor-research.service" in _ROLLOUT_RUNTIME_UNITS

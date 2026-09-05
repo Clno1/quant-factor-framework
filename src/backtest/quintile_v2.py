@@ -10,18 +10,16 @@ from __future__ import annotations
 
 from typing import Optional
 
-import numpy as np
 import pandas as pd
 
 from src.backtest.membership_exit_v2 import apply_membership_exit_policy_v2
 from src.backtest.metrics import performance_summary, relative_performance_summary
+from src.backtest.portfolio import simulate_group_portfolios
 from src.backtest.quintile import (
+    BacktestCapacityError,
     QuintileResult,
     _assign_groups_on_rebalance,
-    _build_execution_details,
-    _compute_turnover,
     _resolve_execution,
-    _strict_equal_weight_group_returns,
     build_tradable_mask,
 )
 from src.backtest.rebalance import get_rebalance_dates
@@ -169,33 +167,23 @@ def quintile_backtest_v2(
     ).rename("Benchmark")
 
     group_cols = [f"Q{g}" for g in range(1, n_groups + 1)]
-    gross_ret = _strict_equal_weight_group_returns(
-        r,
-        assign_held,
-        n_groups=n_groups,
-        timing=exec_cfg["timing"],
-    ).dropna(how="all")
-
-    holdings_detail, trades_detail, costs_detail = _build_execution_details(
+    simulation = simulate_group_portfolios(
         assign,
-        common_dates,
+        r,
         rebal_dates,
-        n_groups=n_groups,
+        group_names={g: f"Q{g}" for g in range(1, n_groups + 1)},
         execution=exec_cfg,
-        execution_price_df=execution_open,
-        volume_df=volume,
+        execution_prices=execution_open,
+        volume=volume,
         forced_exit_events=forced_exit_events,
-        membership_mask=membership_mask,
     )
-    cost_df = pd.DataFrame(0.0, index=gross_ret.index, columns=group_cols)
-    if not costs_detail.empty:
-        for row in costs_detail.itertuples(index=False):
-            dt = pd.Timestamp(row.date)
-            group = str(row.group)
-            if dt in cost_df.index and group in cost_df.columns:
-                cost_df.loc[dt, group] += float(row.cost)
-
-    group_ret = gross_ret - cost_df
+    if simulation.capacity_breaches:
+        raise BacktestCapacityError(simulation.capacity_breaches)
+    gross_ret = simulation.gross_returns.reindex(columns=group_cols)
+    group_ret = simulation.net_returns.reindex(columns=group_cols)
+    cost_df = simulation.cost_returns.reindex(
+        index=group_ret.index, columns=group_cols, fill_value=0.0,
+    )
     benchmark_aligned = benchmark_base.reindex(group_ret.index)
     missing_benchmark = benchmark_aligned.isna()
     if missing_benchmark.any():
@@ -216,9 +204,11 @@ def quintile_backtest_v2(
     }
 
     top, bot = f"Q{n_groups}", "Q1"
-    raw_ls = group_ret[top] - group_ret[bot]
     direction = int(factor_direction)
-    ls = (raw_ls * direction).rename("LongShort")
+    ls = (
+        (gross_ret[top] - gross_ret[bot]) * direction
+        - cost_df[top].fillna(0.0) - cost_df[bot].fillna(0.0)
+    ).rename("LongShort")
     top_returns = group_ret[top].rename(top)
     excess = (top_returns - benchmark_aligned).rename("Excess")
 
@@ -229,7 +219,7 @@ def quintile_backtest_v2(
         .cumprod()
         .rename("Benchmark")
     )
-    turnover = _compute_turnover(assign, n_groups=n_groups, rebal_dates=rebal_dates)
+    turnover = simulation.turnover.reindex(columns=group_cols)
 
     metrics_rows: dict[str, dict] = {}
     for col in group_cols:
@@ -262,12 +252,15 @@ def quintile_backtest_v2(
         turnover=turnover,
         group_metrics=metrics_df,
         group_assignment=assign,
-        holdings_detail=holdings_detail,
-        trades_detail=trades_detail,
-        costs_detail=costs_detail,
+        holdings_detail=simulation.holdings_detail,
+        trades_detail=simulation.trades_detail,
+        costs_detail=simulation.costs_detail,
+        portfolio_daily=simulation.daily_state,
+        position_daily=simulation.position_daily,
         config={
             "schema_version": 2,
             "price_semantics": "EXPLICIT_EXECUTION_AND_TOTAL_RETURN_V1",
+            "portfolio_accounting": "STATEFUL_NAV_V1",
             "n_groups": n_groups,
             "rebalance_days": rebalance_days,
             "rebalance_mode": rebalance_mode,

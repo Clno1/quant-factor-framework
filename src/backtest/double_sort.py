@@ -262,7 +262,7 @@ def double_sort_backtest(
         rebal_dates,
         group_names=group_names,
         execution=exec_cfg,
-        execution_prices=open_df,
+        execution_prices=execution_open,
         volume=volume_df,
         forced_exit_events=forced_exit_events,
     )

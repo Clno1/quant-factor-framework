@@ -12,6 +12,8 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
+from src.backtest.metrics import drawdown_series
+
 matplotlib.use("Agg")  # 无 GUI 环境兼容（服务器/CI）
 
 # ---- 深色主题 ----
@@ -108,10 +110,7 @@ def plot_group_bar_mpl(metrics_df: pd.DataFrame, column: str = "AnnReturn",
 
 def plot_drawdown_mpl(daily_ret: pd.Series, title: str = "Long-Short Drawdown") -> plt.Figure:
     """回撤曲线。"""
-    r = daily_ret.dropna()
-    nav = (1.0 + r).cumprod()
-    peak = nav.cummax()
-    dd = nav / peak - 1.0
+    dd = drawdown_series(daily_ret)
     fig, ax = _new_fig(figsize=(12, 4))
     ax.fill_between(dd.index, dd.values, 0, color=_RED, alpha=0.55)
     ax.plot(dd.index, dd.values, color=_RED, linewidth=1.2)

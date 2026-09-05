@@ -81,6 +81,10 @@ class DataFoundationError(RuntimeError):
     """Base exception for catalog, publication, and read-contract failures."""
 
 
+class NoPublishedDataError(DataFoundationError):
+    """No published pointer exists; distinct from a corrupt published version."""
+
+
 class DataQualityError(DataFoundationError):
     """Raised when a candidate version fails one or more quality gates."""
 
@@ -2095,7 +2099,7 @@ class MarketDataReader:
         universe = safe_path_component(universe.upper(), label="universe")
         version = self.catalog.latest_version(universe)
         if version is None:
-            raise DataFoundationError(
+            raise NoPublishedDataError(
                 f"[{universe}] no published DuckDB data version exists. Run "
                 f"`python scripts/run_data_pipeline.py update --universe "
                 f"{universe}` first. No legacy fallback is allowed."
@@ -2647,6 +2651,7 @@ class MarketDataReader:
 __all__ = [
     "BAR_COLUMNS",
     "DataFoundationError",
+    "NoPublishedDataError",
     "DataQualityError",
     "DatasetVersion",
     "IngestionResult",

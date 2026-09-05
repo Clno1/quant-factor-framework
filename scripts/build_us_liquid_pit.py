@@ -122,7 +122,7 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
             start=start,
             end=end,
             version=parent,
-            columns=["date", "security_id", "ticker", "close", "volume"],
+            columns=["date", "security_id", "ticker", "close", "volume", "unadjusted_close"],
         )
 
     previous = universe_store.latest(US_LIQUID_5M)
@@ -143,9 +143,11 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
         historical_gate_passed = bool(
             historical_check and historical_check.get("passed")
         )
+        if previous.methodology_version != str(settings.methodology_version):
+            historical_gate_passed = False
         if not historical_gate_passed and not args.full_rebuild:
             raise RuntimeError(
-                "same-session PIT publication predates the historical daily "
+                "same-session PIT publication uses an older methodology or lacks the historical daily "
                 "bar-coverage gate; rerun with --full-rebuild"
             )
         input_mismatch = (
@@ -160,7 +162,7 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
                 "same-session PIT publication is bound to different inputs; "
                 "use --full-rebuild for an explicit repair"
             )
-        if historical_gate_passed and not input_mismatch:
+        if historical_gate_passed and not input_mismatch and not args.full_rebuild:
             return {
                 "status": "NOOP",
                 "target_session": parent.target_session.isoformat(),
@@ -177,6 +179,7 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
     identity_compatible = bool(
         previous is not None
         and _incremental_inputs_match(previous, security_generation)
+        and previous.methodology_version == str(settings.methodology_version)
     )
     incremental = (
         not args.full_rebuild

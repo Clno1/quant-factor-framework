@@ -465,6 +465,9 @@ class AppDatabase:
         self.initialize()
         connection = self._connect()
         try:
+            # Metadata and rows must be read from one WAL snapshot even when
+            # another connection commits a complete replacement between SELECTs.
+            connection.execute("BEGIN")
             meta = connection.execute(
                 """
                 SELECT columns_json, row_count, checksum_sha256

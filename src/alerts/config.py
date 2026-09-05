@@ -43,6 +43,7 @@ class AlertSettings:
     strict_min_dollar_volume: float = 10_000_000.0
     strict_min_avg_dollar_volume: float = 10_000_000.0
     quote_chunk_size: int = 100
+    max_quote_lag_seconds: int = 900
     intraday_enabled: bool = False
     intraday_interval: int = 5
     intraday_max_symbols: int = 25
@@ -115,6 +116,9 @@ class AlertSettings:
             quote_chunk_size=min(500, max(1, int(
                 _nested(root, "quotes", "chunk_size", default=100)
             ))),
+            max_quote_lag_seconds=max(0, int(
+                _nested(root, "quotes", "max_lag_seconds", default=900)
+            )),
             intraday_enabled=bool(_nested(root, "intraday", "enabled", default=False)),
             intraday_interval=int(_nested(root, "intraday", "interval", default=5)),
             intraday_max_symbols=max(1, int(

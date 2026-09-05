@@ -23,7 +23,7 @@ from uuid import uuid4
 import pandas as pd
 
 from src.config import CONFIG, PROJECT_ROOT
-from src.data.foundation import DataFoundationError, MarketDataReader
+from src.data.foundation import DataFoundationError, MarketDataReader, NoPublishedDataError
 from src.data.universe_ids import US_EQUITY_COVERAGE
 
 from .classification import (
@@ -716,10 +716,12 @@ class PublishedEODMarketDataProvider:
         reader: MarketDataReader | None = None,
         universe: str = "SP500",
         benchmark_universe: str = US_EQUITY_COVERAGE,
+        require_benchmark: bool = False,
     ) -> None:
         self.reader = reader or MarketDataReader()
         self.universe = str(universe).upper()
         self.benchmark_universe = str(benchmark_universe).upper()
+        self.require_benchmark = bool(require_benchmark)
         self.last_diagnostics: dict[str, Any] = {}
 
     @staticmethod
@@ -800,19 +802,28 @@ class PublishedEODMarketDataProvider:
             if benchmark in set(bars["ticker"].astype(str)):
                 benchmark_bars = bars.loc[bars["ticker"].eq(benchmark)].copy()
             else:
-                benchmark_version = self.reader.require_latest(
-                    self.benchmark_universe,
-                    require_price_semantics=True,
-                )
-                benchmark_bars = self._normalize_bars(
-                    self.reader.load_bars(
+                try:
+                    benchmark_version = self.reader.require_latest(
                         self.benchmark_universe,
-                        tickers=[benchmark],
-                        start=query_start,
-                        end=target,
-                        version=benchmark_version,
-                    ),
-                    source=self.benchmark_universe,
+                        require_price_semantics=True,
+                    )
+                except NoPublishedDataError:
+                    if self.require_benchmark:
+                        raise
+                    benchmark_version = None
+                benchmark_bars = (
+                    self._normalize_bars(
+                        self.reader.load_bars(
+                            self.benchmark_universe,
+                            tickers=[benchmark],
+                            start=query_start,
+                            end=target,
+                            version=benchmark_version,
+                        ),
+                        source=self.benchmark_universe,
+                    )
+                    if benchmark_version is not None
+                    else bars.iloc[:0].copy()
                 )
         except DataFoundationError as exc:
             raise PublishedMarketDataError(
@@ -857,7 +868,7 @@ class PublishedEODMarketDataProvider:
             _published_path(version.bars_path),
             _published_path(version.universe_path),
         ]
-        if benchmark_version.version_id != version.version_id:
+        if benchmark_version is not None and benchmark_version.version_id != version.version_id:
             input_paths.extend(
                 [
                     _published_path(benchmark_version.bars_path),
@@ -876,12 +887,12 @@ class PublishedEODMarketDataProvider:
             "missing_symbols": sorted(set(normalized) - loaded),
             "benchmark": benchmark,
             "benchmark_loaded": benchmark_loaded,
-            "benchmark_universe": benchmark_version.universe,
-            "benchmark_dataset_version_id": benchmark_version.version_id,
+            "benchmark_universe": self.benchmark_universe if benchmark_version is None else benchmark_version.universe,
+            "benchmark_dataset_version_id": benchmark_version.version_id if benchmark_version is not None else None,
             "benchmark_target_session": (
-                benchmark_version.target_session.isoformat()
+                benchmark_version.target_session.isoformat() if benchmark_version is not None else None
             ),
-            "benchmark_bars_sha256": benchmark_version.checksum_sha256,
+            "benchmark_bars_sha256": benchmark_version.checksum_sha256 if benchmark_version is not None else None,
             "query_start": query_start.date().isoformat() if query_start is not None else None,
             "query_end": target.date().isoformat() if target is not None else None,
             "liquidity_lookback_sessions": 60,

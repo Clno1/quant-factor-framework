@@ -88,14 +88,17 @@ def sharpe_ratio(daily_ret: pd.Series, rf: float | None = None) -> float:
     return float(ex.mean() / sd * np.sqrt(_periods_per_year()))
 
 
+def drawdown_series(daily_ret: pd.Series) -> pd.Series:
+    """Drawdown from the high-water mark, including starting capital of one."""
+    nav = (1.0 + daily_ret.dropna()).cumprod()
+    return nav / nav.cummax().clip(lower=1.0) - 1.0
+
+
 def max_drawdown(daily_ret: pd.Series) -> float:
     r = daily_ret.dropna()
     if r.empty:
         return np.nan
-    nav = (1.0 + r).cumprod()
-    peak = nav.cummax()
-    dd = nav / peak - 1.0
-    return float(dd.min())
+    return float(drawdown_series(r).min())
 
 
 def calmar_ratio(daily_ret: pd.Series) -> float:
@@ -200,6 +203,7 @@ __all__ = [
     "annualized_volatility",
     "sharpe_ratio",
     "max_drawdown",
+    "drawdown_series",
     "calmar_ratio",
     "win_rate",
     "performance_summary",

@@ -160,8 +160,8 @@ def _prepare_broad_universe(
 
 def _quote_datetime(quote: pd.Series) -> datetime:
     timestamp = _finite(quote.get("timestamp"))
-    if timestamp is None:
-        return datetime.now(_NEW_YORK)
+    if timestamp is None or timestamp <= 0:
+        raise ValueError("Quote has no valid source timestamp")
     return datetime.fromtimestamp(timestamp, tz=timezone.utc).astimezone(_NEW_YORK)
 
 
@@ -301,8 +301,16 @@ def run_live_alert_scan(
     if quotes.empty:
         raise RuntimeError("FMP batch-quote returned no rows for the broad momentum pool")
 
-    quote_times = [_quote_datetime(row) for _, row in quotes.iterrows()]
-    quote_time = max(quote_times)
+    quote_times: dict[str, datetime] = {}
+    quote_rejections: dict[str, str] = {}
+    for ticker, row in quotes.iterrows():
+        try:
+            quote_times[ticker] = _quote_datetime(row)
+        except (ValueError, OverflowError, OSError):
+            quote_rejections[ticker] = "INVALID_SOURCE_TIMESTAMP"
+    if not quote_times:
+        raise RuntimeError("FMP batch-quote returned no valid source timestamps")
+    quote_time = max(quote_times.values())
     quote_date = pd.Timestamp(quote_time.date())
     session_date = quote_date.strftime("%Y-%m-%d")
     metadata = universe.set_index("ticker", drop=False)
@@ -321,6 +329,18 @@ def run_live_alert_scan(
             unavailable.append(ticker)
             continue
         quote = quotes.loc[ticker]
+        ticker_time = quote_times.get(ticker)
+        if ticker_time is None:
+            unavailable.append(ticker)
+            continue
+        if (
+            ticker_time.date() != quote_time.date()
+            or (quote_time - ticker_time).total_seconds() > settings.max_quote_lag_seconds
+        ):
+            quote_rejections[ticker] = "STALE_SOURCE_TIMESTAMP"
+            unavailable.append(ticker)
+            continue
+        ticker_date = pd.Timestamp(ticker_time.date())
         frame = daily.frame(ticker)
         if frame.empty:
             unavailable.append(ticker)
@@ -333,12 +353,12 @@ def run_live_alert_scan(
             name = name or str(meta.get("name") or "")
             sector = str(meta.get("sector") or "")
             asset_type = str(meta.get("asset_type") or "")
-        provisional = _provisional_daily_frame(frame, quote, quote_date)
+        provisional = _provisional_daily_frame(frame, quote, ticker_date)
         metric = evaluate_daily_setup(
             provisional,
             ticker=ticker,
             filters=strict_filters,
-            asof=quote_date,
+            asof=ticker_date,
             name=name,
             sector=sector,
         )
@@ -347,7 +367,7 @@ def run_live_alert_scan(
             continue
         completed_avg = _completed_avg_dollar_volume(
             frame,
-            quote_date=quote_date,
+            quote_date=ticker_date,
             market_open=market_open,
         )
         metric["avg_dollar_volume_20d"] = completed_avg
@@ -358,7 +378,7 @@ def run_live_alert_scan(
         if not metric["base_pass"]:
             continue
         metric["asset_type"] = asset_type
-        metric["quote_timestamp"] = _quote_datetime(quote).isoformat(timespec="seconds")
+        metric["quote_timestamp"] = ticker_time.isoformat(timespec="seconds")
         metric["signal_type"] = _signal_type(metric)
         metric["forced_watch"] = ticker in forced
         rows.append(metric)
@@ -414,6 +434,7 @@ def run_live_alert_scan(
         "forced_tickers": sorted(forced),
         "excluded_forced_tickers": sorted(excluded_forced),
         "unavailable_tickers": unavailable,
+        "quote_rejections": quote_rejections,
         "intraday_enabled": bool(use_intraday),
         "rows": rows,
     }

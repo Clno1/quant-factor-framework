@@ -25,6 +25,7 @@ import re
 import time
 from typing import Any, Iterable
 
+import numpy as np
 import pandas as pd
 import requests
 
@@ -1041,6 +1042,44 @@ def get_canonical_historical_ohlcv(
     canonical.attrs["price_semantics_source"] = (
         "FMP_FULL_PLUS_DIVIDEND_ADJUSTED"
     )
+    return canonical
+
+
+def get_unadjusted_historical_close(symbol: str, start: str, end: str) -> pd.Series:
+    """Observed nominal prices for PIT dollar thresholds, never return prices.
+
+    Source: FMP stable historical-price-eod/non-split-adjusted. Missing or
+    malformed data is an error; split-adjusted close is not a substitute.
+    """
+    data = _get("/historical-price-eod/non-split-adjusted",
+                params={"symbol": symbol, "from": start, "to": end})
+    rows = data if isinstance(data, list) else (data.get("historical") or data.get("data") or []) if isinstance(data, dict) else []
+    frame = pd.DataFrame(rows)
+    if "close" not in frame and "adjClose" in frame:
+        # Some stable chart responses retain the chart-family field names;
+        # units here are defined by the non-split-adjusted endpoint itself.
+        frame = frame.rename(columns={"adjClose": "close"})
+    if frame.empty or not {"date", "close"}.issubset(frame.columns):
+        raise ValueError(f"{symbol}: missing unadjusted historical close")
+    dates = pd.to_datetime(frame["date"], errors="coerce").dt.normalize()
+    values = pd.to_numeric(frame["close"], errors="coerce")
+    if dates.isna().any() or dates.duplicated().any() or values.isna().any() or not np.isfinite(values).all() or values.le(0).any():
+        raise ValueError(f"{symbol}: invalid unadjusted historical close")
+    series = pd.Series(values.to_numpy(), index=pd.DatetimeIndex(dates), name="unadjusted_close").sort_index()
+    series.index.name = "date"
+    return series.loc[pd.Timestamp(start):pd.Timestamp(end)]
+
+
+def get_coverage_historical_ohlcv(symbol: str, start: str, end: str) -> pd.DataFrame | None:
+    """Canonical return/execution bars plus independently sourced nominal close."""
+    canonical = get_canonical_historical_ohlcv(symbol, start, end)
+    if canonical is None or canonical.empty:
+        return None
+    nominal = get_unadjusted_historical_close(symbol, start, end)
+    canonical = canonical.copy()
+    canonical["unadjusted_close"] = nominal.reindex(canonical.index)
+    if canonical["unadjusted_close"].isna().any():
+        raise ValueError(f"{symbol}: unadjusted prices do not cover canonical history")
     return canonical
 
 

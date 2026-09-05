@@ -101,12 +101,17 @@ def _event_outcomes(
     dates = pd.DatetimeIndex(frame.index).normalize()
     execution_position = signal_position + 1
     if execution_position >= len(frame):
-        return {
+        censored = {
             "execution_date": None,
             "entry_open": np.nan,
             "entry_total_return_open": np.nan,
             "censored_entry": True,
         }
+        for horizon in horizons:
+            prefix = f"h{int(horizon)}"
+            censored.update({f"{prefix}_exit_date": None, f"{prefix}_censored": True})
+            censored.update({f"{prefix}_{field}": np.nan for field in ("gross_return", "net_return", "mae", "mfe")})
+        return censored
 
     semantics = _frame_semantics(frame)
     execution_open = semantics.execution_open["_"]
@@ -135,8 +140,11 @@ def _event_outcomes(
             continue
         exit_total = float(total_return_open.iloc[exit_position])
         gross = exit_total / entry_total - 1.0
-        path_low = low_adjusted.iloc[execution_position : exit_position + 1]
-        path_high = high_adjusted.iloc[execution_position : exit_position + 1]
+        # The exit is at OPEN. Include its gap, but none of that day's later
+        # high/low observations after the position has already been closed.
+        endpoints = pd.Series([entry_total, exit_total])
+        path_low = pd.concat([low_adjusted.iloc[execution_position:exit_position], endpoints])
+        path_high = pd.concat([high_adjusted.iloc[execution_position:exit_position], endpoints])
         mae = float(path_low.min() / entry_total - 1.0) if path_low.notna().any() else np.nan
         mfe = float(path_high.max() / entry_total - 1.0) if path_high.notna().any() else np.nan
         out[f"{prefix}_exit_date"] = dates[exit_position].strftime("%Y-%m-%d")
@@ -262,10 +270,11 @@ def _summary_for_events(
     }
     for horizon in horizons:
         prefix = f"h{int(horizon)}"
-        returns = pd.to_numeric(events.get(f"{prefix}_net_return"), errors="coerce").dropna()
-        censored = events.get(f"{prefix}_censored", pd.Series(dtype=bool)).fillna(True)
-        mae = pd.to_numeric(events.get(f"{prefix}_mae"), errors="coerce").dropna()
-        mfe = pd.to_numeric(events.get(f"{prefix}_mfe"), errors="coerce").dropna()
+        missing = pd.Series(np.nan, index=events.index)
+        returns = pd.to_numeric(events.get(f"{prefix}_net_return", missing), errors="coerce").dropna()
+        censored = events.get(f"{prefix}_censored", pd.Series(True, index=events.index)).fillna(True)
+        mae = pd.to_numeric(events.get(f"{prefix}_mae", missing), errors="coerce").dropna()
+        mfe = pd.to_numeric(events.get(f"{prefix}_mfe", missing), errors="coerce").dropna()
         out[f"{prefix}_observations"] = int(len(returns))
         out[f"{prefix}_censored"] = int(censored.sum())
         out[f"{prefix}_mean_return"] = float(returns.mean()) if len(returns) else np.nan

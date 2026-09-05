@@ -1,0 +1,59 @@
+{
+  "roll_forward_no_event": {
+    "error": "no securities passed broad PIT eligibility",
+    "previous_members": [
+      "AAA",
+      "BBB"
+    ],
+    "full_rebuild_passed": true
+  },
+  "future_split_membership": {
+    "same_historical_selection_date": "2024-01-31",
+    "before": {
+      "price": 2.0,
+      "adv": 6000000.0,
+      "eligible": true
+    },
+    "later_provider_vintage": {
+      "price": 0.2,
+      "adv": 6000000.0,
+      "eligible": false
+    }
+  },
+  "broad_append_split": {
+    "stored_closes": [
+      100.0,
+      50.0
+    ],
+    "computed_total_return": -0.5,
+    "economically_correct_total_return": 0.0
+  },
+  "broad_append_cash_dividend": {
+    "stored_closes": [
+      100.0,
+      99.0
+    ],
+    "computed_total_return": -0.010000000000000009,
+    "economically_correct_total_return": 0.0
+  },
+  "mag7_support_as_factor_member": {
+    "expected_members": 7,
+    "actual_members": 8,
+    "QQQ_is_current_member": false,
+    "QQQ_passes_factor_mask": true,
+    "columns": [
+      "AAPL",
+      "AMZN",
+      "GOOGL",
+      "META",
+      "MSFT",
+      "NVDA",
+      "QQQ",
+      "TSLA"
+    ]
+  },
+  "resume_config_not_bound": {
+    "identity_equal_after_config_change": true,
+    "old_completed_partition_accepted": true
+  }
+}

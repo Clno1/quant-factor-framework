@@ -40,6 +40,10 @@
             </div>
         </header>
         <div class="content">
+            <section class="empty-state" data-snapshot-warning role="alert" {% if snapshot_freshness.status != 'STALE' %}hidden{% endif %}>
+                <h2>运维采集状态需要确认</h2>
+                <p data-snapshot-warning-text>{{ snapshot_freshness.reason }}</p>
+            </section>
             {% block content %}{% endblock %}
         </div>
     </main>

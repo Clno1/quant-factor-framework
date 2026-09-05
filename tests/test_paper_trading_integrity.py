@@ -64,6 +64,98 @@ def _pending_order(account_id: str) -> pd.DataFrame:
     }])
 
 
+def _cross_day_fixture(monkeypatch, tmp_path):
+    _paper_root(monkeypatch, tmp_path)
+    account = _account(str(uuid4()))
+    account["execution"]["slippage_model"] = "none"
+    dates = pd.to_datetime(["2026-01-05", "2026-01-06", "2026-01-07"])
+    target = SimpleNamespace(decision_date="2026-01-07", data_contract={"dataset_version_id": "new"},
+                             open_prices=pd.DataFrame({"A": [100., np.nan, 100.], "B": [100., 100., 100.]}, index=dates),
+                             volumes=pd.DataFrame(1_000_000., index=dates, columns=["A", "B"]))
+    ledger = pd.DataFrame([dict(fill_id="initial", order_id="initial-order", ticker="A", side="BUY", quantity=10,
+                                fill_date="2026-01-05", filled_at="2026-01-05T14:30:00Z", raw_open_price=100.,
+                                fill_price=100., notional=1000., fee=0., dataset_version_id="old")])
+    orders = pd.DataFrame([dict(order_id=f"order-{side}", ticker=ticker, side=side, quantity=10,
+                                decision_date="2026-01-05", status="pending", ref_price=100.)
+                           for side, ticker in (("SELL", "A"), ("BUY", "B"))])
+    store.save_table(account["id"], "fills", ledger)
+    store.save_table(account["id"], "orders", orders)
+    return account, target, ledger
+
+
+def test_cross_day_pending_orders_cannot_use_future_sale_cash(monkeypatch, tmp_path):
+    account, target, ledger = _cross_day_fixture(monkeypatch, tmp_path)
+    cash, positions = runner._state_from_fill_ledger(account, ledger)
+    cash, fills, orders = runner._fill_pending_orders(account=account, target=target,
+        cash=cash, positions_map=positions, cutoff="2026-01-07")
+    assert [(row["side"], row["fill_date"]) for row in fills] == [("SELL", "2026-01-07")]
+    assert orders.set_index("side").loc["BUY", "reject_reason"] == "insufficient_cash"
+    assert cash == pytest.approx(1000.)
+    assert positions == {}
+    runner._state_from_fill_ledger(account, store.load_table(account["id"], "fills"))
+
+
+def test_failed_order_projection_retry_cannot_backdate_a_buy(monkeypatch, tmp_path):
+    account, target, ledger = _cross_day_fixture(monkeypatch, tmp_path)
+    monkeypatch.setattr(runner, "now_iso", lambda: "2026-01-07T21:00:00Z")
+    save = runner.save_table
+    def fail_orders(account_id, name, frame):
+        if name == "orders":
+            raise OSError("interrupted projection")
+        return save(account_id, name, frame)
+    monkeypatch.setattr(runner, "save_table", fail_orders)
+    cash, positions = runner._state_from_fill_ledger(account, ledger)
+    with pytest.raises(OSError, match="interrupted projection"):
+        runner._fill_pending_orders(account=account, target=target, cash=cash, positions_map=positions, cutoff="2026-01-07")
+    monkeypatch.setattr(runner, "save_table", save)
+    cash, positions = runner._state_from_fill_ledger(account, store.load_table(account["id"], "fills"))
+    _, fills, _ = runner._fill_pending_orders(account=account, target=target, cash=cash, positions_map=positions, cutoff="2026-01-07")
+    assert [(row["side"], row["fill_date"]) for row in fills] == [("BUY", "2026-01-07")]
+    cash, _ = runner._state_from_fill_ledger(account, store.load_table(account["id"], "fills"))
+    assert cash == pytest.approx(0.)
+
+
+def test_fill_ledger_rejects_funding_from_later_cash_events():
+    ledger = pd.DataFrame([dict(fill_id="buy", ticker="A", side="BUY", quantity=1,
+                                fill_date="2026-01-06", fill_price=100., notional=100., fee=0.)])
+    cash_events = pd.DataFrame([dict(event_id="cash", date="2026-01-07", amount=100.)])
+    with pytest.raises(ValueError, match="unavailable cash"):
+        runner._state_from_fill_ledger({"initial_cash": 0.}, ledger, cash_events)
+    cash_events["date"] = "2026-01-06"
+    assert runner._state_from_fill_ledger({"initial_cash": 0.}, ledger, cash_events)[0] == 0.
+
+
+def test_future_dividend_does_not_increase_an_earlier_order_budget(monkeypatch, tmp_path):
+    account, target, ledger = _cross_day_fixture(monkeypatch, tmp_path)
+    ledger.loc[:, "quantity"] = 5
+    ledger.loc[:, "notional"] = 500.
+    store.save_table(account["id"], "fills", ledger)
+    store.save_table(account["id"], "orders", pd.DataFrame([dict(
+        order_id="buy", ticker="B", side="BUY", quantity=6, decision_date="2026-01-05", status="pending")]))
+    target.prices = pd.DataFrame({"A": [100., 100., 80.], "B": [100., 100., 100.]}, index=target.open_prices.index)
+    target.total_return_close_prices = target.prices * 0 + 100.
+    cash, positions = runner._state_from_fill_ledger(account, ledger)
+    _, fills, _ = runner._fill_pending_orders(account=account, target=target, cash=cash, positions_map=positions, cutoff="2026-01-07")
+    assert fills[0]["quantity"] == 5
+    assert fills[0]["fill_date"] == "2026-01-06"
+
+
+def test_split_units_block_before_valuation_but_ordinary_moves_do_not(monkeypatch, tmp_path):
+    account, target, ledger = _cross_day_fixture(monkeypatch, tmp_path)
+    target.prices = target.open_prices.ffill()
+    runner._validate_execution_units(account=account, target=target, fills=ledger, orders=pd.DataFrame())
+    target.open_prices.loc["2026-01-05", "A"] = 50.
+    with pytest.raises(ValueError, match="PAPER_PRICE_UNITS_CHANGED"):
+        runner._validate_execution_units(account=account, target=target, fills=ledger, orders=pd.DataFrame())
+    target.open_prices.loc["2026-01-05", "A"] = 100.
+    target.prices.loc["2026-01-07", "A"] = 50.  # An ordinary current-day drop.
+    runner._validate_execution_units(account=account, target=target, fills=ledger, orders=pd.DataFrame())
+    target.prices.loc["2026-01-05", "B"] = 50.
+    pending = store.load_table(account["id"], "orders").query("side == 'BUY'")
+    with pytest.raises(ValueError, match="PAPER_PRICE_UNITS_CHANGED"):
+        runner._validate_execution_units(account=account, target=target, fills=pd.DataFrame(), orders=pending)
+
+
 def test_fill_ledger_makes_partial_fill_retry_idempotent(
     monkeypatch,
     tmp_path,

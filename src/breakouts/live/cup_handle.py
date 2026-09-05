@@ -14,7 +14,7 @@ from src.breakouts.live.models import BreakoutSignal, DailyCandidate, QuoteSnaps
 from src.breakouts.live.settings import IntradayMonitorSettings
 
 
-CUP_HANDLE_ALGORITHM_VERSION = "daily-cup-5m-handle-shadow-v2"
+CUP_HANDLE_ALGORITHM_VERSION = "daily-cup-5m-handle-shadow-v3"
 CUP_HANDLE_PARAMETER_VERSION = "2026-09-01.1"
 CUP_HANDLE_TRIGGER_FAMILY = "CUP_HANDLE_BREAKOUT"
 
@@ -460,12 +460,18 @@ class CupHandleDetector:
         cup_midpoint = candidate.cup_bottom + (rim - candidate.cup_bottom) * 0.5
         baseline_volume = sum(float(bar["volume"] or 0.0) for bar in baseline) / len(baseline)
         handle_volume = sum(float(bar["volume"] or 0.0) for bar in handle) / len(handle)
+        if baseline_volume <= 0 or handle_volume <= 0 or float(current["volume"] or 0.) <= 0:
+            return self._result(
+                started=started, candidate=candidate, session_date=session_date,
+                now=now, bars=bars, outcome="REJECTED", reason="INSUFFICIENT_VOLUME_EVIDENCE",
+                details={**common, "baseline_volume": baseline_volume, "handle_volume": handle_volume,
+                         "breakout_volume": float(current["volume"] or 0.)},
+            )
         handle_volume_ratio = (
-            handle_volume / baseline_volume if baseline_volume > 0 else float("inf")
+            handle_volume / baseline_volume
         )
         breakout_volume_ratio = (
             float(current["volume"] or 0.0) / handle_volume
-            if handle_volume > 0 else float("inf")
         )
         details = {
             **common,

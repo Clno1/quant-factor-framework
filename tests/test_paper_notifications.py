@@ -78,6 +78,23 @@ def test_fill_payload_contains_execution_cost_contract():
     assert "2026-08-28" in rendered
 
 
+def test_daily_summary_retry_keeps_the_first_frozen_payload(tmp_path, monkeypatch):
+    import src.papertrading.notifications as notifications
+    from src.papertrading.notification_state import KIND_DAILY_SUMMARY
+
+    monkeypatch.setattr(notifications, "list_accounts", lambda: [])
+    state = PaperNotificationState(tmp_path / "outbox.sqlite3")
+    service = PaperNotificationService(_settings(state.path), state=state)
+    assert service.stage_daily_summary(target_session="2026-01-05")
+    # A repeat builds a different wall-clock timestamp but cannot rewrite or
+    # prevent delivery of the frozen logical daily message.
+    assert not service.stage_daily_summary(target_session="2026-01-05")
+    claim = state.claim_next(kinds={KIND_DAILY_SUMMARY}, max_attempts=3)
+    assert claim is not None
+    assert claim.delivery_id == "paper-daily:2026-01-05"
+    assert not service.stage_daily_summary(target_session="2026-01-05")
+
+
 def test_outbox_is_immutable_and_exactly_once(tmp_path):
     state = PaperNotificationState(tmp_path / "state.sqlite3")
     payload = {"content": "one", "allowed_mentions": {"parse": []}}

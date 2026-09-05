@@ -486,6 +486,7 @@ class PaperNotificationService:
             target_session=session,
             source_id=session,
             payload=payload,
+            reuse_existing=True,
         )
 
     def drain(self, *, kinds: set[str]) -> dict[str, int]:
