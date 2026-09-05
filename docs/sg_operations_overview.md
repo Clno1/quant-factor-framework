@@ -937,3 +937,138 @@ timer 分别等待 18:30 与 21:20 SGT。
 DEGRADED，并产生 `CUP_HANDLE_SHADOW_SESSION_FAILED` 事件；只有后续同算法版本的完整日 PASS
 才解除。详情页新增证据交易日、最近完整日结论、不可评估数、可评估覆盖率、缺口股票数与比例、唯一
 缺口事件和缺口分类。
+
+## 33. 2026-09-02 FMP 身份漂移与宽基上游恢复
+
+2026-09-01 的茶杯柄 v2 没有运行，直接原因不是分钟检测器，而是候选准备所依赖的宽基生产链在
+Security Master 门禁处停止。FMP 当前资料把同一经济身份暴露为 `UGRO`/`FLZH`，但没有给出可供
+程序自动证明的完整换码事件；类似问题此前还出现在 `SVII`/`NUCL`。系统没有用 ticker 相似度或
+listing fallback 猜测历史，而是依据 SEC 8-K 增加精确、带生效日的纠正规则。
+
+修复同时纠正了 PIT 交易所语义：`UGRO` 在 2026-06-15 前按历史 Nasdaq 状态参与资格判断，
+`FLZH` 从 2026-06-16 起保持 OTC 并被主交易所门槛排除。两次使用同一冻结 FMP 源构建的五张
+Parquet 表哈希完全一致，正式 Security Master generation 为
+`b99fc58963604831b9534af9600e75f2`，manifest SHA-256 为
+`545875e2b0e591295103221a11a0b33c34e29db00512937367388c2285aa652a`。
+
+同 target 已有 coverage 绑定旧主表时，生产脚本现在要求显式
+`--force-security-master-rebase`，并把 rebase 事实写入审计；普通日更仍然 fail closed。显式重绑完成
+后正式 coverage 为 `a8c3814e7fd444e9b5f0a12cb047aa7f`，10,447,745 行、7,976 只证券、
+93 个分片，完整 child hash 验证通过；systemd 峰值 687.4 MiB、无 swap。随后全量 PIT 发布为
+`bbe1288de3684cc3ab6849954cbd9507`，当前成员 2,849，membership 226,095 行，历史日线覆盖门禁
+通过；脚本 `ru_maxrss` 为 732.5 MiB，cgroup 峰值为 215.7 MiB，两种统计口径均保留。
+
+八因子 generation `2db3832266ed462cb6d47a49777a6b4c` 正从认证 checkpoint 构建 648 个
+factor-month 分片。由于 SG 只有约 2 GiB 内存且无 swap，18:30 候选准备和因子重建不得无监控地
+并行争抢资源；必要时先停止因子服务，候选完成后从 checkpoint 恢复。茶杯柄 v2 仍为 `0/5`，
+2026-09-01 缺少完整运行不得计数，发送保持关闭。
+
+生产备份位于：
+
+```text
+/home/projects/quant-backups/ugro-flzh-pit-exchange-20260902T1230CST
+```
+
+旧 coverage/PIT/factor generation、原始 staging 和身份审计不得删除或改写。
+
+18:24 SGT 为避免 2 GiB、无 swap 的机器同时运行八因子和候选准备，八因子在认证 checkpoint
+`287/648` 处受控停止；readiness 被临时 runtime mask，因而没有把人工停止误报成正式完成。
+18:30 候选服务准时启动，18:57:10 成功生成 session 2026-09-02 的 600 只候选，绑定 source
+2026-09-01 和 coverage `a8c3814e7fd444e9b5f0a12cb047aa7f`。日线杯体评估 2,848 只，合格
+1,314 只；耗时 1,606.824 秒、峰值 604.5 MiB、swap 0。
+
+候选运行时确认软高水位 500 MiB 触发大量 `memory.events.high` 并进入 cgroup 回收节流。仅将本次
+runtime `MemoryHigh` 临时提高到 620 MiB，保留 700 MiB 硬上限、单核和 swap 禁用；完成后已恢复
+500 MiB。19:00 SGT readiness mask 已解除，八因子从 `287/648` 继续，后续发布、readiness 和
+shadow 仍由原 OnSuccess 链执行。
+
+## 34. 2026-09-02 八因子发布拒绝与凌晨重建
+
+恢复后的八因子任务完成了 648/648 个分片，但 publication gate 正确拒绝发布：9 月月初单交易日
+分片中，四个动量因子和 REVERSAL 的暖机资格为 0，另三个因子正常。根因是 XNYS
+`sessions_window` 包含锚定输出日，旧 `-N` 调用实际只加载 N-1 个历史交易日。这不是 FMP、PIT、
+磁盘或内存故障，也不能通过降低 latest coverage 门槛解决。
+
+修复已把合同升级到 `BROAD_FACTOR_INPUT_V3_EXACT_WARMUP_XNYS`，旧失败 generation
+`2db3832266ed462cb6d47a49777a6b4c` 保留为审计证据。SG 定向回归 53 passed，完整正式测试目录
+651 passed。第一次完整测试失败的原因是 9 个 macOS AppleDouble 元数据文件被隔离测试误当源码；
+文件已移入备份目录而非删除，重新运行后无业务失败。
+
+一次性 `quant-broad-factor-warmup-rebuild-trigger.timer` 已安装、启用并通过
+`systemd-analyze verify`，触发时间为 2026-09-03 04:20 SGT。它只 reset failed 并启动现有
+`quant-broad-factor-data.service`，不会绕过服务原有资源、flock、publication 或 readiness 合同。
+该时间位于茶杯柄收盘日结之后、次日核心行情任务之前。若茶杯柄监控异常延迟，必须优先检查资源并
+停止重建触发，禁止两项重任务并行。
+
+截至 20:33 SGT，2026-09-02 茶杯柄 v2 候选已就绪，盘中服务仍等待 21:20 SGT；观察保持 0/5，
+发送保持关闭。候选成功不能替代完整盘中日结。
+
+## 35. 2026-09-03 茶杯柄 v2 首日生产验收
+
+2026-09-02 茶杯柄 v2 完整日结通过，独立 shadow 为 `1/5`，剩余 4 个通过日。候选服务 exit 0，
+耗时 1,606.824 秒、峰值 604.5 MiB、swap 0；盘中服务 exit 0，运行约 6 小时 45 分，峰值
+143.2 MiB、swap 0。候选绑定 coverage `a8c3814e7fd444e9b5f0a12cb047aa7f` 和 PIT
+`bbe1288de3684cc3ab6849954cbd9507` 的完整哈希合同。
+
+盘中 2,840 次评估包含拒绝 2,242、等待 548、不可评估 50、命中 0、错误 0；71/78 周期、
+96.55% 可评估覆盖率、3.45% 缺口证券比例、0.595 ms P95 和 77 根最大序列均通过门槛。唯一缺口
+事件共 15 个，只涉及 AD 与 UAN：`NO_TRADE_CONFIRMED=5`、
+`UNRESOLVED_SOURCE_GAP=10`、`PROVIDER_GAP_CONFIRMED=0`。
+
+修复了新加坡上午的 shadow 进度少算一天问题：完整交易日现在按 XNYS 收盘加 5 分钟判断，不再等
+纽约午夜。SG 备份为 `/home/projects/quant-backups/cup-shadow-completed-session-20260903T115615CST`，
+两个定向测试通过，CLI 和运维快照均显示 `1/5`。候选、盘中、watchdog 和运维 Web timer/service
+均健康；茶杯柄发送仍为 false。
+
+运维任务总卡片当前仍为 DEGRADED，是 legacy 动量同日 70 个错误周期导致，不是茶杯柄 v2 失败。
+茶杯柄 PASS 台账与 legacy 动量 FAIL 台账必须继续分开解释和计数。MDB 回放仍为 0 信号且误报代理
+为 null。
+
+## 36. 2026-09-04 茶杯柄 v2 第二日与候选 SLA
+
+2026-09-03 茶杯柄 v2 完整日结通过，独立 shadow 为 `2/5`，剩余 3 个通过日。正式候选绑定
+coverage `fc81ee7a559b4509a74576791633c3ba`、PIT
+`1750d58d3160438093f03a0360f692c9`、Security Master
+`5748aeacb53142f4ade15038f0b98ba2` 和完整文件哈希。盘中 71/78 周期、2,840 次评估、1 次命中、
+2,356 次拒绝、476 次等待、7 次不可评估、0 错误；可评估覆盖率 98.15%、缺口股票比例 1.85%、
+P95 0.583 ms、最大 77 根均通过。CQP 的两个唯一缺口均为 `UNRESOLVED_SOURCE_GAP`。
+
+首个 v2 命中为 CTNM，outbox 状态保持 `SHADOW`，发送开关仍为 false。MDB 历史回放仍为 0 信号、
+误报代理 null；CTNM 的后续误报代理尚未成熟。
+
+候选准备服务出现独立运维故障：18:30 SGT 启动后在 19:30 被 `TimeoutStartSec=1h` 终止，峰值
+558.1 MiB、CPU 41 分 13 秒、swap 0。500 MiB 软高水位造成持续内存回收，快照实际由 21:20
+启动的盘中服务重建并于约 21:31 完成，因而茶杯柄只记录到 71/78 周期。盘中服务 exit 0，峰值
+768 MiB、swap 0；watchdog 和运维 Web 健康。该日业务门槛通过不等于候选 SLA 正常，下次运行前
+需消除盘前构建超时，且不能降低茶杯柄数据质量门槛。
+
+持久 unit 已将候选服务 `MemoryHigh` 调整为 620 MiB，保留 700 MiB 硬上限、单核、无 swap 和
+1 小时超时；这是复用 2026-09-02 已成功完成候选构建的资源口径。下一次 18:30 SGT 运行必须
+重新核对完成时间、`memory.events.high` 增量、峰值和候选快照生成时间，失败时不得由盘中回退掩盖。
+
+## 37. 2026-09-05 FLZH 生命周期门禁与茶杯柄缺跑
+
+2026-09-04 宽基日更连续两次在 Security Master 阶段失败，正式 coverage 因而停在
+2026-09-02 版本 `fc81ee7a559b4509a74576791633c3ba`。这不是内存或网络问题：资源预检为 PASS，
+宽基服务失败前峰值 556.6 MiB、无 swap；准确错误是
+`ugro_to_flzh_name_and_symbol_change: FLZH provider is_active drifted`。随后 18:30 候选准备和
+21:20 盘中监控都因 coverage 过期而 fail closed，2026-09-04 没有茶杯柄候选、评估或日结，不能
+计入 v2 shadow。当前通过日仍为 2026-09-02、2026-09-03，即 `2/5`。
+
+两份不可变 FMP 冻结源都证明这是稳定的供应商生命周期变化：FLZH 与 UGRO 继续共享 CUSIP/ISIN，
+换码日仍为 2026-06-16，但 FLZH 当前 profile 为 INACTIVE，退市表精确记录其于 2026-08-26 从
+OTC 退市。配置和构建器现只在 ticker、日期、交易所及公司名四项证据全部匹配时接受 inactive；
+不是把 `is_active` 改成任意布尔值，也没有降低身份覆盖、PIT 或普通股门槛。
+
+部署前备份为 `/home/projects/quant-backups/flzh-lifecycle-20260905T004551CST`。同一失败冻结源重建
+两次均 PASS，五张候选 Parquet 逐表哈希完全一致；第二份独立冻结源也 PASS，活跃普通股均为
+5,350。Security Master 定向测试 14 项、下游宽基与 Web 82 项、SG 完整回归 655 项全部通过。
+修复后的 `quant-us-equity-coverage.timer` 已于 2026-09-05 11:31 SGT 触发并成功完成全链日更。
+Security Master `3ea8a269a67a4797be8bfcbfb2d7ae78`、coverage
+`2f31ea50b7484e038ca977b252679f43` 和 PIT `25cec81b68304b3a85e7829b31313567` 均绑定
+2026-09-04；全链耗时 544.825 秒，systemd 峰值 701.9 MiB、无 swap。八因子 OnSuccess 后续链随后
+从认证 checkpoint 继续，核查时进度为 483/648、cgroup 约 700 MiB、无 swap。
+
+相关 timer 均为 enabled/active，资源检查有约 1,200 MiB 可用内存和 35.9 GiB 可用磁盘。
+watchdog 与运维 Web 正常；2026-09-04 缺跑仍不得补记。茶杯柄发送为 false，下一可计数的完整
+XNYS 交易日必须重新满足 v2 全部质量门槛。

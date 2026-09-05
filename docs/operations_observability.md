@@ -662,3 +662,107 @@ ERROR，而是写入唯一的 `cup_handle_data_gaps` 事件并把当次结果标
 FAIL；适配器现在持续生成 `CUP_HANDLE_SHADOW_SESSION_FAILED` WARNING，并让任务保持 DEGRADED。
 详情页的“证据交易日”明确说明计数来自哪一天，避免把尚未开始的新交易日显示成全零并误解为没有
 日志。后续同算法版本完整日 PASS 后，watchdog 才可以按指纹自动解决该事件。
+
+## 30. 2026-09-02 上游阻断与恢复状态语义
+
+茶杯柄候选依赖 Security Master、coverage 和 PIT。任一上游 fail closed 时，运维站必须显示
+`UPSTREAM_DATA_BLOCKED` 或等价的明确原因，不能把“没有候选快照”显示成茶杯柄算法 FAIL，也不能
+生成全零 session 记录。2026-09-01 的 v2 正属于缺少完整运行，因此观察仍为 `0/5`。
+
+FMP 身份漂移修复后，运维证据应公开 Security Master generation/manifest、coverage version、
+PIT version、显式 rebase 审计和完整 child hash 结论。当前恢复链绑定
+`b99fc58963604831b9534af9600e75f2` / `a8c3814e7fd444e9b5f0a12cb047aa7f` /
+`bbe1288de3684cc3ab6849954cbd9507`。普通日更发现同 target 绑定变化仍必须报错；只有人工审阅后的
+显式 rebase 可继续，避免页面“最新”掩盖父版本变化。
+
+资源监控还必须区分进程 RSS、脚本 `ru_maxrss` 与 systemd cgroup `MemoryPeak`。PIT 本次分别记录
+约 732.5 MiB 和 215.7 MiB，两者计量范围不同，不能只挑较小值展示。因子重建与候选准备重叠时，
+运维事件需记录受控停止、checkpoint 进度、恢复时间和候选 SLA；这种主动让路不应记为数据失败，
+但候选若错过截止时间仍必须按 SLA 判为失败。
+
+2026-09-02 的实际交接证明该状态模型生效：八因子在 `287/648` 受控暂停时，未完成 readiness 被
+临时屏蔽；候选卡片随后以 `SUCCESS` 记录 18:30:22 至 18:57:10 的真实运行、600 只候选、source
+2026-09-01 和 coverage `a8c3814e7fd444e9b5f0a12cb047aa7f`。候选峰值 604.5 MiB、swap 0，
+`MemoryHigh` 的临时 620 MiB 调整及恢复必须与硬上限 700 MiB 分开记录。
+
+盘中监控卡片仍为 DEGRADED，因为最近完整茶杯柄证据仍是 v1 的 2026-08-31 FAIL；开放 incident
+`CUP_HANDLE_SHADOW_SESSION_FAILED` 继续存在。今天候选成功没有解决该 incident，也没有新增 v2
+PASS。只有 2026-09-02 完整收盘后产生的 v2 session 结论才可改变观察进度。
+
+## 31. 2026-09-02 因子暖机失败的可观测性口径
+
+八因子进程“完成 648/648 分片”和“正式 publication 成功”是两层不同状态。本次计算层完成，但
+发布层因五个因子最新覆盖率为 0 而 FAIL；运维站必须显示 `PUBLICATION_GATE_REJECTED`、失败因子、
+latest warm-up eligible count、raw/clean coverage 和失败 generation，不能只显示 100% 进度。
+
+根因修复将输入方法从 V2 升为 `BROAD_FACTOR_INPUT_V3_EXACT_WARMUP_XNYS`。运维记录需同时展示
+输入指纹方法和 history start；若 checkpoint 方法不一致，应显示“不可恢复，创建新代次”，而不是
+卡在 648/648 或从旧分片继续。失败代次必须保留，新的 648 分片重算是合同变化的正常成本。
+
+2026-09-03 04:20 SGT 的一次性 timer 已作为独立任务证据注册。其成功标准是：触发器成功、正式
+因子服务新建 V3 generation、八因子全部 latest coverage 通过、publication 完成、readiness 只剩
+既有 PIT 行业历史 blocker。只看到 trigger service 退出 0 不代表重建完成。
+
+SG 完整测试还暴露 AppleDouble 元数据污染：`._*.py` 会让 AST 隔离测试发生 UTF-8 解码错误。
+这应归类为 `DEPLOYMENT_ARTIFACT_CONTAMINATION`，与因子回归失败分开；文件已备份隔离，正式 tests
+目录随后 651 项全部通过。后续从 macOS 部署必须排除 AppleDouble/xattr 伴生文件。
+
+## 32. 2026-09-03 茶杯柄完整交易日计数口径
+
+茶杯柄 v2 的 2026-09-02 日结为 PASS，真实进度是 `1/5`。旧状态命令按纽约“日期”调用
+`previous_xnys_sessions()`，即使当日已经收盘并完成日结，也会一直排除当天直到纽约午夜；这导致
+新加坡 04:05 至 12:00 左右出现最多约 8 小时的进度滞后。修复后 CLI 与 watchdog 共用
+`completed_xnys_sessions()`：只有 XNYS 收盘加 5 分钟后才纳入当天，盘中不提前计数，收盘后也不再
+等待午夜。
+
+当前运维快照公开的茶杯柄证据为：`1/5`、最近完整日 2026-09-02 PASS、命中 0、拒绝 2,242、
+等待 548、不可评估 50、错误 0、可评估覆盖率 96.55%、缺口证券比例 3.45%、P95 0.595 ms、
+最大 77 根。15 个唯一缺口按 `NO_TRADE_CONFIRMED=5`、`UNRESOLVED_SOURCE_GAP=10`、
+`PROVIDER_GAP_CONFIRMED=0` 展示，不将重复观察当作新事件。
+
+同一 systemd 服务仍保留 legacy 动量循环，其 2026-09-02 日结因 70 个错误周期为 FAIL，因而任务
+总卡片目前为 DEGRADED。页面和事故解释必须明确：这是 legacy 子流程失败，茶杯柄 v2 本身已经
+PASS；legacy 记录不得阻止或补充茶杯柄 `1/5` 计数。后续可将两个子流程拆成独立任务状态，但在拆分
+前至少要同时展示两套结论，不能只显示总卡片颜色。
+
+## 33. 2026-09-04 茶杯柄第二日与候选 SLA 告警
+
+2026-09-03 的 v2 茶杯柄日结 PASS，进度为 `2/5`。运维证据包括 71/78 周期、2,840 次评估、
+命中 1、拒绝 2,356、等待 476、不可评估 7、错误 0、可评估覆盖率 98.15%、缺口股票比例
+1.85%、P95 0.583 ms、最大 77 根。两个唯一缺口均来自 CQP，分类为
+`UNRESOLVED_SOURCE_GAP`。CTNM 命中只进入 SHADOW outbox，发送仍关闭。
+
+同一交易日的候选准备服务应单独显示 SLA 失败：服务在 1 小时超时，峰值 558.1 MiB、CPU
+41 分 13 秒、swap 0；快照改由盘中服务重建，造成 7 个五分钟周期未被观察。页面不能因为最终
+茶杯柄 PASS 就隐藏盘前候选超时，也不能把盘中回退当作正常候选生产。建议新增候选生成阶段耗时、
+`memory.events.high` 增量、快照生成时间与开盘时间差、是否由盘中服务回退构建四项指标。
+
+MDB 回放仍为 v1 的零信号样本，`false_positive_rate_proxy=null`；生产 shadow 虽已出现 CTNM
+首个命中，但尚无成熟结果，仍不得显示 0% 误报。
+
+候选 unit 的持久软高水位已从 500 MiB 调整为 620 MiB，硬上限仍为 700 MiB。watchdog 应把下一次
+18:30 SGT 的完成时间、峰值内存与快照生成时间作为修复验收；单纯 timer 触发或盘中回退成功不算
+候选 SLA 恢复。
+
+## 34. 2026-09-05 上游缺跑必须与零信号分离
+
+2026-09-04 没有 v2 `cup_handle_cycles`、`cup_handle_evaluations`、
+`cup_handle_session_observations` 或 `cup_handle_data_gaps`。这四张表的全零不是“执行后没有命中”，
+而是正式 coverage 过期导致候选和盘中任务都 fail closed。页面必须显示上游阻断或任务未运行，
+不得生成全零 PASS/FAIL 日结，也不得把该日计入 `2/5`。
+
+当前运维快照把 `intraday_candidate_prepare` 与 `intraday_momentum` 标为 STALE，并保留三个
+`CRITICAL OPEN` 事故：候选 systemd 失败、盘中 systemd 失败和心跳中断。后续 timer 的 SCHEDULED
+状态不能清除 2026-09-04 的证据；只有修复后的上游发布成功、候选成功且新的完整交易日日结形成后，
+才可按事故指纹解决。运维页面还应把准确依赖链展示为 Security Master -> coverage -> PIT/候选 ->
+盘中评估，而不是把上游身份门禁误报成茶杯柄算法错误。
+
+本次 Security Master 修复的可观测合同新增 `provider_lifecycle` 审计，记录精确退市日、交易所、
+公司名和 INACTIVE 状态。两次同源构建五张 Parquet 哈希一致，第二冻结源也通过；这组证据与
+`655 passed` 回归结果必须和正式发布状态分开显示。2026-09-05 11:31 SGT 日更已经 SUCCESS，
+coverage/PIT 推进到 2026-09-04；后续八因子仍处于 483/648 的 RUNNING，运维站不能把父数据成功
+等同于整个后续链完成，也不能据此补写缺失的 2026-09-04 茶杯柄日结。
+
+茶杯柄最近有效证据仍是 2026-09-03 PASS：54 只候选、2,840 次评估、1 命中、2,356 拒绝、
+476 等待、7 不可评估、0 错误，P95 0.583 ms、最大 77 根。MDB 报告仍是 v1 的 0 信号，
+`false_positive_rate_proxy=null`；零信号与 0% 误报必须继续分开。

@@ -256,3 +256,144 @@ bar，就仅使用这些真实成交聚合 OHLCV，并记录 `source_minute_coun
 95%，缺口股票比例不超过 5%；缺口过多时分别产生
 `INSUFFICIENT_EVALUABLE_TICKER_COVERAGE` 和 `EXCESSIVE_MINUTE_DATA_GAPS`，因此错误去重不会
 降低质量门槛。发送开关继续保持 false。
+
+## 15. 2026-09-02 v2 首个运行日前的上游恢复
+
+`daily-cup-5m-handle-shadow-v2` 当前仍为 `0/5`，不是已经失败 0 次，也不是沿用 v1 的
+2026-08-31 失败结果。2026-09-01 没有产生 v2 完整日结，原因是候选准备依赖的全美宽基数据链在
+Security Master 身份门禁处 fail closed；缺少真实候选快照时不得启动或补记盘中观察。
+
+上游根因是 FMP 没有提供 `UGRO -> FLZH` 和 `SVII -> NUCL` 的可靠换码历史，同时当前证券资料把
+后继代码标为 OTC。系统已根据 SEC 文件增加精确纠正规则，并修复 PIT 交易所口径：历史日期使用
+当时生效 ticker 的交易所，而不是用当前后继 ticker 的 OTC 状态覆盖整段历史。该修复不会让 OTC
+阶段进入 `US_LIQUID_5M`，也不会猜测缺失的身份关系。
+
+2026-09-01 的正式上游版本已恢复到 Security Master
+`b99fc58963604831b9534af9600e75f2`、coverage
+`a8c3814e7fd444e9b5f0a12cb047aa7f` 和 PIT
+`bbe1288de3684cc3ab6849954cbd9507`。八因子正在从认证 checkpoint 重建；候选准备必须在其自己的
+资源窗口内完成，盘中监控仍按 21:20 SGT 启动。只有完整收盘后的 v2 日结同时满足周期覆盖、实际
+评估、错误率、P95、序列上限、可评估覆盖率和缺口比例，才可记为第一个通过日。发送继续保持
+`delivery_enabled=false`。
+
+18:30 SGT 的 v2 候选准备已按时触发并于 18:57:10 成功完成。快照 session 为 2026-09-02、
+source 为 2026-09-01，精确绑定 coverage `a8c3814e7fd444e9b5f0a12cb047aa7f` 和 bars index
+SHA-256 `3364b06f795790e2a93182461d70f5739b5af47e6382ede96b3a6f9e296b3b5f`；日线评估
+2,848 只、合格 1,314 只、冻结 600 只。候选计算耗时 1,606.824 秒，systemd 峰值 604.5 MiB、
+swap 0。原 `MemoryHigh=500M` 触发持续 cgroup reclaim，运行中仅把软高水位临时提高到 620 MiB，
+`MemoryMax=700M` 和禁用 swap 未变；完成后已恢复 500 MiB。该候选成功只满足盘前输入门槛，不能
+代替盘中评估或收盘后的 session PASS。
+
+## 16. 2026-09-02 盘中前最终交接
+
+20:28 SGT 核查时，`quant-intraday-momentum-monitor.service` 尚未运行，timer 明确等待 21:20
+SGT；这属于盘前正常等待。2026-09-02 候选快照已成功冻结 600 只，v2 算法和参数版本已写入快照，
+发送配置仍为 false。状态接口继续展示 v1 的 2026-08-31 FAIL，是因为 v2 尚无完整日结，不能用
+“等待下一次运行”覆盖最后失败证据。
+
+上游八因子虽然完成计算，publication 因暖机窗口 off-by-one 被严格拒绝。该问题不影响今天已经
+冻结的候选和今晚分钟监控；修复后的八因子重建安排在 2026-09-03 04:20 SGT，即盘中服务正常收盘
+日结之后。若今晚服务没有实际产生 `daily-cup-5m-handle-shadow-v2` 的 cycles、evaluations、
+data_gaps 和 session observation，则 2026-09-02 仍不得计数。
+
+明日验收必须报告 v2 的候选、命中、拒绝、等待、不可评估、错误、唯一缺口分类、可评估覆盖率、
+缺口比例、P95 和最大 bar 数。满足全部门槛才记为 1/5；无信号仍不能表述为 0% 误报。
+
+## 17. 2026-09-03 v2 首个完整交易日通过
+
+`daily-cup-5m-handle-shadow-v2` 的 2026-09-02 完整日结为 PASS，因此独立观察正式记为 `1/5`，
+还需要 4 个不同且连续运行的完整 XNYS 交易日。候选快照绑定 coverage
+`a8c3814e7fd444e9b5f0a12cb047aa7f`、PIT `US_LIQUID_5M` 版本
+`bbe1288de3684cc3ab6849954cbd9507`，并保存 membership、eligibility、Security Master 与 manifest
+哈希。日线阶段评估 2,848 只、合格 1,314 只、冻结 600 只；盘中记录 71/78 个五分钟周期，
+周期覆盖率 91.03%。
+
+盘中共评估 2,840 次：命中 0、拒绝 2,242、等待 548、不可评估 50、错误 0。可评估证券为
+56/58，即 96.55%，超过 95% 门槛；缺口证券为 2/58，即 3.45%，低于 5% 门槛；检测 P95 为
+0.595 ms，最大序列 77 根，也分别满足 250 ms 和 96 根门槛。前八原因是
+`HANDLE_TOO_SHALLOW=1961`、`INSUFFICIENT_COMPLETED_5M_BARS=319`、`STALE_QUOTE=196`、
+`HANDLE_VOLUME_NOT_CONTRACTING=156`、`RIM_NOT_BROKEN=125`、
+`UNRESOLVED_5M_SOURCE_GAP=50`、`NO_COMPLETED_5M_BARS=32`、
+`STALE_COMPLETED_5M_BAR=1`。
+
+`cup_handle_data_gaps` 保存 15 个唯一缺口：UAN 有 5 个 `NO_TRADE_CONFIRMED` 和 9 个
+`UNRESOLVED_SOURCE_GAP`，AD 有 1 个 `UNRESOLVED_SOURCE_GAP`；
+`PROVIDER_GAP_CONFIRMED=0`。同一缺口后续只更新观察次数，没有重复制造错误，也没有补造 OHLCV。
+
+状态命令与运维适配器此前使用 `previous_xnys_sessions()`，在纽约午夜前会错误排除已经收盘并完成
+日结的当前交易日，因此新加坡上午曾显示 `0/5`。现已统一改用“XNYS 收盘加 5 分钟后即视为完整”
+的 `completed_xnys_sessions()`；SG 定向测试 2 项通过，CLI 与运维快照均已显示 `1/5`。部署前备份：
+
+```text
+/home/projects/quant-backups/cup-shadow-completed-session-20260903T115615CST
+```
+
+同一服务中的 legacy 动量日结在 2026-09-02 因 70 个错误周期判定 FAIL，所以运维任务总卡片仍可能
+显示 DEGRADED；这不改变茶杯柄 v2 的 PASS 和 `1/5`。两条观察不能混合计数。发送继续保持关闭。
+MDB 回放仍为 v1、110 根完整五分钟 bar、0 信号且误报代理为 null，不能解释为 0% 误报。
+
+## 18. 2026-09-04 v2 第二个完整交易日通过
+
+`daily-cup-5m-handle-shadow-v2` 的 2026-09-03 日结为 PASS，独立观察为 `2/5`，还需 3 个通过日。
+日线候选快照绑定 coverage `fc81ee7a559b4509a74576791633c3ba`、PIT
+`1750d58d3160438093f03a0360f692c9`、Security Master
+`5748aeacb53142f4ade15038f0b98ba2` 及 membership、eligibility、manifest 哈希。日线评估 2,848 只，
+合格 1,329 只，冻结 600 只。
+
+盘中记录 71/78 个五分钟周期，共评估 2,840 次：命中 1、拒绝 2,356、等待 476、不可评估 7、
+错误 0。可评估覆盖率为 53/54，即 98.15%；缺口证券比例为 1/54，即 1.85%；P95 为
+0.583 ms，最大序列 77 根。两个唯一缺口都来自 CQP，分类均为
+`UNRESOLVED_SOURCE_GAP`；没有伪造或前向填充 OHLCV。前八拒绝原因为
+`HANDLE_TOO_SHALLOW=2075`、`INSUFFICIENT_COMPLETED_5M_BARS=349`、
+`HANDLE_VOLUME_NOT_CONTRACTING=148`、`RIM_NOT_BROKEN=132`、`STALE_QUOTE=123`、
+`UNRESOLVED_5M_SOURCE_GAP=7`、`NO_COMPLETED_5M_BARS=3`、
+`BREAKOUT_ALREADY_OCCURRED=1`。
+
+CTNM 在 15:10 ET 的完整五分钟 bar 形成首个 v2 shadow 命中，信号和 outbox 均保存为
+`SHADOW`，没有向 Discord 发送。现有 MDB 回放仍是 v1、0 信号、误报代理 null；CTNM 尚未形成
+已完成的后续结果，因此也不能声称误报率为 0%。
+
+18:30 SGT 候选服务本次在 1 小时后超时，峰值 558.1 MiB、CPU 41 分 13 秒、swap 0。它受
+`MemoryHigh=500M` 持续回收影响，未在盘前窗口保存快照；盘中服务随后以更高内存额度重建快照，
+导致只覆盖 71/78 个五分钟周期。虽然本日仍满足所有严格门槛并可计数，但候选准备 SLA 已失败，
+下一个交易日前应优化构建内存或调整受控资源窗口，不能依赖盘中回退。
+
+已把候选服务的持久 `MemoryHigh` 从 500 MiB 提高到经过 2026-09-02 生产验证的 620 MiB；
+`MemoryMax=700M`、单核、禁用 swap 和 1 小时超时保持不变。该调整只减少软高水位回收，不放宽
+算法或数据门槛；2026-09-04 18:30 SGT 的下一次候选运行用于验证 SLA 是否恢复。
+
+## 19. 2026-09-05 上游阻断与 v2 观察进度
+
+`daily-cup-5m-handle-shadow-v2` 当前仍只有 2026-09-02、2026-09-03 两个 PASS，进度为 `2/5`，
+剩余 3 个通过日。2026-09-04 不是“检测后失败”，而是没有形成候选快照、盘中评估或完整日结，
+因此不得计数，也不得把全零指标解释为零信号。直接原因是正式 `US_EQUITY_COVERAGE` 停在
+2026-09-02；候选服务于 18:30 SGT fail closed，盘中服务从 21:20 起重试四次后触发 start limit，
+错误均为“coverage 过期，期望 2026-09-03”。
+
+共享上游停滞的根因位于 Security Master。FMP 在两份独立冻结源中都把 FLZH 从活跃改为不活跃，
+同时继续提供 `UGRO -> FLZH` 换码、完全一致的 CUSIP/ISIN，以及 FLZH 于 2026-08-26 从 OTC
+退市的记录。原纠正规则只允许换码后的活跃基线，因此正确地拒绝了未审阅的生命周期变化。修复没有
+允许任意 `is_active` 漂移，而是要求目标日在 2026-08-26 之后时同时精确匹配 ticker、退市日、
+OTC 和公司名，缺少任一冻结证据仍报错。
+
+同一冻结源两次候选构建均 PASS，五张 Parquet 的 SHA-256 逐表完全一致；第二份独立冻结源也 PASS，
+活跃普通股数量同为 5,350。FLZH 审计明确保存 `inactive_on_or_after=2026-08-26`、
+`delisted_exchange=OTC`、供应商公司名和 `provider_status=INACTIVE`。SG 定向测试 96 项通过，完整
+回归 `655 passed`。部署前备份位于：
+
+```text
+/home/projects/quant-backups/flzh-lifecycle-20260905T004551CST
+```
+
+修复后的日更已于 2026-09-05 11:31 SGT 运行并在 11:40:43 成功完成。正式 Security Master 为
+`3ea8a269a67a4797be8bfcbfb2d7ae78`，coverage 已推进到 2026-09-04 版本
+`2f31ea50b7484e038ca977b252679f43`，PIT 为 `25cec81b68304b3a85e7829b31313567`，全历史日线
+覆盖门禁通过。八因子后续链正在从认证 checkpoint 重建，核查时为 483/648；这证明共享上游已经恢复，
+但不会补造 2026-09-04 的茶杯柄观察。候选和盘中 timer、watchdog、运维 Web 均为 enabled/active，
+发送继续保持 `delivery_enabled=false`。
+
+最近两个有效 v2 日的汇总不变：2026-09-02 为 2,840 次评估、0 命中、2,242 拒绝、548 等待、
+50 不可评估、0 错误；2026-09-03 为 2,840 次评估、1 命中、2,356 拒绝、476 等待、7 不可评估、
+0 错误。唯一缺口分类合计为 `NO_TRADE_CONFIRMED=5`、`UNRESOLVED_SOURCE_GAP=12`、
+`PROVIDER_GAP_CONFIRMED=0`。MDB 回放仍为 v1、0 信号且误报代理为 null；CTNM 后续结果尚未成熟，
+不能表述为 0% 误报。

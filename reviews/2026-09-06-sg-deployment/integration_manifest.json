@@ -1,0 +1,163 @@
+{
+  "main": "1b63a4c6eaaabb4a7fe28c2a9d8c5a305bf556b0",
+  "production": "0131bb74556b5d2f0ecad26097751748f80591b4",
+  "base": "79f959ed4951d60a883b2003482e08637c5b6d6f",
+  "candidate": "/private/tmp/quant_sg_rollout_20260905/candidate",
+  "changes": [
+    {
+      "path": "configs/security_master_corrections.yaml",
+      "conflicts": false,
+      "master_sha256": "b1f4f7b125e640114bc4002c11cdbb96df267290cc6c0061d22588583219d922",
+      "matches_sg": true,
+      "candidate_sha256": "b1f4f7b125e640114bc4002c11cdbb96df267290cc6c0061d22588583219d922"
+    },
+    {
+      "path": "deploy/systemd/quant-intraday-candidate-prepare-root.service",
+      "conflicts": false,
+      "master_sha256": "0551ce852b7fdf508414d9632eb431ffe56abf0e0db47ae5aa10ec1a25f1f7dd",
+      "matches_sg": true,
+      "candidate_sha256": "0551ce852b7fdf508414d9632eb431ffe56abf0e0db47ae5aa10ec1a25f1f7dd"
+    },
+    {
+      "path": "deploy/systemd/quant-intraday-candidate-prepare.service",
+      "conflicts": false,
+      "master_sha256": "55dbf25a0b3e589195f093d4ba988d9f4a806a604297c0d5238531adb0051423",
+      "matches_sg": true,
+      "candidate_sha256": "55dbf25a0b3e589195f093d4ba988d9f4a806a604297c0d5238531adb0051423"
+    },
+    {
+      "path": "docs/cup_handle_monitoring.md",
+      "conflicts": false,
+      "master_sha256": "b626eba618b1bbc20aafca08c49c3e9abcf287030293d9437803211598c703de",
+      "matches_sg": true,
+      "candidate_sha256": "b626eba618b1bbc20aafca08c49c3e9abcf287030293d9437803211598c703de"
+    },
+    {
+      "path": "docs/operations_observability.md",
+      "conflicts": false,
+      "master_sha256": "94a7fbcc333b36e061a0871caef44abcef33afbb379ed53afdfcb21889b40bd9",
+      "matches_sg": true,
+      "candidate_sha256": "94a7fbcc333b36e061a0871caef44abcef33afbb379ed53afdfcb21889b40bd9"
+    },
+    {
+      "path": "docs/sg_operations_overview.md",
+      "conflicts": false,
+      "master_sha256": "304ff3fb2210d1a38e64c81662a8a44a37e73a246fc1c48dbadfc68463e180d4",
+      "matches_sg": true,
+      "candidate_sha256": "304ff3fb2210d1a38e64c81662a8a44a37e73a246fc1c48dbadfc68463e180d4"
+    },
+    {
+      "path": "docs/us_broad_factor_research_implementation.md",
+      "conflicts": false,
+      "master_sha256": "1340c6f598385607ed3330ce32510a28902fe8c7d0c497d2204da964ec63ef63",
+      "matches_sg": true,
+      "candidate_sha256": "1340c6f598385607ed3330ce32510a28902fe8c7d0c497d2204da964ec63ef63"
+    },
+    {
+      "path": "scripts/build_security_master.py",
+      "conflicts": false,
+      "master_sha256": "254c18c5d128f26f88a10bc8407dad631fbcd28aabde7bf9b2f91ddd9b921a81",
+      "matches_sg": true,
+      "candidate_sha256": "254c18c5d128f26f88a10bc8407dad631fbcd28aabde7bf9b2f91ddd9b921a81"
+    },
+    {
+      "path": "scripts/run_intraday_momentum_monitor.py",
+      "conflicts": false,
+      "master_sha256": "823f47bd743c245457422f7dd4e63e318bf56ff2390013a64695457e4a0f703e",
+      "matches_sg": true,
+      "candidate_sha256": "823f47bd743c245457422f7dd4e63e318bf56ff2390013a64695457e4a0f703e"
+    },
+    {
+      "path": "scripts/update_us_equity_coverage.py",
+      "conflicts": true,
+      "master_sha256": "608df22c60db5534644bd7a22b23fd24747bbd903607f922bdfc52344f995050",
+      "matches_sg": true,
+      "candidate_sha256": "12965baa6d29a0e557a910bdb7b81bb1df95112cf51724c8578335cff530f02f"
+    },
+    {
+      "path": "src/breakouts/live/session.py",
+      "conflicts": false,
+      "master_sha256": "f7dea290badea377a00f18d9c6c812c551e85da68e83b06d2bd41f8fd97b292d",
+      "matches_sg": true,
+      "candidate_sha256": "f7dea290badea377a00f18d9c6c812c551e85da68e83b06d2bd41f8fd97b292d"
+    },
+    {
+      "path": "src/data/derived_universe.py",
+      "conflicts": false,
+      "master_sha256": "fdaeea5386aaa9e09bca2a610cab24199b8ceebb2e651656258a7258b178dfda",
+      "matches_sg": true,
+      "candidate_sha256": "a7545f0ace9616c8b1726722c9c21406ba92e8a3a37e8deb22c47c57e4d4d88a"
+    },
+    {
+      "path": "src/data/security_master_store.py",
+      "conflicts": false,
+      "master_sha256": "c5f9f663f1bfc7514c89c1d12019eef59f416a04a8c92fdbb735c9ff468ff1b8",
+      "matches_sg": true,
+      "candidate_sha256": "c5f9f663f1bfc7514c89c1d12019eef59f416a04a8c92fdbb735c9ff468ff1b8"
+    },
+    {
+      "path": "src/factors/broad_pipeline.py",
+      "conflicts": false,
+      "master_sha256": "7b1f7a0524fa2f4ec87d2732c87ad2d57ad7f4b2e8f3054fcd8ef218f6993c33",
+      "matches_sg": true,
+      "candidate_sha256": "7b1f7a0524fa2f4ec87d2732c87ad2d57ad7f4b2e8f3054fcd8ef218f6993c33"
+    },
+    {
+      "path": "src/operations/adapters/delivery.py",
+      "conflicts": false,
+      "master_sha256": "ab2d55fe0fa827b3bd0aab3c78e8ee27136a0401da175a01d933c027eb147234",
+      "matches_sg": true,
+      "candidate_sha256": "ab2d55fe0fa827b3bd0aab3c78e8ee27136a0401da175a01d933c027eb147234"
+    },
+    {
+      "path": "tests/test_broad_factor_data.py",
+      "conflicts": false,
+      "master_sha256": "94e494bf1f0d5f87145556a4086fe97d812c7e1bff2309c0be907749fbe6021a",
+      "matches_sg": true,
+      "candidate_sha256": "94e494bf1f0d5f87145556a4086fe97d812c7e1bff2309c0be907749fbe6021a"
+    },
+    {
+      "path": "tests/test_broad_operations.py",
+      "conflicts": false,
+      "master_sha256": "af3efb1ad7f2b4682131f2e3c62657fb6c699fee2960dff1805fb16133eda8eb",
+      "matches_sg": true,
+      "candidate_sha256": "56cd69fe0e8e5ee3774b63ac424c30cf592cfe1aeaca59db342b4163b03169be"
+    },
+    {
+      "path": "tests/test_broad_pit_universe.py",
+      "conflicts": false,
+      "master_sha256": "cc55b938df0ed5e54bb4c07f1824e9ea08566d8d5952184114d2ee79abb73fba",
+      "matches_sg": true,
+      "candidate_sha256": "4cc7d2b6a54b2ae83c81f89f9a455bfa2fd8870c975a741050631e5338152b09"
+    },
+    {
+      "path": "tests/test_intraday_monitor.py",
+      "conflicts": false,
+      "master_sha256": "6145d4f4775094488f49ee952c1527542d7f0975a3cb1e8dbe64b39c5a72742a",
+      "matches_sg": true,
+      "candidate_sha256": "6145d4f4775094488f49ee952c1527542d7f0975a3cb1e8dbe64b39c5a72742a"
+    },
+    {
+      "path": "tests/test_operations_watchdog.py",
+      "conflicts": false,
+      "master_sha256": "f8f3a9cedd821d7b34daa67ee361f37d3171c4c6f53b2e915db6a3ec5d4e0caf",
+      "matches_sg": true,
+      "candidate_sha256": "f8f3a9cedd821d7b34daa67ee361f37d3171c4c6f53b2e915db6a3ec5d4e0caf"
+    },
+    {
+      "path": "tests/test_security_master_build.py",
+      "conflicts": false,
+      "master_sha256": "49c850f36c8330500a105349f2e2e45670960e346c03ad03f1f19d4102e45d15",
+      "matches_sg": true,
+      "candidate_sha256": "49c850f36c8330500a105349f2e2e45670960e346c03ad03f1f19d4102e45d15"
+    },
+    {
+      "path": "tests/test_systemd_units.py",
+      "conflicts": false,
+      "master_sha256": "6ab97e7476d743960bb807c221c3632d20ba27f1630e36348e6ed8e1d9607187",
+      "matches_sg": true,
+      "candidate_sha256": "6ab97e7476d743960bb807c221c3632d20ba27f1630e36348e6ed8e1d9607187"
+    }
+  ],
+  "authorization": "Preview only. Publishing additional commits requires approval."
+}

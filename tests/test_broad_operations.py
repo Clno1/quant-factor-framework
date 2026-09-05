@@ -23,10 +23,12 @@ from scripts.run_broad_initial_rollout import (
     run as run_initial_rollout,
 )
 from scripts.update_us_equity_coverage import (
+    _combine_normalized_sources,
     _load_or_fetch_eod_bulk_session,
     _load_or_fetch_history_delta,
     _parent_partition_paths,
     _prepare_provider_cache,
+    _refresh_sessions_for_binding,
     _sessions_after_parent,
 )
 from src.data.foundation import DataFoundationError
@@ -289,6 +291,48 @@ def test_incremental_bulk_fetches_only_sessions_after_the_parent():
         "2026-08-19",
     ]
     assert _sessions_after_parent("2026-08-19", "2026-08-19").empty
+
+
+def test_same_session_coverage_rebase_requires_explicit_repair():
+    with pytest.raises(
+        DataFoundationError,
+        match="--force-security-master-rebase",
+    ):
+        _refresh_sessions_for_binding(
+            parent_target="2026-09-01",
+            target="2026-09-01",
+            binding_changed=True,
+            force_security_master_rebase=False,
+        )
+
+    sessions = _refresh_sessions_for_binding(
+        parent_target="2026-09-01",
+        target="2026-09-01",
+        binding_changed=True,
+        force_security_master_rebase=True,
+    )
+    assert sessions.tolist() == [pd.Timestamp("2026-09-01")]
+    assert _refresh_sessions_for_binding(
+        parent_target="2026-09-01",
+        target="2026-09-01",
+        binding_changed=False,
+        force_security_master_rebase=True,
+    ).empty
+
+
+def test_same_session_rebase_keeps_recent_eod_dates_datetimelike():
+    recent = pd.DataFrame({
+        "date": pd.DatetimeIndex(["2026-09-01"]),
+        "security_id": ["sec_aaa"],
+    })
+    empty_history = pd.DataFrame(columns=recent.columns)
+
+    combined = _combine_normalized_sources(empty_history, recent)
+
+    assert pd.api.types.is_datetime64_any_dtype(combined["date"])
+    assert combined["date"].dt.to_period("M").astype(str).tolist() == [
+        "2026-09"
+    ]
 
 
 def test_eod_bulk_cache_is_exactly_bound_and_hash_verified(tmp_path):

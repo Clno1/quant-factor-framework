@@ -440,7 +440,12 @@ def _identity_key(row: pd.Series, lineage_root: str) -> tuple[str, str]:
     return "LISTING_LINEAGE", f"{exchange}:{lineage_root}:{listing_key}:{name}"
 
 
-def _normalize_profiles(frame: pd.DataFrame, target: pd.Timestamp) -> pd.DataFrame:
+def _normalize_profiles(
+    frame: pd.DataFrame,
+    target: pd.Timestamp,
+    *,
+    allowed_non_main_tickers: set[str] | None = None,
+) -> pd.DataFrame:
     if frame.empty:
         raise ValueError("profile bulk is empty")
     required = {
@@ -454,8 +459,15 @@ def _normalize_profiles(frame: pd.DataFrame, target: pd.Timestamp) -> pd.DataFra
     work = frame.copy()
     work["ticker"] = work["ticker"].map(_ticker)
     work["exchange"] = work["exchange"].map(lambda value: _text(value).upper())
+    reviewed_tickers = {
+        _ticker(value) for value in (allowed_non_main_tickers or set())
+    }
     work = work.loc[
-        work["ticker"].ne("") & work["exchange"].isin(MAIN_EXCHANGES)
+        work["ticker"].ne("")
+        & (
+            work["exchange"].isin(MAIN_EXCHANGES)
+            | work["ticker"].isin(reviewed_tickers)
+        )
     ].copy()
     for column in ("name", "sector", "sub_industry"):
         work[column] = work[column].map(_text)
@@ -794,7 +806,18 @@ def build_security_master_candidate(
     # Immutable business rows must be a pure function of their frozen inputs.
     # The audit manifest records the actual build time separately.
     row_updated_at = target.tz_localize("UTC")
-    profile = _normalize_profiles(profiles, target)
+    reviewed_profile_tickers = {
+        ticker
+        for old_ticker, new_ticker, _event_date in (
+            reviewed_identity_continuity or set()
+        )
+        for ticker in (_ticker(old_ticker), _ticker(new_ticker))
+    }
+    profile = _normalize_profiles(
+        profiles,
+        target,
+        allowed_non_main_tickers=reviewed_profile_tickers,
+    )
     changes = _normalize_changes(symbol_changes, target)
     delisted = _normalize_delisted(delisted_companies, target)
     backward, lineage_conflicts, lineage_diagnostics = _lineage_maps(
@@ -953,6 +976,10 @@ def build_security_master_candidate(
         represented_tickers = {
             str(symbol["ticker"]) for symbol in symbol_chain
         }
+        exchange_by_ticker = {
+            str(alias.ticker): _text(alias.exchange).upper()
+            for alias in rows.itertuples(index=False)
+        }
         for alias in rows.itertuples(index=False):
             alias_ticker = str(alias.ticker)
             if alias_ticker in represented_tickers:
@@ -983,15 +1010,19 @@ def build_security_master_candidate(
             })
             represented_tickers.add(alias_ticker)
         for symbol in symbol_chain:
+            symbol_ticker = str(symbol["ticker"])
             symbol_rows.append({
                 "security_id": str(security_id),
                 **symbol,
-                "exchange": _text(selected.get("exchange")).upper(),
+                "exchange": exchange_by_ticker.get(
+                    symbol_ticker,
+                    _text(selected.get("exchange")).upper(),
+                ),
                 "is_primary": True,
                 "source": "FMP_PROFILE_BULK+SYMBOL_CHANGE",
                 "source_asof": target,
             })
-            alias_delisting = delisted_lookup.get(str(symbol["ticker"]))
+            alias_delisting = delisted_lookup.get(symbol_ticker)
             if alias_delisting is not None:
                 alias_date = pd.Timestamp(
                     alias_delisting["delisted_date"]

@@ -979,3 +979,79 @@ target `2026-08-28` 的 94 个动量候选和两个不可变 payload。由于完
 
 本地完整回归为 `586 passed`；SG 宽基与运维定向回归为 `28 passed`。宽基数据链保持 target
 `2026-08-27`、连续 shadow `6/5`，本次消费者性能修复没有改写 publication 或历史观察台账。
+
+## 25. 2026-09-02 身份漂移纠正与同日显式重绑
+
+FMP 冻结源缺少 `UGRO -> FLZH` 与 `SVII -> NUCL` 的可靠换码历史，并把后继证券资料呈现为 OTC。
+生产继续 fail closed，没有按 ticker、名称或上市地猜测身份。SEC 证据确认后，精确纠正规则写入
+`configs/security_master_corrections.yaml`；两次使用相同冻结源构建均为 PASS，五张 Parquet 表
+哈希完全一致。正式 Security Master generation 为
+`b99fc58963604831b9534af9600e75f2`，manifest SHA-256 为
+`545875e2b0e591295103221a11a0b33c34e29db00512937367388c2285aa652a`。
+
+PIT 资格判断不再用当前 ticker 的交易所回填整段历史，而是读取查询日生效 symbol interval 的
+交易所。由此 `UGRO` 的历史 Nasdaq 区间可以参与研究，`FLZH` 的 OTC 区间仍被严格排除；研究范围
+没有扩展到 OTC。
+
+同一个 target session 的 coverage 已绑定旧主表时，新增显式
+`--force-security-master-rebase` 修复入口。该入口只允许真实主表绑定发生变化的同日重建，并把
+rebase、身份差异、父版本和输入哈希写入审计；普通流程仍拒绝静默复用。首次运行还暴露并修复了空
+历史 frame 与新数据 concat 时的日期 dtype 不一致，失败运行没有发布任何版本。
+
+最终 coverage `a8c3814e7fd444e9b5f0a12cb047aa7f` 含 10,447,745 行、7,976 只证券、
+93 个分片，target 覆盖率 99.4951%，完整 child hash 验证通过。全量 PIT
+`bbe1288de3684cc3ab6849954cbd9507` 含 226,095 条 membership、92 个快照、5,558 个历史成员和
+2,849 个当前成员；`historical_pit_daily_bar_coverage` 通过。membership SHA-256 为
+`9fad1f5794f8333a3b10e87399b296c3ff54099b70ac94ac064993074fd6b78c`，eligibility SHA-256 为
+`8e369a667823d9d613fca8a990e177ab7053c4531e7223ae9d671468c3ae9ae0`。
+
+八因子使用 generation `2db3832266ed462cb6d47a49777a6b4c` 从认证 checkpoint 重建 648 个
+factor-month 分片。正式发布前不得把运行中状态写成完成；readiness 仍只允许既有的
+`PIT_CLASSIFICATION_POLICY` 与 `PIT_INDUSTRY_COVERAGE` 预期阻断，任何新增 blocker 都必须停止。
+
+## 26. 2026-09-02 因子暖机窗口 off-by-one 修复
+
+generation `2db3832266ed462cb6d47a49777a6b4c` 实际完成了 648/648 个计算分片，但发布门禁拒绝
+了结果。2026-09 只有一个输出交易日时，MOM_1M、MOM_3M、MOM_6M、MOM_12M 和 REVERSAL
+的最新 raw/clean 覆盖率均为 0%；VOL_20D、VOL_60D 和 TURNOVER 为 100%。失败代次及其
+checkpoint 保留在 `.staging_2db3832266ed462cb6d47a49777a6b4c`，不得删除、改写或标记成功。
+
+根因不是 coverage 缺数，而是 `exchange_calendars.sessions_window()` 会把锚定输出日计入返回
+窗口。旧代码请求 `-N` 时只得到 `N-1` 个输出日前交易日，精确动量和反转公式因此永远少一个价格
+观察；宽松 80% 暖机的波动率及只需要 N 个成交量观察的 TURNOVER 没有暴露该问题。修复后统一加载
+“N 个输出日前交易日 + 输出日”，并把输入指纹合同升级为
+`BROAD_FACTOR_INPUT_V3_EXACT_WARMUP_XNYS`。V2 checkpoint 和 V2 publication 均不能被新任务
+复用，因此 648 个分片必须重新计算。
+
+本地因子测试为 9 passed，SG 定向回归为 53 passed，SG 正式 `tests/` 完整回归为 651 passed。
+完整回归还发现 9 个 macOS AppleDouble `._*.py` 元数据文件污染源码扫描；它们已原样移动到
+`/home/projects/quant-backups/appledouble-quarantine-20260902T203127CST`，没有删除内容。
+代码部署备份为 `/home/projects/quant-backups/factor-exact-warmup-20260902T202847CST`。
+
+为避免与 21:20 SGT 至收盘后的茶杯柄盘中监控争抢 2 GiB 内存，修正后的正式重建没有立即启动。
+一次性 persistent timer 已通过 `systemd-analyze verify`，将在 2026-09-03 04:20 SGT 触发现有
+`quant-broad-factor-data.service`。服务继续使用单线程 BLAS、700 MiB soft high、900 MiB hard max、
+flock 和原 OnSuccess readiness 链；成功前不得手工发布或绕过覆盖率门禁。
+
+## 27. 2026-09-05 FMP 退市状态漂移的严格处理
+
+2026-09-03 目标日的两次宽基日更都在 Security Master 阶段 fail closed。FMP 不再把 FLZH 标记为
+活跃，同时仍返回 `UGRO -> FLZH`、一致的 CUSIP/ISIN，以及 FLZH 在 2026-08-26 从 OTC 退市的
+记录。旧规则只描述换码后的活跃 profile，因此把这次变化识别为未审阅漂移是正确行为；错误不能通过
+删除规则、接受任意 active 状态或复用旧 Security Master 解决。
+
+纠正规则现增加有界 `provider_lifecycle`：仅当目标日不早于 2026-08-26，且同一不可变 provider
+source 中存在 FLZH、精确退市日、OTC、公司名四项完全匹配的退市记录时，才把预期 profile 改为
+INACTIVE。早于该日期仍要求活跃基线，缺字段、多行、名称、交易所或日期漂移均继续失败。SEC 换码
+证据、供应商 CUSIP/ISIN 和原始冻结源都被保留，未猜测历史或降低 100% 身份门槛。
+
+生产前验证使用 2026-09-03 的真实失败冻结源。同源两次构建均为 PASS，五张 Parquet 的 SHA-256
+逐表一致；第二份独立冻结源也 PASS，两组活跃普通股数量均为 5,350。部署备份为
+`/home/projects/quant-backups/flzh-lifecycle-20260905T004551CST`，SG 完整回归为 `655 passed`。
+2026-09-05 11:31 SGT 正常日更已完成正式恢复验收。目标 2026-09-04 的 Security Master 为
+`3ea8a269a67a4797be8bfcbfb2d7ae78`，manifest SHA-256 为
+`1d9b99dfab9ed398f8e67ddb3ff25cf43f4d3c107f182e0b95ff4d4226744e36`；coverage
+`2f31ea50b7484e038ca977b252679f43` 含 10,467,468 行、7,986 只证券，PIT
+`25cec81b68304b3a85e7829b31313567` 含 225,982 条 membership、当前成员 2,848，并通过全历史日线
+覆盖门禁。全链耗时 544.825 秒、systemd 峰值 701.9 MiB、无 swap。八因子随后从认证 checkpoint
+重建，核查时为 483/648；八因子发布完成前仍不能把整个后续链标为 SUCCESS。

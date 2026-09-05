@@ -1,5 +1,5 @@
 [Unit]
-Description=Prepare the daily broad-universe intraday momentum candidate snapshot
+Description=Prepare the daily broad-universe intraday and cup-handle candidate snapshot
 Wants=network-online.target
 After=network-online.target quant-us-equity-coverage.service quant-group-analytics-eod.service
 StartLimitIntervalSec=4h
@@ -20,7 +20,7 @@ EnvironmentFile=/etc/quant/intraday-momentum-monitor.env
 ExecStartPre=/home/projects/quant/.venv/bin/python -c "import exchange_calendars, sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
 ExecStart=/home/projects/quant/.venv/bin/python /home/projects/quant/scripts/run_intraday_momentum_monitor.py --env-file /etc/quant/intraday-momentum-monitor.env --prepare-candidates
 TimeoutStartSec=1h
-MemoryHigh=500M
+MemoryHigh=620M
 MemoryMax=700M
 MemorySwapMax=0
 CPUQuota=100%

@@ -80,7 +80,7 @@ class SystemdUnitTests(unittest.TestCase):
         self.assertIn("--auto", intraday)
         self.assertIn("--component intraday", intraday)
         self.assertIn("--prepare-candidates", prepare)
-        self.assertIn("MemoryHigh=500M", prepare)
+        self.assertIn("MemoryHigh=620M", prepare)
         self.assertIn("MemoryMax=700M", prepare)
         self.assertIn("MemorySwapMax=0", prepare)
         self.assertNotIn("--skip-precompute", refresh)

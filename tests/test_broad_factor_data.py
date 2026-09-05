@@ -22,6 +22,7 @@ from src.data.universe_publication import DerivedUniverseStore
 from src.factors import get_factor
 from src.factors.broad_pipeline import (
     INPUT_FINGERPRINT_METHOD,
+    _lookback_start,
     compute_factor_block,
     factor_input_fingerprint,
     factor_history_sessions,
@@ -132,6 +133,71 @@ def test_broad_factor_windows_and_month_blocks_match_registered_formulas():
     assert [(start.month, end.month) for start, end in blocks] == [
         (1, 1), (2, 2), (3, 3)
     ]
+
+
+def test_lookback_start_loads_the_requested_prior_sessions_plus_output_day():
+    first_output = pd.Timestamp("2026-09-01")
+    start = _lookback_start(first_output, 5)
+    sessions = _sessions(start.date().isoformat(), first_output.date().isoformat())
+
+    assert start == pd.Timestamp("2026-08-25")
+    assert len(sessions) == 6
+    assert sessions[-1] == first_output
+
+
+@pytest.mark.parametrize("factor_id,prior_sessions", [
+    ("MOM_1M", 21),
+    ("REVERSAL", 5),
+])
+def test_exact_warmup_makes_single_output_session_eligible(
+    factor_id: str,
+    prior_sessions: int,
+):
+    output_date = pd.Timestamp("2026-09-01")
+    start = _lookback_start(output_date, prior_sessions)
+    sessions = _sessions(start.date().isoformat(), output_date.date().isoformat())
+    identities = [("sec_aaa", "AAA"), ("sec_bbb", "BBB"), ("sec_ccc", "CCC")]
+    bars = pd.concat([
+        pd.DataFrame({
+            "date": sessions,
+            "security_id": security_id,
+            "ticker": ticker,
+            "adj_close": np.linspace(10.0, 11.0 + position, len(sessions)),
+            "volume": 1_000_000.0,
+        })
+        for position, (security_id, ticker) in enumerate(identities)
+    ], ignore_index=True)
+    membership = pd.DataFrame([
+        {
+            "date": output_date,
+            "security_id": security_id,
+            "ticker": ticker,
+            "active": True,
+            "snapshot_type": "MONTH_END",
+        }
+        for security_id, ticker in identities
+    ])
+    master = pd.DataFrame([
+        {"security_id": security_id, "current_ticker": ticker}
+        for security_id, ticker in identities
+    ])
+    classifications = pd.DataFrame([
+        {"security_id": security_id, "sector": "Technology"}
+        for security_id, _ in identities
+    ])
+
+    result = compute_factor_block(
+        factor_id=factor_id,
+        bars=bars,
+        membership=membership,
+        master=master,
+        classifications=classifications,
+        output_dates=[output_date],
+    )
+
+    assert result.diagnostics["latest_warmup_eligible_count"] == 3
+    assert result.diagnostics["latest_raw_coverage"] == 1.0
+    assert set(result.observations["status"]) == {"VALID"}
 
 
 def test_turnover_zero_volume_window_stays_numeric_and_missing():
@@ -254,7 +320,7 @@ def test_factor_input_fingerprint_ignores_version_ids_but_detects_real_inputs(tm
     )
     assert first == second
     assert changed != first
-    assert INPUT_FINGERPRINT_METHOD == "BROAD_FACTOR_INPUT_V2_XNYS_ONLY"
+    assert INPUT_FINGERPRINT_METHOD == "BROAD_FACTOR_INPUT_V3_EXACT_WARMUP_XNYS"
 
 
 def _standard_bars(ticker: str, dates: list[str]) -> pd.DataFrame:
