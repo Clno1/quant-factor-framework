@@ -155,13 +155,24 @@ def _authenticated_manifest_or_none(
     reader: MarketDataReader,
     published: Any,
 ) -> dict[str, Any] | None:
-    """Treat only a legacy semantic contract as a full-rebuild signal."""
+    """Reuse only authenticated backfills with nominal prices for all history."""
     try:
-        return reader.verify_version(published, require_price_semantics=True)
+        manifest = reader.verify_version(published, require_price_semantics=True)
     except DataFoundationError as exc:
         if "predates the authenticated price-semantics contract" not in str(exc):
             raise
         return None
+    nominal = (manifest.get("quality_lineage") or {}).get("nominal_price_source")
+    if not isinstance(nominal, dict) or any(
+        nominal.get(key) != value
+        for key, value in {
+            "field": "unadjusted_close",
+            "endpoint": "FMP/stable/historical-price-eod/non-split-adjusted",
+            "scope": "full_backfill_history",
+        }.items()
+    ):
+        return None
+    return manifest
 
 
 def _published_security_master() -> tuple[

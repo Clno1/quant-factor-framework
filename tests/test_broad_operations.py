@@ -800,7 +800,7 @@ def test_coverage_auto_resume_requires_one_exact_running_checkpoint(tmp_path):
         _auto_resume_run_dir(tmp_path, expected=expected)
 
 
-def test_coverage_same_target_rebuilds_only_for_legacy_price_semantics():
+def test_coverage_same_target_requires_authenticated_full_nominal_history():
     class Reader:
         def __init__(self, error: str | None):
             self.error = error
@@ -809,10 +809,18 @@ def test_coverage_same_target_rebuilds_only_for_legacy_price_semantics():
             assert require_price_semantics is True
             if self.error:
                 raise DataFoundationError(self.error)
-            return {"schema_version": 4, "price_semantics": {"schema_version": 1}}
+            return {
+                "schema_version": 5,
+                "price_semantics": {"schema_version": 1},
+                "quality_lineage": {"nominal_price_source": {
+                    "field": "unadjusted_close",
+                    "endpoint": "FMP/stable/historical-price-eod/non-split-adjusted",
+                    "scope": "full_backfill_history",
+                }},
+            }
 
     manifest = _authenticated_manifest_or_none(Reader(None), object())
-    assert manifest["schema_version"] == 4
+    assert manifest["schema_version"] == 5
 
     legacy = _authenticated_manifest_or_none(
         Reader("version predates the authenticated price-semantics contract"),
@@ -825,6 +833,44 @@ def test_coverage_same_target_rebuilds_only_for_legacy_price_semantics():
             Reader("published partition checksum mismatch"),
             object(),
         )
+
+
+@pytest.mark.parametrize("nominal", [
+    None,
+    {"field": "close", "endpoint": "FMP/stable/historical-price-eod/full", "scope": "full_backfill_history"},
+    {"field": "unadjusted_close", "endpoint": "FMP/stable/historical-price-eod/non-split-adjusted", "scope": "new_completed_month_ends_and_identity_delta_history"},
+])
+def test_same_session_backfill_does_not_skip_legacy_or_partial_nominal_prices(
+    tmp_path, monkeypatch, nominal,
+):
+    from scripts import backfill_us_equity_coverage as backfill
+
+    generation = SimpleNamespace(
+        target_session=pd.Timestamp("2026-09-04").date(),
+        generation_id="security-current", manifest_sha256="security-hash",
+    )
+    published = SimpleNamespace(target_session=generation.target_session)
+    manifest = {
+        "security_master_generation_id": generation.generation_id,
+        "security_master_manifest_sha256": generation.manifest_sha256,
+        "quality_lineage": {"nominal_price_source": nominal},
+    }
+    monkeypatch.setattr(backfill, "_published_security_master", lambda: (generation, {"master": pd.DataFrame()}, True))
+    monkeypatch.setattr(backfill, "MarketDataCatalog", lambda _path: SimpleNamespace(latest_version=lambda _universe: published))
+    monkeypatch.setattr(backfill, "MarketDataReader", lambda **_kwargs: SimpleNamespace(verify_version=lambda *_args, **_kw: manifest))
+
+    class RebuildReached(Exception):
+        pass
+
+    def select_for_rebuild(*_args, **_kwargs):
+        raise RebuildReached
+
+    monkeypatch.setattr(backfill, "select_coverage_securities", select_for_rebuild)
+    args = backfill._parse_args([
+        "--target-session", "2026-09-04", "--publish", "--output-dir", str(tmp_path),
+    ])
+    with pytest.raises(RebuildReached):
+        backfill.run(args)
 
 
 def test_coverage_resume_restores_progress_after_all_batches_are_known():
