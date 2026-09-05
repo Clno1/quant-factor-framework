@@ -1063,9 +1063,12 @@ OTC 退市。配置和构建器现只在 ticker、日期、交易所及公司名
 部署前备份为 `/home/projects/quant-backups/flzh-lifecycle-20260905T004551CST`。同一失败冻结源重建
 两次均 PASS，五张候选 Parquet 逐表哈希完全一致；第二份独立冻结源也 PASS，活跃普通股均为
 5,350。Security Master 定向测试 14 项、下游宽基与 Web 82 项、SG 完整回归 655 项全部通过。
-修复已部署，但正式数据指针尚未前移；`quant-us-equity-coverage.timer` 将在 2026-09-05 11:31
-SGT 运行修复后的全链。完成前不得将上游或茶杯柄写成已恢复。
+修复后的 `quant-us-equity-coverage.timer` 已于 2026-09-05 11:31 SGT 触发并成功完成全链日更。
+Security Master `3ea8a269a67a4797be8bfcbfb2d7ae78`、coverage
+`2f31ea50b7484e038ca977b252679f43` 和 PIT `25cec81b68304b3a85e7829b31313567` 均绑定
+2026-09-04；全链耗时 544.825 秒，systemd 峰值 701.9 MiB、无 swap。八因子 OnSuccess 后续链随后
+从认证 checkpoint 继续，核查时进度为 483/648、cgroup 约 700 MiB、无 swap。
 
 相关 timer 均为 enabled/active，资源检查有约 1,200 MiB 可用内存和 35.9 GiB 可用磁盘。
-watchdog 与运维 Web 正常；运维台账保留候选和盘中服务的 `CRITICAL OPEN` 事故。茶杯柄发送仍为
-false，下一可计数的完整 XNYS 交易日必须重新满足 v2 全部质量门槛。
+watchdog 与运维 Web 正常；2026-09-04 缺跑仍不得补记。茶杯柄发送为 false，下一可计数的完整
+XNYS 交易日必须重新满足 v2 全部质量门槛。

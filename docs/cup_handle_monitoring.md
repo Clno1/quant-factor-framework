@@ -385,10 +385,12 @@ OTC 和公司名，缺少任一冻结证据仍报错。
 /home/projects/quant-backups/flzh-lifecycle-20260905T004551CST
 ```
 
-截至本次核查，正式 coverage 仍为 2026-09-02 版本 `fc81ee7a559b4509a74576791633c3ba`；修复后的
-日更将在 2026-09-05 11:31 SGT 既定盘后窗口运行，不能在任务完成前宣称生产已经恢复。候选、盘中、
-watchdog、运维 Web 和宽基 timer 均为 enabled/active；两个茶杯柄执行服务保留 2026-09-04 的
-failed 证据。发送继续保持 `delivery_enabled=false`。
+修复后的日更已于 2026-09-05 11:31 SGT 运行并在 11:40:43 成功完成。正式 Security Master 为
+`3ea8a269a67a4797be8bfcbfb2d7ae78`，coverage 已推进到 2026-09-04 版本
+`2f31ea50b7484e038ca977b252679f43`，PIT 为 `25cec81b68304b3a85e7829b31313567`，全历史日线
+覆盖门禁通过。八因子后续链正在从认证 checkpoint 重建，核查时为 483/648；这证明共享上游已经恢复，
+但不会补造 2026-09-04 的茶杯柄观察。候选和盘中 timer、watchdog、运维 Web 均为 enabled/active，
+发送继续保持 `delivery_enabled=false`。
 
 最近两个有效 v2 日的汇总不变：2026-09-02 为 2,840 次评估、0 命中、2,242 拒绝、548 等待、
 50 不可评估、0 错误；2026-09-03 为 2,840 次评估、1 命中、2,356 拒绝、476 等待、7 不可评估、

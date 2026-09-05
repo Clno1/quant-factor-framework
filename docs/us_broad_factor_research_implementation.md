@@ -1048,6 +1048,10 @@ INACTIVE。早于该日期仍要求活跃基线，缺字段、多行、名称、
 生产前验证使用 2026-09-03 的真实失败冻结源。同源两次构建均为 PASS，五张 Parquet 的 SHA-256
 逐表一致；第二份独立冻结源也 PASS，两组活跃普通股数量均为 5,350。部署备份为
 `/home/projects/quant-backups/flzh-lifecycle-20260905T004551CST`，SG 完整回归为 `655 passed`。
-截至核查时正式 coverage 仍停在 2026-09-02 版本 `fc81ee7a559b4509a74576791633c3ba`；
-2026-09-05 11:31 SGT 的正常日更才是正式恢复验收，完成前不得声称 coverage、PIT、八因子或依赖它们
-的茶杯柄候选已经恢复。
+2026-09-05 11:31 SGT 正常日更已完成正式恢复验收。目标 2026-09-04 的 Security Master 为
+`3ea8a269a67a4797be8bfcbfb2d7ae78`，manifest SHA-256 为
+`1d9b99dfab9ed398f8e67ddb3ff25cf43f4d3c107f182e0b95ff4d4226744e36`；coverage
+`2f31ea50b7484e038ca977b252679f43` 含 10,467,468 行、7,986 只证券，PIT
+`25cec81b68304b3a85e7829b31313567` 含 225,982 条 membership、当前成员 2,848，并通过全历史日线
+覆盖门禁。全链耗时 544.825 秒、systemd 峰值 701.9 MiB、无 swap。八因子随后从认证 checkpoint
+重建，核查时为 483/648；八因子发布完成前仍不能把整个后续链标为 SUCCESS。
