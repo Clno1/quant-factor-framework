@@ -2,6 +2,10 @@
 
 记录时间：2026-09-06，Asia/Shanghai。
 
+**当前验收结论（01:09）：代码 `255e2755d75ba66fd06db469c95866b0e5b9b588` 已推送 main 并部署 SG，478 个工程文件全部吻合，应用存储完整性检查通过，两个 Web 与原有定时调度已恢复。历史重建已经启动但尚未完成，当前为 7,986 只证券的 coverage 回填，首个 100 证券批次 SUCCESS、来源失败数为 0。后续依次执行 PIT、宽基因子、门槛检查和核心股票池研究。完整验收元数据见 `acceptance_receipt.json`。**
+
+本目录后续新增验收记录只更新文档和证据；SG 部署标记保持为实际工程代码提交 `255e275`，运行中的重建任务也固定该代码版本。
+
 更新：用户已明确回复“没问题，你可以进一步工作”，授权以下五个现网提交合入 main、推送并继续部署。随后刷新远端确认现在仅剩 main；已清理 origin/master 与 origin/cursor/document-main-branch-16f3 的失效跟踪引用。实际合并使用已审核的固定提交 `0131bb74556b5d2f0ecad26097751748f80591b4`，不会恢复远端旧分支。以下准备期记录保留为审计依据，实际部署验收另行追加。
 
 ## 已完成
@@ -13,7 +17,7 @@
 - 候选全量测试：**734 passed，0 failed，0 skipped，2 条既有弃用警告，33.74 秒**。测试位于隔离目录，使用合成数据，未触发生产任务。明细见 `integration_full_suite.xml`。
 - `compileall`、候选补丁适用性及空白检查通过。
 - 00:11 左右再次只读检查：主 Web 与运维 Web 均 active/running；可用内存约 1,177 MiB、可用磁盘 36,691,980,288 字节；DuckDB 和 SQLite 主文件合计约 97 MiB，足以采用小体积本机一致性备份。备份时须同时处理 WAL/SHM 或使用数据库原生备份接口，不能只复制正在写入的主文件。
-- SG 未安装 Node；本地已完成全部 11 项真实 JavaScript 模板测试。SG Python 3.11 的隔离验证仍待执行，不能将本地通过记录写成线上验收结果。
+- 准备阶段确认 SG 未安装 Node，相关 JavaScript 模板测试已在本地执行；SG Python 3.11 的实际验证结果见后续验收记录。
 
 ## 需要保留的五个现网提交
 
@@ -63,3 +67,24 @@ FMP 新接口在 SG 实测可访问：NVDA 2024-06-06 至 2024-06-11 得到 4 �
 检查历史重建入口发现：同日、同 Security Master 的旧 coverage 会直接 NOOP，即使缺少全历史名义价格。现已将复用条件收紧为已认证的 `unadjusted_close`、准确的 non-split-adjusted 来源和 `full_backfill_history` 范围；旧版本或仅新增月末名义价格的版本必须进入回填，校验损坏仍报错。
 
 增加 3 项入口回归，验证旧版本、错误来源及部分名义价格不能短路为完成；全量 **737 passed、0 failed、0 skipped，28.50 秒**，两条现有弃用警告。结果见 `nominal_migration_full_suite.xml`。补丁将按精确提交同步 SG 后继续做重建验证。
+
+补丁已以 `255e275` 推送并部署：SG 的受影响回归 **45 passed，4.36 秒**。持有广域生产锁时，仅替换回填入口和对应测试两个文件，备份于 `/home/projects/quant-backups/nominal-255e275-20260905T165257Z`；再次核对全部 478 个工程文件后更新部署标记，Web 未中断。
+
+## 历史重建实跑
+
+小样本候选为 **12 只证券、21,052 行、2019-01-02 至 2026-09-04**，所有检查 PASS：0 个别名缺口、0 个无效 OHLC、0 个重复键、0 个未来/非交易日记录，当前证券目标日覆盖率 100%。样本只生成候选，没有替换生产版本。
+
+完整重建已于 **2026-09-06 01:04（Asia/Shanghai）** 通过已有 `quant-broad-provider-retry.service` 恢复入口启动一次性任务，持有 `.broad-production.lock`，CPU 上限 100%、内存软/硬上限 700/900 MiB、无 swap、供应商并发 2、最大运行时间 36 小时。未创建新周期性 timer，未改变通知配置，未重放模拟盘成交。
+
+执行顺序由 `rebuild_history.py` 记录，实际脚本保存在 SG `/home/projects/quant-releases/255e275/rebuild_history.py`：
+
+1. 原资源门槛（至少 350 MiB 可用内存、15 GiB 可用磁盘）。
+2. 全量 `backfill_us_equity_coverage.py --publish`，固定目标日 2026-09-04，沿用已认证 Security Master；只恢复与新输入完全匹配的断点。
+3. 绑定新 coverage 的 `build_us_liquid_pit.py --full-rebuild --publish`。
+4. 绑定同一 coverage/PIT 的 `run_broad_factor_data.py --full-rebuild --publish --restart-after-partitions 1`，每个分片重新启动 worker 释放内存。
+5. 正式宽基研究门槛和 shadow 检查；既有 PIT 行业历史不足仍保留阻断，不降低要求。
+6. `run_factor_research.py` 对 SP500、NASDAQ100、MAG7 强制重建依赖研究及跨池结果。
+
+任一阶段失败就停止后续阶段。逐阶段 stdout/stderr 位于 SG `/home/projects/quant/logs/nominal-migration-20260906/`；总报告位于 `/home/projects/quant/outputs/data_audits/broad_initial_rollout/target=2026-09-04/run=nominal-migration-20260906.json`。
+
+01:09 时任务为 `RUNNING / US_EQUITY_COVERAGE_BACKFILL`，新方法 `BROAD_COVERAGE_V3_NOMINAL_PRICE`，7,986 只证券，已完成 1 个批次（SUCCESS，0 个别名失败），内存约 168 MiB。全量质量验收、PIT、因子和研究尚未完成，不能把旧数值标为已修正。本条是部署收尾时的运行快照，后续进展以 SG 报告与 checkpoint 为准。

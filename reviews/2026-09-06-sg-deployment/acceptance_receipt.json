@@ -1,0 +1,198 @@
+{
+  "checked_at": "2026-09-05T17:09:01.706727+00:00",
+  "deployed_commit": "255e2755d75ba66fd06db469c95866b0e5b9b588",
+  "tracked_engineering_files": 478,
+  "all_engineering_hashes_match": true,
+  "app_storage_integrity_passed": true,
+  "test_6981eef": {
+    "tests": 734,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 10,
+    "time": 86.798
+  },
+  "test_255e275": {
+    "tests": 45,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "time": 4.365
+  },
+  "initial_deployment": {
+    "commit": "6981eef3c44693498fb29d69b975b77c97ea6f37",
+    "phase": "DEPLOYED",
+    "backup": "/home/projects/quant-backups/audit-6981eef-20260905T163753Z",
+    "database_count": 9,
+    "metadata_count": 1516,
+    "backup_files": 1575,
+    "backup_bytes": 275401615,
+    "completed_at": "2026-09-05T16:40:58.788462+00:00"
+  },
+  "hotfix_deployment": {
+    "phase": "DEPLOYED",
+    "commit": "255e2755d75ba66fd06db469c95866b0e5b9b588",
+    "verified_files": 478,
+    "changed_files": [
+      "scripts/backfill_us_equity_coverage.py",
+      "tests/test_broad_operations.py"
+    ],
+    "backup": "/home/projects/quant-backups/nominal-255e275-20260905T165257Z",
+    "web_restart_required": false
+  },
+  "initial_web_smoke": {
+    "passed": true,
+    "checks": [
+      {
+        "port": 18823,
+        "path": "/research",
+        "status": 200,
+        "seconds": 1.463
+      },
+      {
+        "port": 18823,
+        "path": "/research/factor-data",
+        "status": 200,
+        "seconds": 0.41
+      },
+      {
+        "port": 18823,
+        "path": "/research/universes/SP500",
+        "status": 200,
+        "seconds": 1.047
+      },
+      {
+        "port": 18823,
+        "path": "/strategies",
+        "status": 200,
+        "seconds": 0.42
+      },
+      {
+        "port": 18823,
+        "path": "/watchlists",
+        "status": 200,
+        "seconds": 0.434
+      },
+      {
+        "port": 18823,
+        "path": "/backtests",
+        "status": 200,
+        "seconds": 0.421
+      },
+      {
+        "port": 18823,
+        "path": "/paper",
+        "status": 200,
+        "seconds": 0.409
+      },
+      {
+        "port": 18823,
+        "path": "/api/research/factor-data/meta?universe=SP500",
+        "status": 200,
+        "seconds": 0.167
+      },
+      {
+        "port": 18823,
+        "path": "/ without authentication",
+        "status": 401,
+        "expected": 401
+      },
+      {
+        "port": 18825,
+        "path": "/",
+        "status": 200,
+        "seconds": 0.039
+      },
+      {
+        "port": 18825,
+        "path": "/api/overview",
+        "status": 200,
+        "seconds": 0.01
+      },
+      {
+        "port": 18825,
+        "path": "/healthz",
+        "status": 200,
+        "seconds": 0.003,
+        "health": {
+          "status": "ok",
+          "live": true,
+          "snapshot_available": true,
+          "snapshot_freshness": {
+            "status": "SUCCESS",
+            "age_seconds": 20.126639,
+            "max_age_seconds": 180,
+            "checked_at": "2026-09-05T16:40:28+00:00",
+            "reason": ""
+          }
+        }
+      },
+      {
+        "port": 18825,
+        "path": "/ without authentication",
+        "status": 401,
+        "expected": 401
+      }
+    ],
+    "cup_handle_delivery_disabled": true
+  },
+  "nominal_api": {
+    "passed": true,
+    "nominal_rows": 4,
+    "canonical_rows": 10,
+    "nominal_start": "2024-06-06",
+    "nominal_end": "2024-06-11"
+  },
+  "historical_pilot": {
+    "status": "PASS",
+    "selected_security_count": 12,
+    "target_session": "2026-09-04",
+    "statistics": {
+      "row_count": 21052,
+      "security_count": 12,
+      "min_date": "2019-01-02",
+      "max_date": "2026-09-04",
+      "duplicate_count": 0,
+      "invalid_keys": 0,
+      "null_values": 0,
+      "invalid_numeric": 0,
+      "invalid_ohlc": 0,
+      "future_rows": 0,
+      "off_xnys_session_rows": 0,
+      "target_coverage": 1,
+      "current_security_count": 10,
+      "target_covered_count": 10,
+      "historical_exit_count": 2,
+      "historical_exit_missing": [],
+      "unexpected_security_count": 0,
+      "unexpected_security_sample": [],
+      "validation_memory_limit_mb": 420,
+      "validation_temp_directory_max_gb": 12,
+      "provider_source_row_count": 21052,
+      "accepted_row_count": 21052,
+      "quarantined_row_count": 0,
+      "bar_quarantine_path": "/home/projects/quant/data/lake/staging/nominal_migration_pilot_20260906/asof=2026-09-04/run=20260905T165331Z_64b422a8/bar_quarantine.parquet",
+      "bar_quarantine_sha256": "b04888e52855804fe6c497125023f3b4b5ff9cbb72f9602d22abcc7c6a8ae1d1"
+    },
+    "alias_failures": []
+  },
+  "restored_timer_count": 14,
+  "timer_states_match": true,
+  "original_enablement_preserved": true,
+  "migration": {
+    "status": "RUNNING",
+    "current_stage": "US_EQUITY_COVERAGE_BACKFILL",
+    "started_at": "2026-09-05T17:04:04.032829+00:00",
+    "updated_at": "2026-09-05T17:04:04.068406+00:00",
+    "error": null
+  },
+  "migration_report_path": "/home/projects/quant/outputs/data_audits/broad_initial_rollout/target=2026-09-04/run=nominal-migration-20260906.json",
+  "migration_runtime": "MemoryCurrent=175841280\nActiveState=active\nSubState=running\n",
+  "coverage_progress": {
+    "status": "RUNNING",
+    "progress": null,
+    "selected_security_count": 7986,
+    "methodology_version": "BROAD_COVERAGE_V3_NOMINAL_PRICE"
+  },
+  "completed_batches": 1,
+  "coverage_checkpoint_path": "/home/projects/quant/data/lake/staging/us_equity_coverage/asof=2026-09-04/run=20260905T170406Z_143f3db9/checkpoint.json"
+}
