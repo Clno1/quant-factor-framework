@@ -139,3 +139,17 @@ def test_paper_detail_renders_frozen_contract_and_fee_components():
     assert "DIVIDEND_CASH" in response.text
     assert "2.5000" in response.text
     assert "运行与版本绑定记录" in response.text
+    assert "行业权重与基准偏离" in response.text
+
+
+def test_industry_risk_api_is_read_only_and_uses_report_service():
+    account_id = "db026d38-0b27-46a5-bdf8-3d26240fe26c"
+    with patch("src.webapp.app._recover_application_state", return_value=(0, 0)), \
+         patch("src.webapp.routes_v2.load_paper_account", return_value={"id": account_id}), \
+         patch("src.webapp.routes_v2.load_account_artifacts", return_value={"positions": pd.DataFrame()}), \
+         patch("src.webapp.routes_v2.paper_industry_report", return_value={"status": "PARTIAL", "rows": [], "comparable": False}) as report:
+        with TestClient(create_app()) as client:
+            response = client.get(f"/api/paper/accounts/{account_id}/industry-risk")
+    assert response.status_code == 200
+    assert response.json()["status"] == "PARTIAL"
+    report.assert_called_once()

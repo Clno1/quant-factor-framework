@@ -255,6 +255,9 @@ def neutralize_industry(
     mcap_df: pd.DataFrame | None = None,
     *,
     return_audit: bool = False,
+    industry_enabled: bool | None = None,
+    mcap_enabled: bool | None = None,
+    min_observations: int | None = None,
 ) -> pd.DataFrame | tuple[pd.DataFrame, NeutralizationAudit]:
     """Neutralize only with temporally valid exposures."""
     if factor_df.empty:
@@ -263,9 +266,9 @@ def neutralize_industry(
         return (empty, audit) if return_audit else empty
 
     requested_industry = bool(
-        getattr(CONFIG.preprocessing, "neutralize_industry", False)
+        getattr(CONFIG.preprocessing, "neutralize_industry", False) if industry_enabled is None else industry_enabled
     )
-    requested_mcap = bool(getattr(CONFIG.preprocessing, "neutralize_mcap", False))
+    requested_mcap = bool(getattr(CONFIG.preprocessing, "neutralize_mcap", False) if mcap_enabled is None else mcap_enabled)
     if not requested_industry and not requested_mcap:
         result = factor_df.copy()
         observations = int(result.notna().sum().sum())
@@ -352,7 +355,7 @@ def neutralize_industry(
         )
         return (result, audit) if return_audit else result
 
-    min_obs = int(getattr(CONFIG.preprocessing, "neutralize_min_obs", 30))
+    min_obs = int(getattr(CONFIG.preprocessing, "neutralize_min_obs", 30) if min_observations is None else min_observations)
     rows: list[pd.Series] = []
     daily_rows: list[dict] = []
     applied_count = 0

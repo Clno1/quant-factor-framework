@@ -148,6 +148,15 @@ def main() -> int:
             failed += 1
             log.exception("[%s] failed: %s", aid, e)
     log.info("Paper run finished: ok=%d failed=%d", ok, failed)
+    if not args.asof:
+        # Current monitoring is separate from execution. A provider/report error
+        # must not replay trades or change the account's trading run result.
+        try:
+            from scripts.update_industry_risk import refresh_current_reports
+
+            log.info("Industry risk reports: %s", refresh_current_reports())
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Industry risk report refresh failed: %s", exc)
     return 1 if failed else 0
 
 

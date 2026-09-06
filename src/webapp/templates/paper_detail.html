@@ -82,6 +82,26 @@
 {% endif %}
 
 <section class="chart-panel">
+    <div class="panel-title"><span>行业权重与基准偏离</span></div>
+    <p class="muted">行业权重按账户总净资产计算，现金和未知分类单独保留。当前分类观测用于风险监测，不代表历史行业中性化。</p>
+    {% if industry_risk.rows %}
+    <p>估值日：{{ industry_risk.valuation_date or '未估值' }} · 基准：{{ industry_risk.benchmark or '未指定' }} · 数据状态：{{ industry_risk.status }}</p>
+    <p class="muted">分类观测：{{ industry_risk.classification_observed_at or '缺失' }} · 基准观测：{{ industry_risk.benchmark_observed_at or '缺失' }} · 基准权重日期：{{ industry_risk.benchmark_asof or '供应商未提供，仅作当前观测对照' }}</p>
+    {% if not industry_risk.comparable %}<p class="muted">日期、分类或基准数据不完整，暂不计算行业偏离。</p>{% endif %}
+    <div class="table-wrap"><table class="data compact">
+        <thead><tr><th>行业</th><th>股票数</th><th>净资产权重</th><th>股票资产内权重</th><th>基准权重</th><th>偏离（百分点）</th></tr></thead>
+        <tbody>{% for r in industry_risk.rows %}<tr>
+            <td>{{ '现金' if r.sector == 'CASH' else '未分类／其他' if r.sector == 'UNKNOWN' else r.sector }}</td>
+            <td>{{ r.count }}</td><td>{{ '%.2f'|format(r.nav_weight * 100) }}%</td>
+            <td>{{ ('%.2f'|format(r.equity_weight * 100) ~ '%') if r.equity_weight is not none else '—' }}</td>
+            <td>{{ ('%.2f'|format(r.benchmark_weight * 100) ~ '%') if r.benchmark_weight is not none else '—' }}</td>
+            <td>{{ '%+.2f'|format(r.active_weight_pp) if r.active_weight_pp is not none else '—' }}</td>
+        </tr>{% endfor %}</tbody>
+    </table></div>
+    {% else %}<p class="muted">行业报告暂不可用；需要有效的账户估值和分类数据。</p>{% endif %}
+</section>
+
+<section class="chart-panel">
     <div class="panel-title"><span>当前持仓</span></div>
     {% if positions %}
     <div class="table-wrap">

@@ -61,6 +61,7 @@ from src.papertrading import (
 )
 from src.papertrading.definition import create_account_payload
 from src.papertrading.target import generate_target_weights
+from src.risk.industry import paper_industry_report
 from src.research_universes.registry import research_universe_registry
 from src.strategies import (
     StrategyComponent,
@@ -1397,6 +1398,7 @@ def paper_detail_page(request: Request, aid: UUID):
         "risk_config": account.get("risk_config") or {},
         "summary": summary,
         "positions": _records_for_table(positions, limit=100),
+        "industry_risk": paper_industry_report(account, positions),
         "open_orders": open_orders,
         "orders": _records_for_table(orders, limit=80),
         "fills": _records_for_table(fills, limit=80),
@@ -1406,6 +1408,15 @@ def paper_detail_page(request: Request, aid: UUID):
         "equity_fig_json": equity_fig_json,
         "universes": _enabled_universes(),
     })
+
+
+@router_v2.get("/api/paper/accounts/{aid}/industry-risk")
+def api_paper_industry_risk(aid: UUID):
+    account = load_paper_account(str(aid))
+    if account is None:
+        raise HTTPException(status_code=404, detail="Paper account not found")
+    positions = load_account_artifacts(str(aid)).get("positions", pd.DataFrame())
+    return paper_industry_report(account, positions)
 
 
 @router_v2.get("/api/paper/accounts")
