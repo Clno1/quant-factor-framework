@@ -1072,3 +1072,16 @@ Security Master `3ea8a269a67a4797be8bfcbfb2d7ae78`、coverage
 相关 timer 均为 enabled/active，资源检查有约 1,200 MiB 可用内存和 35.9 GiB 可用磁盘。
 watchdog 与运维 Web 正常；2026-09-04 缺跑仍不得补记。茶杯柄发送为 false，下一可计数的完整
 XNYS 交易日必须重新满足 v2 全部质量门槛。
+
+## 38. 2026-09-07 茶杯柄 v3 生产口径
+
+现网部署标记为 `7afed9ca6593ded424a3b7639028a1d8ba24e636`，茶杯柄算法合同已经从 v2 升为
+`daily-cup-5m-handle-shadow-v3`。v3 对基准、柄部和突破 bar 的非正成交量改为显式
+`INSUFFICIENT_VOLUME_EVIDENCE` 拒绝，结果口径发生变化，所以不得沿用 v2 的 `2/5`。现网状态和
+SQLite 均确认 v3 尚无 cycles、evaluations、data gaps 或 session observations，正式进度为
+`0/5`；v2 的 2026-09-02、2026-09-03 PASS 只保留审计用途。
+
+2026-09-07 为 XNYS 休市日，不计观察。若 2026-09-08、09、10、11、14 连续五个完整交易日均
+通过全部数据、覆盖率、错误率、延迟和版本门槛，最早可在 2026-09-14 日结后提交人工验收。
+`delivery_enabled=false` 保持不变。候选、盘中、watchdog timer 和运维 Web 均为 enabled/active；
+候选与盘中 service 显示的 failed 仍是 2026-09-04 的保留现场，不应清除或误报为 timer 停止。

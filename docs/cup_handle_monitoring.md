@@ -397,3 +397,20 @@ OTC 和公司名，缺少任一冻结证据仍报错。
 0 错误。唯一缺口分类合计为 `NO_TRADE_CONFIRMED=5`、`UNRESOLVED_SOURCE_GAP=12`、
 `PROVIDER_GAP_CONFIRMED=0`。MDB 回放仍为 v1、0 信号且误报代理为 null；CTNM 后续结果尚未成熟，
 不能表述为 0% 误报。
+
+## 20. 2026-09-07 v3 合同生效与观察重新开始
+
+现网部署标记 `7afed9ca6593ded424a3b7639028a1d8ba24e636` 已包含
+`daily-cup-5m-handle-shadow-v3`。v3 在杯柄基准区、柄部或突破 bar 的成交量不为正时明确返回
+`INSUFFICIENT_VOLUME_EVIDENCE`，不再把缺失成交量换算成无穷比例继续参与判定。这会改变同一输入的
+拒绝原因和潜在信号结果，因此属于算法合同变化，v2 的两个 PASS 只能保留为历史证据，不能计入 v3。
+
+2026-09-07 11:47 SGT 的现网状态确认 v3 为 `0/5`，五个候选完成交易日均缺 v3 记录；SQLite 中
+仍只有 v1 的一个 FAIL 和 v2 的 2026-09-02、2026-09-03 两个 PASS，v3 的 cycles、evaluations、
+session observations 和 data gaps 均为 0。2026-09-07 是 XNYS 休市日，不产生或补记观察；若
+2026-09-08、09、10、11、14 五个连续完整交易日全部通过，最早在 2026-09-14 收盘日结后达到
+`5/5`。发送继续保持 `delivery_enabled=false`，达到门槛后也只进入人工验收。
+
+候选、盘中、watchdog timer 与运维 Web 当前均为 enabled/active。候选和盘中 service 仍保留
+2026-09-04 上游阻断的最后失败结果，这是不可覆盖的事故证据，不代表 timer 已停用。MDB 回放仍是
+v1 的 110 根完成五分钟 bar、0 信号、`false_positive_rate_proxy=null`，不能解释为 0% 误报。
