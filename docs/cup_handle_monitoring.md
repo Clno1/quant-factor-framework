@@ -435,3 +435,30 @@ coverage `562967c01bb54e2ab39454804cc4ac73` 与 PIT
 `c1329fcd14dd4521911976b21fa6be22` 均绑定 2026-09-04，符合劳动节后 2026-09-08 交易日的前一
 XNYS 数据日。首个 v3 完整日仍需等待 2026-09-08 的 18:30 候选、21:20 盘中监控及收盘日结；
 当前 `0/5` 合理，发送保持关闭。
+
+## 22. 2026-09-09 v3 首个交易日盘中核验
+
+截至 2026-09-09 00:26 SGT，即 2026-09-08 美股盘中，v3 首个可观察交易日仍在运行，尚未生成
+`cup_handle_session_observations`，因此正式进度仍为 `0/5`，不能提前记为通过或失败。盘前候选于
+18:30 SGT 启动、18:31:35 成功退出，耗时 50.933 秒，systemd 峰值 588.3 MiB、swap 0；日线共
+评估 2,846 只、合格 1,300 只并冻结 600 只盘中候选。
+
+候选合同已独立重新校验通过：coverage `562967c01bb54e2ab39454804cc4ac73`、bars SHA-256
+`350bc406683b95cd58c4d15efdf0397308701d5ce342bf2ec501c91876b97cee`、PIT
+`c1329fcd14dd4521911976b21fa6be22`，membership、eligibility、PIT manifest 和 Security Master
+manifest 哈希均与正式发布一致，source data date 为 2026-09-04。
+
+00:26 SGT 的只读盘中快照为 32/78 个五分钟周期、1,240 次评估、3 次 MATCH、859 次 REJECTED、
+364 次 NOT_READY、14 次 UNEVALUABLE、0 次 ERROR；53 只实际评估股票中 2 只有数据缺口，暂算
+可评估覆盖率 96.23%、缺口比例 3.77%。共有 5 个唯一缺口事件，全部为
+`UNRESOLVED_SOURCE_GAP`，`NO_TRADE_CONFIRMED=0`、`PROVIDER_GAP_CONFIRMED=0`。当前检测 P95
+为 0.324636 ms，最大序列 34 根。
+
+前八个非 MATCH 原因依次为 `HANDLE_TOO_SHALLOW=717`、
+`INSUFFICIENT_COMPLETED_5M_BARS=311`、`RIM_NOT_BROKEN=83`、
+`HANDLE_VOLUME_NOT_CONTRACTING=58`、`STALE_QUOTE=48`、
+`UNRESOLVED_5M_SOURCE_GAP=14`、`HANDLE_NOT_FORMED=4`、
+`INSUFFICIENT_VOLUME_EVIDENCE=1`。ABG 的 breakout volume 为 0，v3 明确拒绝且没有生成成交量比例；
+全量扫描未发现非正成交量继续参与比例或非有限比值。VTS 和 NKTR 仅写入 SHADOW 信号，未投递。
+MDB 回放仍为 v1、110 根 bar、0 信号且误报代理为 null；生产信号也尚无完整后续窗口，均不能称为
+0% 误报。发送保持关闭，需等待 2026-09-08 收盘加 5 分钟后的正式日结。

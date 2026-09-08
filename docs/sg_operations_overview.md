@@ -1102,3 +1102,20 @@ watchdog 后，事故为 RESOLVED、任务为 SCHEDULED。候选 timer 下一次
 `562967c01bb54e2ab39454804cc4ac73` 和 PIT `c1329fcd14dd4521911976b21fa6be22` 均已就绪且
 target 为 2026-09-04。因子研究和模拟盘仍有各自的开放事故，应单独处理；它们不改变本次候选所需
 coverage/PIT 已就绪的事实。茶杯柄 v3 仍为 `0/5`，发送关闭。
+
+## 40. 2026-09-09 v3 首日盘中生产状态
+
+2026-09-08 的候选预计算已在 50.933 秒内成功完成，峰值 588.3 MiB、swap 0，验证了休市日修复后
+正常交易日路径未回归。候选绑定 coverage `562967c01bb54e2ab39454804cc4ac73` 和 PIT
+`c1329fcd14dd4521911976b21fa6be22` 的完整数据合同；独立 validator 已复验 bars、membership、
+eligibility、PIT manifest 与 Security Master manifest 哈希。
+
+截至 00:26 SGT，`quant-intraday-momentum-monitor.service` 为 active/running，内存约 227 MiB、
+峰值约 438 MiB、swap 0，FMP exact request failure 为 0。v3 已有 32 个五分钟周期和 1,240 次评估，
+但收盘日结尚未形成，故当前仍为 `0/5`、剩余 5 个通过日。当前两只缺口股票、5 个唯一事件全部为
+`UNRESOLVED_SOURCE_GAP`；0 错误、P95 0.324636 ms、最大 34 根。ABG 的零成交量突破柱按
+`INSUFFICIENT_VOLUME_EVIDENCE` 拒绝，未计算无效比例。
+
+watchdog 和运维 Web 正常，当前任务卡为 RUNNING，并公开算法版本 v3、证据交易日和 `0/5`；v1
+最近失败事故仍保留在历史 incidents 中，没有被 SCHEDULED 删除。VTS、NKTR 的信号只进入 SHADOW
+outbox。最终是否记为第一个通过日，必须以收盘加 5 分钟生成的 v3 日结为准；发送保持关闭。
