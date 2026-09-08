@@ -21,6 +21,7 @@ ENV/
 .vscode/
 *.swp
 .DS_Store
+._*
 
 # Jupyter
 .ipynb_checkpoints/
@@ -29,6 +30,7 @@ ENV/
 # Project data & logs (保留目录结构，忽略内容)
 data/raw/*
 data/cache/*
+data/ep/*
 data/catalog/*
 data/lake/*
 data/pit_universes/*
@@ -57,3 +59,9 @@ outputs/
 
 # CodeBuddy IDE 本地缓存（规划/会话等）
 .codebuddy/
+
+# Local nested checkout and private/generated audit evidence
+/quant-factor-framework/
+/reviews/**/*.sqlite3
+/reviews/*-ep-*/evidence/
+/reviews/*-ep-*/**/*.json

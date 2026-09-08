@@ -158,6 +158,7 @@ def _request(
     *,
     timeout: float | None = None,
     retry: int | None = None,
+    rate_limit_passthrough: bool = False,
 ) -> requests.Response:
     """Execute one authenticated GET with bounded retries."""
     params = dict(params or {})
@@ -178,6 +179,8 @@ def _request(
             )
             # 限流
             if r.status_code == 429:
+                if rate_limit_passthrough:
+                    r.raise_for_status()
                 wait = 2.0 * (2 ** attempt)
                 log.warning("FMP rate limited (429). Sleeping %.0fs ...", wait)
                 time.sleep(wait)
@@ -191,6 +194,8 @@ def _request(
             r.raise_for_status()
             return r
         except requests.HTTPError as e:
+            if rate_limit_passthrough and e.response is not None and e.response.status_code == 429:
+                raise
             # 4xx 直接透传，不重试
             if e.response is not None and 400 <= e.response.status_code < 500 \
                     and e.response.status_code != 429:
@@ -225,6 +230,54 @@ def _get(path: str, params: dict[str, Any] | None = None) -> Any:
     if isinstance(data, dict) and "Error Message" in data:
         raise RuntimeError(f"FMP error: {data['Error Message']}")
     return data
+
+
+def _ep_records(path: str, params: dict[str, Any], *, timeout: float) -> list[dict[str, Any]]:
+    """Strict, single-attempt EP reads; orchestration owns the collection budget."""
+    if not np.isfinite(timeout) or timeout <= 0:
+        raise ValueError("timeout must be positive and finite")
+    payload = _request(path, params, timeout=timeout, retry=0, rate_limit_passthrough=True).json()
+    if not isinstance(payload, list) or any(not isinstance(row, dict) for row in payload):
+        raise ValueError(f"FMP {path} returned an invalid records payload")
+    return payload
+
+
+def get_ep_earnings_calendar_day(day: str, *, timeout: float = 10) -> list[dict[str, Any]]:
+    from datetime import date
+    if date.fromisoformat(day).isoformat() != day:
+        raise ValueError("day must be YYYY-MM-DD")
+    return _ep_records("/earnings-calendar", {"from": day, "to": day}, timeout=timeout)
+
+
+def get_ep_news_page(feed: str, *, page: int = 0, limit: int = 100,
+                     timeout: float = 10) -> list[dict[str, Any]]:
+    paths = {"stock": "/news/stock-latest", "press": "/news/press-releases-latest"}
+    if feed not in paths or type(page) is not int or page < 0 or type(limit) is not int or not 1 <= limit <= 250:
+        raise ValueError("Invalid EP feed or pagination")
+    return _ep_records(paths[feed], {"page": page, "limit": limit}, timeout=timeout)
+
+
+def get_ep_security_profile(symbol: str, *, timeout: float = 10) -> dict[str, Any] | None:
+    symbol = _normalize_us_ticker(symbol)
+    if not re.fullmatch(r"[A-Z0-9][A-Z0-9-]{0,19}", symbol):
+        raise ValueError("Invalid EP ticker")
+    rows = _ep_records("/profile", {"symbol": symbol}, timeout=timeout)
+    if not rows:
+        return None
+    if len(rows) != 1 or _normalize_us_ticker(rows[0].get("symbol")) != symbol:
+        raise ValueError("EP profile identity mismatch")
+    row = rows[0]
+    flags = {}
+    for field in ("isEtf", "isFund", "isAdr", "isActivelyTrading"):
+        value = str(row.get(field, "")).lower().strip()
+        if value not in {"true", "false", "1", "0"}:
+            raise ValueError("EP profile identity flags incomplete")
+        flags[field] = value in {"true", "1"}
+    return {"ticker": symbol, "name": str(row.get("companyName") or ""),
+            "exchange": str(row.get("exchangeShortName") or row.get("exchange") or "").upper(),
+            "is_actively_trading": flags["isActivelyTrading"],
+            "asset_type": infer_us_security_asset_type(ticker=symbol, name=row.get("companyName"),
+                is_etf=flags["isEtf"], is_fund=flags["isFund"], is_adr=flags["isAdr"])}
 
 
 def _records_frame(payload: Any, *, endpoint: str) -> pd.DataFrame:

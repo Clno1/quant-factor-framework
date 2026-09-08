@@ -49,3 +49,15 @@ jobs:
           python -m pytest -q
           tests/test_web_backtest_detail.py
           tests/test_web_startup.py
+      - name: EP evidence and model proposal contracts (offline)
+        run: >-
+          python -m pytest -q
+          tests/test_ep_radar.py
+          tests/test_ep_sources.py
+          tests/test_ep_fact_review.py
+          tests/test_ep_discovery.py
+          tests/test_ep_attachments.py
+          tests/test_ep_official_source_audit.py
+          tests/test_ep_analysis.py
+          tests/test_ep_llm.py
+          tests/test_ep_llm_trial.py

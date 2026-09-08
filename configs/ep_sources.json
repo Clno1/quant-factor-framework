@@ -1,0 +1,30 @@
+{
+  "version": "ep-issuer-registry-v1",
+  "issuers": {
+    "AFRM": {
+      "name": "Affirm Holdings, Inc.", "cik": "0001820953",
+      "ir_host": "investors.affirm.com",
+      "evidence_url": "https://www.sec.gov/Archives/edgar/data/1820953/000162828026059271/afrm-20260825.htm"
+    },
+    "ANF": {
+      "name": "Abercrombie & Fitch Co.", "cik": "0001018840",
+      "ir_host": "abercrombieandfitchcompany.gcs-web.com",
+      "evidence_url": "https://www.sec.gov/Archives/edgar/data/1018840/000101884026000041/q22026pressrelease.htm"
+    },
+    "GTLB": {
+      "name": "GitLab Inc.", "cik": "0001653482",
+      "ir_host": "ir.gitlab.com",
+      "evidence_url": "https://data.sec.gov/submissions/CIK0001653482.json"
+    },
+    "NYAX": {
+      "name": "Nayax Ltd.", "cik": "0001901279",
+      "ir_host": "ir.nayax.com",
+      "evidence_url": "https://www.sec.gov/Archives/edgar/data/1901279/000117891326004245/0001178913-26-004245-index.htm"
+    },
+    "PLAB": {
+      "name": "Photronics, Inc.", "cik": "0000810136",
+      "ir_host": "photronicsinc.gcs-web.com",
+      "evidence_url": "https://www.sec.gov/Archives/edgar/data/810136/000081013626000006/plabQ32026EarningsEx99-1PR.htm"
+    }
+  }
+}
