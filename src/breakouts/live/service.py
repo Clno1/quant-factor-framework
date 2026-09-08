@@ -188,6 +188,21 @@ class IntradayMomentumMonitor:
         started = monotonic_time.perf_counter()
         aware_now = (now or datetime.now(self.timezone)).astimezone(self.timezone)
         session_date = aware_now.strftime("%Y-%m-%d")
+        try:
+            xnys_session_schedule(
+                session_date,
+                timezone=self.settings.timezone,
+            )
+        except ValueError:
+            return {
+                "phase": "not_a_trading_session",
+                "session_date": session_date,
+                "candidate_count": 0,
+                "cycle_seconds": round(
+                    monotonic_time.perf_counter() - started,
+                    3,
+                ),
+            }
         await self._ensure_candidates(session_date)
         snapshot = self.candidate_snapshot or {}
         contract = snapshot.get("data_contract") or {}

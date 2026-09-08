@@ -558,6 +558,49 @@ class StateAndServiceTests(unittest.TestCase):
                 PARAMETER_VERSION,
             ))
 
+    def test_prepare_candidates_skips_xnys_holiday_without_failure(self):
+        class ForbiddenFeed:
+            source_name = "forbidden"
+
+            def counters(self):
+                return {}
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            settings = replace(
+                IntradayMonitorSettings(),
+                state_path=root / "state.sqlite3",
+                snapshots_dir=root / "snapshots",
+            )
+            state = IntradayMonitorState(settings.state_path)
+            monitor = IntradayMomentumMonitor(
+                settings,
+                feed=ForbiddenFeed(),
+                state=state,
+                candidate_builder=lambda *_args, **_kwargs: self.fail(
+                    "holiday preparation must not build candidates"
+                ),
+                source_session_resolver=lambda _session: self.fail(
+                    "holiday preparation must not resolve a source session"
+                ),
+            )
+
+            result = asyncio.run(monitor.prepare_candidates(
+                now=datetime(2026, 9, 7, 6, 30, tzinfo=NEW_YORK),
+            ))
+
+            self.assertEqual(result["phase"], "not_a_trading_session")
+            self.assertEqual(result["session_date"], "2026-09-07")
+            self.assertEqual(result["candidate_count"], 0)
+            self.assertEqual(
+                state.load_candidate_snapshot(
+                    "2026-09-07",
+                    ALGORITHM_VERSION,
+                    PARAMETER_VERSION,
+                ),
+                None,
+            )
+
     def test_candidate_snapshot_schema_migrates_and_indexes_data_contract(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "state.sqlite3"

@@ -414,3 +414,24 @@ session observations 和 data gaps 均为 0。2026-09-07 是 XNYS 休市日，�
 候选、盘中、watchdog timer 与运维 Web 当前均为 enabled/active。候选和盘中 service 仍保留
 2026-09-04 上游阻断的最后失败结果，这是不可覆盖的事故证据，不代表 timer 已停用。MDB 回放仍是
 v1 的 110 根完成五分钟 bar、0 信号、`false_positive_rate_proxy=null`，不能解释为 0% 误报。
+
+## 21. 2026-09-08 休市日候选误报修复与首日待运行
+
+2026-09-07 是 XNYS 休市日。盘中 monitor 已按 `not_a_trading_session` 正常退出，但 18:30 SGT
+的候选预计算仍直接调用 `expected_source_session()`，把休市日抛出的 `ValueError` 作为 systemd
+失败。这是调度适配缺陷，不是行情、PIT 或茶杯柄算法失败；该日没有候选快照，也没有 v3 cycle、
+evaluation、observation 或 data-gap 记录，因此没有污染或补记 shadow 台账。
+
+候选入口现与盘中 monitor 使用同一 XNYS 交易日判断。休市日返回
+`phase=not_a_trading_session`、候选数 0 和 exit code 0，不调用候选构建器，也不写空快照。SG 定向
+回归为 `26 passed`，部署前备份位于：
+
+```text
+/home/projects/quant-backups/cup-holiday-skip-20260908T1218CST
+```
+
+运维事件已转为 RESOLVED，候选任务恢复为 SCHEDULED。2026-09-08 11:31 SGT 上游检查确认正式
+coverage `562967c01bb54e2ab39454804cc4ac73` 与 PIT
+`c1329fcd14dd4521911976b21fa6be22` 均绑定 2026-09-04，符合劳动节后 2026-09-08 交易日的前一
+XNYS 数据日。首个 v3 完整日仍需等待 2026-09-08 的 18:30 候选、21:20 盘中监控及收盘日结；
+当前 `0/5` 合理，发送保持关闭。

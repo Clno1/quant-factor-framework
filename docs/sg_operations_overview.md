@@ -1085,3 +1085,20 @@ SQLite 均确认 v3 尚无 cycles、evaluations、data gaps 或 session observat
 通过全部数据、覆盖率、错误率、延迟和版本门槛，最早可在 2026-09-14 日结后提交人工验收。
 `delivery_enabled=false` 保持不变。候选、盘中、watchdog timer 和运维 Web 均为 enabled/active；
 候选与盘中 service 显示的 failed 仍是 2026-09-04 的保留现场，不应清除或误报为 timer 停止。
+
+## 39. 2026-09-08 休市日候选任务修复
+
+9 月 7 日劳动节休市时，`quant-intraday-momentum-monitor.service` 正常记录
+`not_a_trading_session` 并 exit 0，但 `quant-intraday-candidate-prepare.service` 因候选入口没有
+预先判断 XNYS session 而 exit 1。失败发生在任何候选构建和数据写入之前，v3 四张观察表与该日
+候选快照均为 0，不能把它计为 shadow 失败日或零信号日。
+
+候选入口已经补齐休市日无副作用跳过，SG 测试 `26 passed`；备份为
+`/home/projects/quant-backups/cup-holiday-skip-20260908T1218CST`。清理 systemd failed 状态并刷新
+watchdog 后，事故为 RESOLVED、任务为 SCHEDULED。候选 timer 下一次为 2026-09-08 18:30 SGT，
+盘中 timer 为 21:20 SGT。
+
+同日上午宽基基础链检查为 SUCCESS：Security Master、coverage
+`562967c01bb54e2ab39454804cc4ac73` 和 PIT `c1329fcd14dd4521911976b21fa6be22` 均已就绪且
+target 为 2026-09-04。因子研究和模拟盘仍有各自的开放事故，应单独处理；它们不改变本次候选所需
+coverage/PIT 已就绪的事实。茶杯柄 v3 仍为 `0/5`，发送关闭。
