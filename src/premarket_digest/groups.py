@@ -223,6 +223,14 @@ class GroupArtifactDigestSource:
             ) from None
 
     def load(self, source_session: str) -> dict[str, Any]:
+        # Upgrade in place. Once rotation has been initialized, corruption or
+        # staleness must fail closed, never silently send the legacy ranking.
+        from src.group_analytics.rotation.store import RotationStore
+        from .rotation import load_rotation_report
+
+        rotation_store = RotationStore(self.reader.settings.output_root / "group_analytics" / "rotation") if hasattr(self.reader, "settings") else RotationStore()
+        if rotation_store.initialized:
+            return load_rotation_report(source_session, store=rotation_store, now=self.now)
         specs = (
             (
                 "sector",

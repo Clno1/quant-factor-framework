@@ -277,12 +277,12 @@ webapp:
   title: "量化研究平台"
   output_dir: "outputs"            # 图表 / JSON 缓存目录
 
-# 行业/主题分析（阶段 1 默认关闭；通过影子运行 Gate 后再开放页面）
+# 板块轮动只读入口；计算仍由独立 CLI/systemd 显式触发。
 # 该模块是独立领域，不会隐式进入因子、回测或模拟盘。
 group_analytics:
-  enabled: false
-  # 与 writer 分离；影子期可 enabled=true、web_enabled=false。
-  web_enabled: false
+  enabled: true
+  # 关闭任一开关仍可隐藏整个入口，不影响多因子/模拟盘。
+  web_enabled: true
   default_universe: SP500
   universes: [SP500]
   output_subdir: "universes"

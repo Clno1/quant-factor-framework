@@ -310,7 +310,7 @@ class GroupAnalyticsAPITests(unittest.TestCase):
         self.assertIsNotNone(payload["distribution"]["winsor_upper"])
 
     def test_pages_include_accessible_heat_and_detail_controls(self) -> None:
-        heat_page = self.client.get("/group-analytics")
+        heat_page = self.client.get("/group-analytics/daily")
         detail_page = self.client.get(
             "/group-analytics/groups/fmp:sector:technology",
             params={"level": "sector", "data_run_id": "safe-run-id"},
@@ -459,6 +459,9 @@ class GroupAnalyticsAPITests(unittest.TestCase):
         self.assertEqual(error["details"]["last_attempt_status"], "FAILED")
 
     def test_failed_attempt_after_success_keeps_old_data_and_warning(self) -> None:
+        clock = mock.patch.object(group_analytics_routes, "latest_completed_session", return_value=pd.Timestamp(ASOF))
+        clock.start()
+        self.addCleanup(clock.stop)
         combination = self._publish(
             run_id="stable-success",
             level="sector",

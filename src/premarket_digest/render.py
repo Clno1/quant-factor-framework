@@ -270,6 +270,10 @@ def build_sector_rotation_payload(
     context: PremarketContext,
     settings: PremarketDigestSettings,
 ) -> dict[str, Any]:
+    if report.get("kind") == "rotation_v2":
+        from .rotation import rotation_payload
+
+        return rotation_payload(report, context, settings)
     content, allowed_mentions = _mentions(
         settings.role_for(DigestChannel.SECTOR_ROTATION),
         "板块/行业强弱日报已更新",

@@ -22,9 +22,9 @@ def _imports(path: Path) -> set[str]:
 
 
 class GroupAnalyticsIsolationTests(unittest.TestCase):
-    def test_default_config_disables_group_analytics(self):
-        self.assertFalse(bool(CONFIG.group_analytics.enabled))
-        self.assertFalse(bool(CONFIG.group_analytics.web_enabled))
+    def test_default_config_exposes_read_only_rotation(self):
+        self.assertTrue(bool(CONFIG.group_analytics.enabled))
+        self.assertTrue(bool(CONFIG.group_analytics.web_enabled))
 
     def test_string_false_flags_never_enable_writer_or_web(self):
         settings = load_group_analytics_settings(
@@ -51,13 +51,16 @@ class GroupAnalyticsIsolationTests(unittest.TestCase):
 
     def test_disabled_app_does_not_register_group_routes(self):
         from src.webapp.app import create_app
+        from fastapi.testclient import TestClient
 
-        paths = {route.path for route in create_app().routes}
-        self.assertNotIn("/group-analytics", paths)
-        self.assertFalse(any(path.startswith("/api/group-analytics") for path in paths))
+        with mock.patch.dict(os.environ, {"GROUP_ANALYTICS_ENABLED": "false"}):
+            client = TestClient(create_app())
+            self.assertEqual(client.get("/group-analytics").status_code, 404)
+            self.assertEqual(client.get("/api/group-analytics/rotation").status_code, 404)
 
     def test_web_routes_require_both_independent_environment_flags(self):
         from src.webapp.app import create_app
+        from fastapi.testclient import TestClient
 
         with mock.patch.dict(
             os.environ,
@@ -66,8 +69,7 @@ class GroupAnalyticsIsolationTests(unittest.TestCase):
                 "GROUP_ANALYTICS_WEB_ENABLED": "true",
             },
         ):
-            writer_off_paths = {route.path for route in create_app().routes}
-        self.assertNotIn("/group-analytics", writer_off_paths)
+            self.assertEqual(TestClient(create_app()).get("/group-analytics").status_code, 404)
 
         with mock.patch.dict(
             os.environ,
@@ -76,9 +78,9 @@ class GroupAnalyticsIsolationTests(unittest.TestCase):
                 "GROUP_ANALYTICS_WEB_ENABLED": "true",
             },
         ):
-            enabled_paths = {route.path for route in create_app().routes}
-        self.assertIn("/group-analytics", enabled_paths)
-        self.assertIn("/api/group-analytics/heat", enabled_paths)
+            client = TestClient(create_app())
+            self.assertEqual(client.get("/group-analytics").status_code, 200)
+            self.assertIn("/api/group-analytics/heat", client.get("/openapi.json").json()["paths"])
 
     def test_core_domains_do_not_import_group_analytics(self):
         core_domains = (
