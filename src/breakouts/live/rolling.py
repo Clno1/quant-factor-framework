@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, time
+import math
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -95,7 +96,7 @@ class RollingIntradayBars:
         row = {
             "observed_at": pd.Timestamp(observed),
             "provider_timestamp": pd.Timestamp(provider),
-            "cumulative_volume": max(0.0, float(cumulative_volume)),
+            "cumulative_volume": float(cumulative_volume),
         }
         minute = row["observed_at"].floor("min")
         self._quote_observations = [
@@ -344,10 +345,35 @@ class RollingIntradayBars:
             if value["observed_at"] >= bucket_end
         ]
         evidence: dict[str, Any] = {
+            "classification_policy": "quote-window-evidence-v2",
             "bucket_start": bucket_start.strftime("%Y-%m-%d %H:%M:%S"),
             "bucket_end": bucket_end.strftime("%Y-%m-%d %H:%M:%S"),
         }
+        # A cumulative-volume increase is localizable only between two provider
+        # timestamps inside the missing bucket, not across its outer boundaries.
+        inside = [
+            value for value in observations
+            if bucket_start <= value["provider_timestamp"] < bucket_end
+            and value["provider_timestamp"] <= value["observed_at"]
+            and math.isfinite(value["cumulative_volume"])
+            and value["cumulative_volume"] >= 0
+        ]
+        for left, right in zip(inside, inside[1:]):
+            if (
+                left["provider_timestamp"] < right["provider_timestamp"]
+                and right["cumulative_volume"] > left["cumulative_volume"]
+            ):
+                evidence.update({
+                    "reason": "IN_BUCKET_CUMULATIVE_VOLUME_INCREASE",
+                    "before_provider_timestamp": str(left["provider_timestamp"]),
+                    "after_provider_timestamp": str(right["provider_timestamp"]),
+                    "cumulative_volume_delta": (
+                        right["cumulative_volume"] - left["cumulative_volume"]
+                    ),
+                })
+                return "PROVIDER_GAP_CONFIRMED", evidence
         if not before or not after:
+            evidence["reason"] = "MISSING_BOUNDARY_OBSERVATIONS"
             return "UNRESOLVED_SOURCE_GAP", evidence
         left = before[-1]
         right = after[0]
@@ -368,13 +394,22 @@ class RollingIntradayBars:
             ),
             "cumulative_volume_delta": volume_delta,
         })
-        if volume_delta == 0:
-            return "NO_TRADE_CONFIRMED", evidence
-        if (
-            volume_delta > 0
-            and bucket_start <= provider_timestamp < bucket_end
-        ):
-            return "PROVIDER_GAP_CONFIRMED", evidence
+        # Repeated last-trade quotes are not a feed-completeness watermark.
+        # Neither unchanged totals nor a delta spanning the boundary prove what
+        # happened inside the bucket. Keep it unknown until stronger evidence exists.
+        evidence["reason"] = (
+            "INVALID_CUMULATIVE_VOLUME"
+            if not all(
+                math.isfinite(value["cumulative_volume"])
+                and value["cumulative_volume"] >= 0
+                for value in (left, right)
+            )
+            else "NO_FRESHNESS_WATERMARK"
+            if volume_delta == 0
+            else "VOLUME_DELTA_NOT_LOCALIZED_TO_BUCKET"
+        )
+        if not math.isfinite(volume_delta):
+            evidence["cumulative_volume_delta"] = None
         return "UNRESOLVED_SOURCE_GAP", evidence
 
     def _sequence_data_quality(

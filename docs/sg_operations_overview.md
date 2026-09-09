@@ -1141,3 +1141,20 @@ Web 持续 active，约 42 MiB 常驻内存。
 watchdog API 当前返回 `DEGRADED`，明确显示最近完整交易日 2026-09-08 FAIL、算法 v3 和两个失败
 原因；对应 `CUP_HANDLE_SHADOW_SESSION_FAILED` 事故保持 OPEN，v1 历史失败仍以 RESOLVED 保留。
 这验证了失败没有被后续等待状态覆盖。VTS、NKTR 只保存在 SHADOW outbox，发送开关保持 false。
+
+## 42. 2026-09-09 分钟缺口现场复查和修复
+
+现场再次读取 FMP 的 1min/5min 接口，OPY、TEN、WBI 共 13 个缺口在两种粒度中均无行，归因为
+当前供应商数据无法支持连续五分钟评估，不是 systemd 中断或候选上游过期。共享 coverage/PIT 未变。
+详细响应及哈希已写入 `outputs/data_audits/cup_handle_gaps/2026-09-08_b80e243c01104313bdd05ebeba13ba4b.json`。
+四张 shadow 生产表查询前后哈希完全一致，失败日不重算。
+
+修复了把陈旧等量报价误判为“确认无成交”的问题，以及跨桶累计成交量增量无法定位的问题。证据
+子版本 `quote-window-evidence-v2` 只接受桶内有效时间戳及成交量证据，未解决缺口继续不可评估。
+原 9 月 8 日 NO_TRADE_CONFIRMED 是历史分类器标签，现已确认其证据不足；旧表不改写，以修复说明
+记录局限。检测算法 v3、95%/5% 门槛、发送 false 和 0/5 进度保持原口径。
+
+部署备份：`/home/projects/quant-backups/cup-gap-evidence-20260909T1230CST`。源文件部署前与本地基线
+哈希一致，部署后本地及 SG 的茶杯柄、分钟监控、审计脚本与 watchdog 定向回归均 51 passed。
+修复在盘中服务未运行时部署，下一次常规定时启动自动生效。新增诊断脚本只读 SQLite、有限查询
+至多 20 只股票、保存隔离报告，不触发历史回放晋级或 Discord 发送。

@@ -828,3 +828,20 @@ DEGRADED 必须解释为茶杯柄数据质量门禁失败，而不是 systemd �
 ABG 共四次因 breakout volume 为 0 被拒绝为 `INSUFFICIENT_VOLUME_EVIDENCE`，没有生成有效成交量
 比例。VTS、NKTR 命中仍为 SHADOW；MDB 回放和生产信号均没有成熟误报结果，误报率必须继续显示为
 未知而非 0%。达到五个 v3 PASS 日前 `delivery_enabled=false` 不得更改。
+
+## 39. 2026-09-09 缺口证据与复查报告
+
+9 月 8 日 OPY/TEN/WBI 的 13 个缺口，经独立查询 FMP 1min 与 5min 仍全部无行。新增
+`scripts/diagnose_cup_handle_data_gaps.py` 保存规范化响应、哈希、观察时间和原始 gap 分类；报告
+只表示查询时的事实，不回写 live 数据或改变日结。HTTP 请求成功与数据连续性应分别解释：本日
+failed_exact_requests=0，但 13 个缺口仍然存在。诊断报告目前是审计文件，并未新增网页按钮。
+
+证据分类子版本升级为 `quote-window-evidence-v2`，写入新 gap 的 evidence。旧“累计成交量不变”
+只能说明两次收到的数值相同，陈旧 last-trade quote 不能证明区间无成交。故原 OPY 的
+NO_TRADE_CONFIRMED 标签保留为历史记录，但不能继续作为已确认无成交的事实引用。新分类保留明确
+的 NO_FRESHNESS_WATERMARK、MISSING_BOUNDARY_OBSERVATIONS 等证据不足原因；仅桶内时间戳和
+增量可定位的证据可确认为有成交缺失。所有缺口仍不可评估，未通过日继续显示 FAIL/DEGRADED。
+
+本地与 SG 回归均 51 passed，备份为 `cup-gap-evidence-20260909T1230CST`。独立报告位于
+`outputs/data_audits/cup_handle_gaps/2026-09-08_b80e243c01104313bdd05ebeba13ba4b.json`，四张生产
+shadow 表没有改变，进度仍为 v3 0/5，发送关闭。

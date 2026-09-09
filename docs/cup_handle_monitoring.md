@@ -483,10 +483,10 @@ UNEVALUABLE、0 次 ERROR。前八个非 MATCH 原因为 `HANDLE_TOO_SHALLOW=184
 `HANDLE_NOT_FORMED=67`、`INSUFFICIENT_VOLUME_EVIDENCE=4`。
 
 13 个唯一缺口事件涉及 OPY、TEN、WBI 三只股票：`UNRESOLVED_SOURCE_GAP=12`、
-`NO_TRADE_CONFIRMED=1`、`PROVIDER_GAP_CONFIRMED=0`。OPY 有 7 个事件，其中一个通过前后累计成交量
-不变被证明为真实无成交；其余 OPY 事件以及 TEN、WBI 事件没有足够证据安全归类。多段缺口前后
-累计成交量增加，说明期间确有成交但没有得到可重建的完整五分钟序列；仍保留为 unresolved，不能
-猜测 OHLCV 或人为改成 provider gap。重复观察只增加 `observation_count`，没有复制成新的唯一事件。
+`NO_TRADE_CONFIRMED=1`、`PROVIDER_GAP_CONFIRMED=0`。这是旧分类器写入的历史结果；第 24 节复核发现
+OPY 的“确认无成交”证据不足，不应把这个标签当作已证实的事实。缺口前后累计成交量增加也不能
+定位成交发生在缺失的五分钟内，因为报价观测区间跨越桶边界。历史记录保留，但其证据局限必须
+同时说明。重复观察只增加 `observation_count`，没有复制成新的唯一事件。
 
 ABG 的四次 `INSUFFICIENT_VOLUME_EVIDENCE` 均由 breakout volume 为 0 触发。payload 只保留原始
 baseline、handle 和 breakout volume，不生成 `handle_volume_ratio` 或
@@ -498,3 +498,42 @@ shadow 信号也没有成熟后续窗口，不能声称误报率为 0%。
 保持 active。运维任务卡已固定显示 2026-09-08 `DEGRADED` 和上述两个失败原因，开放事故指纹绑定
 `daily-cup-5m-handle-shadow-v3`，没有被下一次 `SCHEDULED` 覆盖。发送继续保持
 `delivery_enabled=false`；2026-09-09 必须作为新的独立交易日重新满足全部门槛。
+
+## 24. 2026-09-09 缺口复查及证据分类修复
+
+通过 SG 对 OPY、TEN、WBI 各查询 FMP 原生 1min 和 5min 历史接口，两轮复查均确认 13 段区间
+全部没有返回行。最终独立报告为：
+
+```text
+/home/projects/quant/outputs/data_audits/cup_handle_gaps/2026-09-08_b80e243c01104313bdd05ebeba13ba4b.json
+```
+
+报告保留六份规范化响应和各自 SHA-256。1min 总行数分别为 OPY 208、TEN 224、WBI 260；5min
+分别为 71、75、75。故本次直接原因是已取到的 FMP 数据无法提供连续序列，无法靠重新聚合或切换
+同一供应商的 5min 接口补齐。仍不能仅由空行断言真实无成交或供应商漏报；收盘后的响应也不能
+倒推盘中可用性。本次查询前后四张 cup_handle 生产表的内容哈希完全一致，未改写历史观察。
+
+发现并修复证据分类问题：原代码用两次观测的累计成交量相等直接标为 NO_TRADE_CONFIRMED，但
+OPY 14:25-14:30 ET 后侧报价的 provider timestamp 仍为 14:23:25，重复陈旧报价没有提供数据完整性
+保证。累计量增加也可能发生在左边界之前或右边界之后。新证据口径 `quote-window-evidence-v2`
+只在两个有效 provider timestamp 都落在缺口内部且累计量增加时确认有成交缺失；累计量不变、
+负数、非有限数、回退或只有跨边界增量时保留 unresolved，并写明确 reason。真实无成交以后需要
+更强的供应商完整性证据才能确认，不能从重复 last-trade quote 推断。
+
+这是缺口证据标签修复；所有缺口仍为 UNEVALUABLE，OHLCV、交易信号判定和 shadow 门槛均不变。
+检测算法仍为 v3，证据子版本随每个新缺口写入；旧 v3 FAIL 原样保留。日更不会通过此修复自动
+变成 PASS，历史 0/5 也不变。本地与 SG 定向回归均为 51 passed，部署前备份为
+`/home/projects/quant-backups/cup-gap-evidence-20260909T1230CST`。盘中服务当前 inactive，下一次 timer
+启动读取新代码，不需提前启动盘中任务。
+
+可复用核查命令（只读取现有台账，独立生成新报告）：
+
+```bash
+.venv/bin/python scripts/diagnose_cup_handle_data_gaps.py \
+  --session 2026-09-08 --env-file /etc/quant/intraday-momentum-monitor.env
+```
+
+请求失败或空响应为 INCONCLUSIVE_REQUEST；重新查询出现行只记 ROWS_PRESENT_ON_REQUERY，不修改
+live 结果。要消除持续的数据覆盖问题，需要供应商补齐证据或接入经过合同验证的第二分钟数据源。
+不能事后剔除 OPY/TEN/WBI、扩大分母或降低 95%/5% 门槛来获得通过。盘前按历史分钟质量重新定义
+候选池是另一项策略输入变更，需要单独定义和重新验收，不能混作此次数据修复。

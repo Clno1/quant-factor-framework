@@ -251,7 +251,7 @@ class CupHandleAlgorithmTests(unittest.TestCase):
         self.assertEqual(quality["gap_count"], 1)
         self.assertEqual(
             quality["gaps"][0]["classification"],
-            "NO_TRADE_CONFIRMED",
+            "UNRESOLVED_SOURCE_GAP",
         )
 
         evaluation = CupHandleDetector(IntradayMonitorSettings()).evaluate(
@@ -273,13 +273,16 @@ class CupHandleAlgorithmTests(unittest.TestCase):
             market_open=True,
         )
         self.assertEqual(evaluation.outcome, "UNEVALUABLE")
-        self.assertEqual(evaluation.rejection_reason, "NO_TRADE_5M_INTERVAL")
+        self.assertEqual(evaluation.rejection_reason, "UNRESOLVED_5M_SOURCE_GAP")
+        self.assertEqual(
+            quality["gaps"][0]["evidence"]["reason"], "NO_FRESHNESS_WATERMARK"
+        )
 
         provider_gap = RollingIntradayBars("TEST")
         provider_gap.merge(frame)
         provider_gap.observe_quote(
-            observed_at=datetime(2026, 4, 9, 9, 35, tzinfo=NEW_YORK),
-            provider_timestamp=datetime(2026, 4, 9, 9, 34, tzinfo=NEW_YORK),
+            observed_at=datetime(2026, 4, 9, 9, 36, tzinfo=NEW_YORK),
+            provider_timestamp=datetime(2026, 4, 9, 9, 35, 30, tzinfo=NEW_YORK),
             cumulative_volume=500.0,
         )
         provider_gap.observe_quote(
@@ -296,6 +299,50 @@ class CupHandleAlgorithmTests(unittest.TestCase):
             provider_metrics["data_quality"]["gaps"][0]["classification"],
             "PROVIDER_GAP_CONFIRMED",
         )
+
+    def test_boundary_volume_delta_does_not_prove_in_bucket_trade(self):
+        rolling = RollingIntradayBars("TEN")
+        for observed, provider, volume in [
+            ((10, 14, 8), (10, 13, 0), 1000),
+            ((10, 20, 8), (10, 14, 41), 1398),
+        ]:
+            rolling.observe_quote(
+                observed_at=datetime(2026, 9, 8, *observed, tzinfo=NEW_YORK),
+                provider_timestamp=datetime(2026, 9, 8, *provider, tzinfo=NEW_YORK),
+                cumulative_volume=volume,
+            )
+        classification, evidence = rolling._classify_empty_bucket(
+            bucket_start=pd.Timestamp("2026-09-08 10:15"), interval=5,
+        )
+        self.assertEqual(classification, "UNRESOLVED_SOURCE_GAP")
+        self.assertEqual(evidence["reason"], "VOLUME_DELTA_NOT_LOCALIZED_TO_BUCKET")
+
+        # Even a last trade inside the bucket does not localize a cumulative
+        # increase whose baseline was recorded before the bucket started.
+        rolling.observe_quote(
+            observed_at=datetime(2026, 9, 8, 10, 20, 8, tzinfo=NEW_YORK),
+            provider_timestamp=datetime(2026, 9, 8, 10, 17, tzinfo=NEW_YORK),
+            cumulative_volume=1398,
+        )
+        classification, _ = rolling._classify_empty_bucket(
+            bucket_start=pd.Timestamp("2026-09-08 10:15"), interval=5,
+        )
+        self.assertEqual(classification, "UNRESOLVED_SOURCE_GAP")
+
+    def test_invalid_or_reset_quote_volume_cannot_confirm_a_gap(self):
+        for volume in [-1, float("nan"), float("inf"), 2000]:
+            with self.subTest(volume=volume):
+                rolling = RollingIntradayBars("TEST")
+                for minute, total in [(36, volume), (38, 1500)]:
+                    rolling.observe_quote(
+                        observed_at=datetime(2026, 9, 8, 10, minute, tzinfo=NEW_YORK),
+                        provider_timestamp=datetime(2026, 9, 8, 10, minute, tzinfo=NEW_YORK),
+                        cumulative_volume=total,
+                    )
+                classification, _ = rolling._classify_empty_bucket(
+                    bucket_start=pd.Timestamp("2026-09-08 10:35"), interval=5,
+                )
+                self.assertEqual(classification, "UNRESOLVED_SOURCE_GAP")
 
     def test_completed_handle_and_volume_breakout_match(self):
         settings = IntradayMonitorSettings()
