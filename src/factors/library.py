@@ -40,7 +40,7 @@ class FactorEntry:
     category: str
     formula: str
     description: str
-    direction: int              # +1 / -1 / 0（以代码为准）
+    direction: int              # +1 / -1（以代码为准）
     inputs: list[str] = field(default_factory=list)
     risk_note: str = ""
     registered: bool = True     # 是否已在 FACTOR_REGISTRY 注册（未注册 = 不可用）
@@ -83,13 +83,18 @@ def _build_catalog() -> dict[str, FactorEntry]:
     for fid, cls in FACTOR_REGISTRY.items():
         inst = cls()  # 因子构造均无必需参数
         yml = yaml_entries.get(fid, {})
+        direction = int(getattr(inst, "direction", 0) or 0)
+        if direction not in {-1, 1}:
+            raise FactorLibraryError(
+                f"Factor {fid} must declare an ex-ante direction of +1 or -1"
+            )
         entry = FactorEntry(
             id=fid,
             display_name=str(yml.get("display_name") or fid),
             category=str(yml.get("category") or "其他"),
             formula=str(yml.get("formula") or ""),
             description=str(yml.get("description") or inst.description or ""),
-            direction=int(getattr(inst, "direction", 0) or 0),
+            direction=direction,
             inputs=list(getattr(inst, "inputs", ()) or ()),
             risk_note=str(yml.get("risk_note") or ""),
             registered=True,

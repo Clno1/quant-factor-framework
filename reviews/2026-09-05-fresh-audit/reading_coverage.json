@@ -1,0 +1,3409 @@
+{
+  "repository": "/Users/huozhihong/Documents/Quant",
+  "commit": "1149764d13539da6159ab0e927594d49d1f181f0",
+  "date": "2026-09-05",
+  "line_count_definition": "UTF-8 text splitlines, includes comments and blank lines; notebook counts JSON lines",
+  "method": "Complete text reads in bounded consecutive chunks; search only for cross references. No prior audit or cached research evidence used.",
+  "non_document_files_full_read": 446,
+  "non_document_lines": 125275,
+  "additional_documents_full_read": 9,
+  "source_copy_matches": true,
+  "nested_repository_excluded": "quant-factor-framework/, separate untracked repository, HEAD a18c796",
+  "files": [
+    {
+      "path": ".github/workflows/research-integrity-ci.yml",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 51,
+      "sha256": "c0c1b2b738f3c48aa8f181da8d9cfbbb42e9042a4cdaf89cb44fd2bd17f51883"
+    },
+    {
+      "path": ".gitignore",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 59,
+      "sha256": "649034dc566301c1c5e51b3f47163487b23ac23f84878eb5cb263eba3b337477"
+    },
+    {
+      "path": "README.md",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 178,
+      "sha256": "3f12375a9bf86fa1915e8e85632d3cf1ef6abebb97bb6d30ee8f3c042c34ddf9"
+    },
+    {
+      "path": "configs/classifications/fmp_group_ids.yaml",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 144,
+      "sha256": "6d8c95081c83df9f8f171e7182f2a4aa92ae8f092bf15537200b090ee8f6aaf1"
+    },
+    {
+      "path": "configs/classifications/issuer_overrides.yaml",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 12,
+      "sha256": "e3663bc7b0adbcff8bfc0b6d857885daa96cde41b30d566213671fe4079c4f67"
+    },
+    {
+      "path": "configs/default.yaml",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 693,
+      "sha256": "6f8312901db76288ba9010e0920288c8dae80875db04612ddf64845f2321088c"
+    },
+    {
+      "path": "configs/factor_library.yaml",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 80,
+      "sha256": "393ae9f15e84af37a6df89945e6ef4e64e24ac413d9e2896e02b957175bd402e"
+    },
+    {
+      "path": "configs/market_regime_screening_candidates.yaml",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 264,
+      "sha256": "072582f50371cf54d667f4904bc777a8dce1c23887b7b95b77136be9ca93b1b3"
+    },
+    {
+      "path": "configs/market_regime_screening_candidates_v2.yaml",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 349,
+      "sha256": "582c076fc5c1f8e87314a12b38fe374d50005c85e1b20054dd3ccad50adf03c5"
+    },
+    {
+      "path": "configs/nasdaq100_pit_corrections.yaml",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 101,
+      "sha256": "dd96f41cf66a525b58ac304c4926352a889fb12cad042c0e4a89077ca4f40a54"
+    },
+    {
+      "path": "configs/nasdaq100_pit_verification.yaml",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 86,
+      "sha256": "3ab9cacf3b11acf6d34c91205b9e7f1eec7caf29cd67180f19d84d9bbb50cd7d"
+    },
+    {
+      "path": "configs/operations.yaml",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 286,
+      "sha256": "5c76f153dec567ae902bd6468261b2c3806785bce88bed46dd59f0648d27d972"
+    },
+    {
+      "path": "configs/research_history_policy.yaml",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 551,
+      "sha256": "308b8714d10f3ec84bc8232dcdd0405d0753004ae090b309d72d4b2eaaa211c4"
+    },
+    {
+      "path": "configs/research_universes.yaml",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 61,
+      "sha256": "c31657261d8582ef17fc23803c6b3fb3001fba010dab60f23f105017301f0513"
+    },
+    {
+      "path": "configs/security_master_corrections.yaml",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 142,
+      "sha256": "770052c4d6d0e607113b24fcd5bf6710e2f45e22a2789d7465ab3f0746bb3129"
+    },
+    {
+      "path": "configs/sp500_pit_corrections.yaml",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 28,
+      "sha256": "cab0f56b3a70839ffcee559db00fae730069c8d6cc7b531408927b314d4308ea"
+    },
+    {
+      "path": "data/catalog/.gitkeep",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 1,
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "data/lake/.gitkeep",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 1,
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "data/pit_classifications/.gitkeep",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 1,
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "data/pit_universes/.gitkeep",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 1,
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "data/raw/.gitkeep",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "data/reference/.gitkeep",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 1,
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "data/theme_exposures/.gitkeep",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 1,
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "deploy/systemd/intraday-momentum-monitor.env.example",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 13,
+      "sha256": "2625221e6ea7ce292f890c5db00507af60209d90d7a824190b1affe0f1919889"
+    },
+    {
+      "path": "deploy/systemd/market-data.env.example",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 2,
+      "sha256": "6d92b1400ccf154e7ddf1d672f90eaa35eaa1f4afae13e69f7a0fb04536f84dd"
+    },
+    {
+      "path": "deploy/systemd/momentum-alerts.env.example",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 13,
+      "sha256": "5fd8aa5545e15c0a46885c80fc1cdb65889c5cf21b4f89296a6ef207e1b7b62e"
+    },
+    {
+      "path": "deploy/systemd/operations-web.env.example",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 12,
+      "sha256": "75fd8cbeacf55cc00d7287feda1c25b5b99716d56fd55f7e26f7cf08c3434564"
+    },
+    {
+      "path": "deploy/systemd/paper-notifications.env.example",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 9,
+      "sha256": "960f4dad0a8509bf802d13da766737ebaff6e13a59290e3d978643de7006d25f"
+    },
+    {
+      "path": "deploy/systemd/paper-trading.env.example",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 4,
+      "sha256": "a94a7aaf5e03a251366f502a270cf3c9e3e76b72fdfa365f207f7578c6d7c87b"
+    },
+    {
+      "path": "deploy/systemd/premarket-digest.env.example",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 14,
+      "sha256": "9fb033ace8b40d9de6ca71009b793e48c99e729d19fd2ab0857cf3efa9034101"
+    },
+    {
+      "path": "deploy/systemd/quant-broad-factor-data-root.service",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 46,
+      "sha256": "0f5de4b77414e59eb88f8d0356dabdc1fdfdb8ee372f9f3aad72d665fa5b3962"
+    },
+    {
+      "path": "deploy/systemd/quant-broad-initial-rollout-root.service",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 45,
+      "sha256": "8d5542dd632b9d0d3174052a4d40d917ce056986b3860113358b81d49fc6077f"
+    },
+    {
+      "path": "deploy/systemd/quant-broad-initial-rollout-scheduled.timer",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 11,
+      "sha256": "70612e6cb3ecd39d13a663f8bdba33991e697e435a13e4444e3ef9b8f7d77afc"
+    },
+    {
+      "path": "deploy/systemd/quant-broad-research-readiness-root.service",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 40,
+      "sha256": "04035cf197d4f5e4593d3c68c27688e05ff01495f182d7e07ae8fc53ec473c5c"
+    },
+    {
+      "path": "deploy/systemd/quant-broad-shadow-observation-root.service",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 38,
+      "sha256": "acc104c247dbfd155b6a04aac9eda53d817df7270b0a1a350d95105380a000aa"
+    },
+    {
+      "path": "deploy/systemd/quant-data-requests-root.service",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 33,
+      "sha256": "081729598aac107a89eb4f6dc0c19249107e4eb70531f5e9c3b28146c88c7a34"
+    },
+    {
+      "path": "deploy/systemd/quant-data-requests.service",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 31,
+      "sha256": "9fb38c72b93c3990e761af0973c5059ac09799d1ffb62d2f704f2524566ae180"
+    },
+    {
+      "path": "deploy/systemd/quant-data-requests.timer",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 12,
+      "sha256": "b138518ea6362217a740228ba03c77cb4013f367221411e04e06bd4db3dfb963"
+    },
+    {
+      "path": "deploy/systemd/quant-factor-research-root.service",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 39,
+      "sha256": "40b881abab34dd8016423270f8e99109a98db8128f7f764fd1e2ee5ad930eeec"
+    },
+    {
+      "path": "deploy/systemd/quant-factor-research.service",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 36,
+      "sha256": "512f69a233a90450063e0b2a424c332bb9a32078e739887cbc8e53a179f9ce34"
+    },
+    {
+      "path": "deploy/systemd/quant-factor-research.timer",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 12,
+      "sha256": "209d2536f8834ea08f342ec5415a50591d2c76dabd5b2e0acea22fcb29657da1"
+    },
+    {
+      "path": "deploy/systemd/quant-group-analytics-eod-root.service",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 39,
+      "sha256": "270c4c22a86a0489fc36c5dffcc4616d539df746a9697429aa0b42184f491c79"
+    },
+    {
+      "path": "deploy/systemd/quant-group-analytics-eod.service",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 36,
+      "sha256": "fbb3be60f1ee15d52f093fd1ab235020500e85382fe9913ff6c8285fd1d85a49"
+    },
+    {
+      "path": "deploy/systemd/quant-group-analytics-eod.timer",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 12,
+      "sha256": "ccdc8d929c61f715e53d2bca2b95e9630a6952d02f10816ee45604dec2258898"
+    },
+    {
+      "path": "deploy/systemd/quant-intraday-candidate-prepare-root.service",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 38,
+      "sha256": "7d27a6805a8855944813de103474d992e851544060c709f1c8eccf3612eb221a"
+    },
+    {
+      "path": "deploy/systemd/quant-intraday-candidate-prepare.service",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 35,
+      "sha256": "534406003c25236aa8e94358e93084a219e0cee46a277b79747976bc61bfebc9"
+    },
+    {
+      "path": "deploy/systemd/quant-intraday-candidate-prepare.timer",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 12,
+      "sha256": "66833b1b85085977717c7764a9129c8e815c3df7c318713f5e6772077aca9f2c"
+    },
+    {
+      "path": "deploy/systemd/quant-intraday-momentum-monitor-root.service",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 35,
+      "sha256": "21a3eee74cf1d1b14aa8e10c4b78817aae11cd67c4624882fe462f396888c2ad"
+    },
+    {
+      "path": "deploy/systemd/quant-intraday-momentum-monitor.service",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 33,
+      "sha256": "9a18a9c25c28fea19b6d20d88d3e8af388191f1d3bc35ce881f59a383dd252ef"
+    },
+    {
+      "path": "deploy/systemd/quant-intraday-momentum-monitor.timer",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 12,
+      "sha256": "85aa24bae87748e48468068c0ac9a4dacc17fd82cc55a0ea5120ffbc07f76d47"
+    },
+    {
+      "path": "deploy/systemd/quant-market-data-root.service",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 43,
+      "sha256": "8aeff8ad0ca75ec8d5b7266e6546af2de7dba168bd9d8ecdd063d71b719dd3da"
+    },
+    {
+      "path": "deploy/systemd/quant-market-data.service",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 31,
+      "sha256": "b206cfec285b6567d24b3c8e45bcf1dfb0ec0ec801aedf7a6af1e49d952a6b9b"
+    },
+    {
+      "path": "deploy/systemd/quant-market-data.timer",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 12,
+      "sha256": "00acc7fe733ac9f04a35e2cea9ba589d154cb8131e6c1dd9b12892e6267bf2ff"
+    },
+    {
+      "path": "deploy/systemd/quant-momentum-alerts-root.service",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 26,
+      "sha256": "8851475dffaa6235f6f618e5794b222d8dbf1bbcfffa0b744f0c44412da1718a"
+    },
+    {
+      "path": "deploy/systemd/quant-momentum-alerts.service",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 21,
+      "sha256": "a2f9df7c684a82e3bf54510399b27c64281966ef7084397824887106169e13ad"
+    },
+    {
+      "path": "deploy/systemd/quant-momentum-alerts.timer",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 13,
+      "sha256": "123f9767f8cd9ee76d0b92601730355051075ed14af8e66fcd339e3323bdb264"
+    },
+    {
+      "path": "deploy/systemd/quant-operations-watchdog-root.service",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 30,
+      "sha256": "b8986fe9458c61c3c2c1ff79ce9605ffcf42b2b73b2ad2c866c81b5c74793b36"
+    },
+    {
+      "path": "deploy/systemd/quant-operations-watchdog.timer",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 11,
+      "sha256": "66a138f5b673eb22ceafa0375960d3d7cb62777983ef55d7868e950638e3baeb"
+    },
+    {
+      "path": "deploy/systemd/quant-operations-web-root.service",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 31,
+      "sha256": "6df7cad5a8c28468931369f7b5a2ae5ed31e04643394dc16aafafc1dd88b5175"
+    },
+    {
+      "path": "deploy/systemd/quant-paper-discord-daily-root.service",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 29,
+      "sha256": "ffb97694b7a59cc52bf12d412c5491ac1a070f3c0f67d21486842ccadef81f39"
+    },
+    {
+      "path": "deploy/systemd/quant-paper-discord-daily.service",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 28,
+      "sha256": "a299cc3bd479c4bfaddc30e8dc518baa30d8b6ab26b320f28c3528346e321368"
+    },
+    {
+      "path": "deploy/systemd/quant-paper-discord-daily.timer",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 12,
+      "sha256": "66641d08ac52777a86d233b8eca2ae94b83f95c0fdc27ae0e2fae4f19a897fea"
+    },
+    {
+      "path": "deploy/systemd/quant-paper-discord-events-root.service",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 29,
+      "sha256": "3037cc6a8871eacb1ee0e481be5058380d034201ebf52c7d1b6114ce55d2a717"
+    },
+    {
+      "path": "deploy/systemd/quant-paper-discord-events.service",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 28,
+      "sha256": "88103379789c9d293b1ab6846d4775233edc8ce0012619d31de7e437ca2156e2"
+    },
+    {
+      "path": "deploy/systemd/quant-paper-discord-events.timer",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 13,
+      "sha256": "61bbecbf03f8a0ae7bec1f3ac191871d4a7647a8c1d6fc9d3418624acbf52094"
+    },
+    {
+      "path": "deploy/systemd/quant-paper-trading-root.service",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 33,
+      "sha256": "af23c0a80806d3c1f6d2e9b1723d996b9f4788b48cce9d6c0728f7f9bded7c31"
+    },
+    {
+      "path": "deploy/systemd/quant-paper-trading.service",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 30,
+      "sha256": "d31b72e92cb00e6a572c92e83c6bc1171ee1c1f6157336658084320fe6a42b92"
+    },
+    {
+      "path": "deploy/systemd/quant-paper-trading.timer",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 12,
+      "sha256": "0f159c0f35618398df561c31cb864edba5dec656b0ef59ce109b1f46b29957e4"
+    },
+    {
+      "path": "deploy/systemd/quant-premarket-digest-root.service",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 47,
+      "sha256": "41538bbf5e60c367bce726294d9a9c3a3b1f024637f93737eca28601f320d8b8"
+    },
+    {
+      "path": "deploy/systemd/quant-premarket-digest.service",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 44,
+      "sha256": "cf7b70f5c7b6fc8470a090f1b48faacefa19608d587b9eba4efe94a2e02e83c2"
+    },
+    {
+      "path": "deploy/systemd/quant-premarket-digest.timer",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 12,
+      "sha256": "c1a34bd263be7b13733ffa30349f28d126dc41d6eb26145867f775eac544a6c5"
+    },
+    {
+      "path": "deploy/systemd/quant-premarket-prepare-root.service",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 45,
+      "sha256": "52fd506b3973ca98269f3bc51eead2aafa5bc4ea4eeb2b800bbda0ffaf9d4565"
+    },
+    {
+      "path": "deploy/systemd/quant-premarket-prepare.service",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 45,
+      "sha256": "9ecec5aee0715ece453e21fc50fcbf13ba198d70ffb6432e54ffa576de01e2be"
+    },
+    {
+      "path": "deploy/systemd/quant-premarket-prepare.timer",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 12,
+      "sha256": "4645980fe51e959fda4248a8e8367bc41e67b6899a09f95d51615a330f940d2b"
+    },
+    {
+      "path": "deploy/systemd/quant-us-daily-refresh-root.service",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 24,
+      "sha256": "cbe2f2911409cd643c900d01d33ce3268e418fd858d7e34208dc8085629aef62"
+    },
+    {
+      "path": "deploy/systemd/quant-us-daily-refresh.service",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 21,
+      "sha256": "482b9de208258105f120e83027ee3b65ee735f2c8d197a06f7bc2726f07720cb"
+    },
+    {
+      "path": "deploy/systemd/quant-us-daily-refresh.timer",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 13,
+      "sha256": "38dbe422a5fa55a0e0c1bc1d295eed9edb2ff4cfdefa3a1c76c9a10795fb0cfe"
+    },
+    {
+      "path": "deploy/systemd/quant-us-equity-coverage-root.service",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 47,
+      "sha256": "251c1083e9291ba62f054cfd69099c17ad2ee1efeb56ab3c8d5abbcac69312a0"
+    },
+    {
+      "path": "deploy/systemd/quant-us-equity-coverage.timer",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 12,
+      "sha256": "60619381e47ced72a6cb5b6e3083468736b603d55c0a53bc4bc5b365b755a8ff"
+    },
+    {
+      "path": "deploy/systemd/quant-web-root.service",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 35,
+      "sha256": "6e0e07382c481d8f17fa21d210a943e52953d8c999f3be1e8ab6bc13283c3ef8"
+    },
+    {
+      "path": "deploy/systemd/quant-web.env.example",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 6,
+      "sha256": "65810bd9eb61a6b8b2546cd90bfa32421e89e92af243e03ef4ca780709988179"
+    },
+    {
+      "path": "deploy/systemd/web.env.example",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 17,
+      "sha256": "1f5b696c947d50e9279e5728a116136bb4094fdc4120be5d867ec6901bbb1e10"
+    },
+    {
+      "path": "docs/README.md",
+      "status": "context_not_fully_read",
+      "reviewer": null,
+      "lines": 60,
+      "sha256": "07fc3876b5f921a2e1cce4065e60ee86ca03066671c601b8ede264144f924b7f"
+    },
+    {
+      "path": "docs/code_reading_guide.md",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 358,
+      "sha256": "342aac66a3f226df23718596c5c4748e804a7e24f16bc339faef8a1250db0bde"
+    },
+    {
+      "path": "docs/cup_handle_monitoring.md",
+      "status": "context_not_fully_read",
+      "reviewer": null,
+      "lines": 258,
+      "sha256": "64f726ce957fb10eacbfa68f070c0bf7b077280f043d9a2c557979ac847be237"
+    },
+    {
+      "path": "docs/data_foundation.md",
+      "status": "context_not_fully_read",
+      "reviewer": null,
+      "lines": 236,
+      "sha256": "706aad3dda2e455942658935450fd0a2f62512d8db98a9f59afbed45b0f62e1e"
+    },
+    {
+      "path": "docs/factor_confidence.md",
+      "status": "context_not_fully_read",
+      "reviewer": null,
+      "lines": 69,
+      "sha256": "da4c7efadfb8f3a0bddb5c69bf4f29b4fbd671dec05a5ad0093d556d924bc2b2"
+    },
+    {
+      "path": "docs/factor_data_explorer_implementation.md",
+      "status": "context_not_fully_read",
+      "reviewer": null,
+      "lines": 153,
+      "sha256": "78a2162fa63eff1777eea5dc559a04b130686c303cda2b5612f4de4c3ee7d9ad"
+    },
+    {
+      "path": "docs/factor_data_explorer_requirements.md",
+      "status": "context_not_fully_read",
+      "reviewer": null,
+      "lines": 996,
+      "sha256": "556394dee6a86a7972534a52d9548c4e73bc85a83c3f48e70a7c3e03bbcf28f1"
+    },
+    {
+      "path": "docs/factor_preprocessing.md",
+      "status": "context_not_fully_read",
+      "reviewer": null,
+      "lines": 125,
+      "sha256": "8affaee02aa09edf7f10a185f7a35bcd9b40cf076bf31954db035481665bf464"
+    },
+    {
+      "path": "docs/group_analytics_benchmark.md",
+      "status": "context_not_fully_read",
+      "reviewer": null,
+      "lines": 77,
+      "sha256": "776ca3a57fbfd83b0aa0b09d25ea2007c2f94b90001c438ef4e7f7f60d2a4ebb"
+    },
+    {
+      "path": "docs/intraday_momentum_monitor_design.md",
+      "status": "context_not_fully_read",
+      "reviewer": null,
+      "lines": 685,
+      "sha256": "0c3f55c1320bfcae364aeeaf925f8c893cae1987c65c5cbfda41647ea0f43f1b"
+    },
+    {
+      "path": "docs/market_regime_breadth_cor1m_v2.md",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 181,
+      "sha256": "356898b88c0b27c4d931491ef641dd9a4a5051459b8254408cff2435b5d0fc64"
+    },
+    {
+      "path": "docs/market_regime_effectiveness_screening.md",
+      "status": "context_not_fully_read",
+      "reviewer": null,
+      "lines": 363,
+      "sha256": "fdaced130bcb32729ae52a2e855efb0c7a3768d56c4111ae08d0ee43c8c8d249"
+    },
+    {
+      "path": "docs/market_regime_research_code_audit.md",
+      "status": "prior_audit_excluded",
+      "reviewer": null,
+      "lines": 355,
+      "sha256": "21136e626b489b74526bb9e40b5badb6751ea1809cade7d6b65771f6b1d1c219"
+    },
+    {
+      "path": "docs/market_regime_research_implementation.md",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 425,
+      "sha256": "5548c2254577e1ae999ba64417f95e87201ac5499eb01eb37857b0ae9aef7f71"
+    },
+    {
+      "path": "docs/market_turning_signals_research.md",
+      "status": "context_not_fully_read",
+      "reviewer": null,
+      "lines": 1093,
+      "sha256": "96fe4b4ea5ebaa34542b0406304f5bfb4739fb8bb6aff6bad7407dde04067471"
+    },
+    {
+      "path": "docs/momentum_alerts.md",
+      "status": "context_not_fully_read",
+      "reviewer": null,
+      "lines": 106,
+      "sha256": "34075f30c0c37e96da6cb3658dc68a4830bd82d0cb4f375afe8f40cd0e0284a4"
+    },
+    {
+      "path": "docs/momentum_breakout_data_flow.md",
+      "status": "context_not_fully_read",
+      "reviewer": null,
+      "lines": 246,
+      "sha256": "357147e82017872a33ce783fc5bf8230e6b4a4482df5f656d0a9aafa8ff23cf3"
+    },
+    {
+      "path": "docs/momentum_breakout_summary.md",
+      "status": "context_not_fully_read",
+      "reviewer": null,
+      "lines": 160,
+      "sha256": "d08bbdab4e8c291d23e8b74bdf1c37be046d99fa8fa0b55ccac7e851497c7e98"
+    },
+    {
+      "path": "docs/operations_observability.md",
+      "status": "partial_read_lines_1_250",
+      "reviewer": null,
+      "lines": 664,
+      "sha256": "a68ce0f84a832b54695b101ab3f82fafefca24a42173357aca97ccbe097f40fb"
+    },
+    {
+      "path": "docs/paper_trading_discord_notifications.md",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 159,
+      "sha256": "af1461b2a73a026f1d154009a8f7b2d5b8949c5e9c8d4f051d64c28bfbfa35bf"
+    },
+    {
+      "path": "docs/paper_trading_operations.md",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 120,
+      "sha256": "f3d4a2edc4814115d085f75cd5036fa3612dcf44778937a505fd72be0c519751"
+    },
+    {
+      "path": "docs/point_in_time_universe.md",
+      "status": "context_not_fully_read",
+      "reviewer": null,
+      "lines": 99,
+      "sha256": "161b730fab9211c6246a3ca0d7e6dfdc0835e585b9f8dd3569aaf98b5f7081e2"
+    },
+    {
+      "path": "docs/premarket_discord.md",
+      "status": "context_not_fully_read",
+      "reviewer": null,
+      "lines": 448,
+      "sha256": "a7533ec31e30a222c38c0b63a4d6371d1b1910bd146e021e07337f41664e3d0d"
+    },
+    {
+      "path": "docs/project_architecture.md",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 171,
+      "sha256": "5c0865be4f1c8ad4a01758035de427137a04d176d81aa3f7a02e6d031aec4a09"
+    },
+    {
+      "path": "docs/research_integrity_migration_20260824.md",
+      "status": "prior_audit_excluded",
+      "reviewer": null,
+      "lines": 164,
+      "sha256": "a0b34582b84b619bbff38e56a6b57d01deb89fc15c0ceadc771111dce9d42418"
+    },
+    {
+      "path": "docs/research_integrity_repairs_20260822.md",
+      "status": "prior_audit_excluded",
+      "reviewer": null,
+      "lines": 163,
+      "sha256": "de56f815fb52837ec8fce0769709af51a9a88d09f1a44304e2d4c39427893b63"
+    },
+    {
+      "path": "docs/research_universe_redesign_implementation.md",
+      "status": "context_not_fully_read",
+      "reviewer": null,
+      "lines": 271,
+      "sha256": "20457f67c32c91d8a9b8196e7813f5ae86ba095b24e6823edfb7c89bde7a4c57"
+    },
+    {
+      "path": "docs/research_universe_redesign_requirements.md",
+      "status": "context_not_fully_read",
+      "reviewer": null,
+      "lines": 702,
+      "sha256": "bbce78cab34ffd7d85eff50d13c68af367288c047e14826095d37454e9713d8b"
+    },
+    {
+      "path": "docs/server_daily_runbook.md",
+      "status": "context_not_fully_read",
+      "reviewer": null,
+      "lines": 264,
+      "sha256": "992187ec4a7eaa8976c7573f31c1e288322eb19f8290b4ca6ac1bd7db447d8c0"
+    },
+    {
+      "path": "docs/sg_manual_deploy_3a52611.md",
+      "status": "context_not_fully_read",
+      "reviewer": null,
+      "lines": 221,
+      "sha256": "d00dbcbe26a931c4c3dd7b25a4ff62093e3b638c23332dec8c91e6b1ae584fdc"
+    },
+    {
+      "path": "docs/sg_operations_overview.md",
+      "status": "context_not_fully_read",
+      "reviewer": null,
+      "lines": 939,
+      "sha256": "9e80aed9f27463e307da407334402183e24324c4c935743588b5c5c1e12edbe4"
+    },
+    {
+      "path": "docs/singapore_server_deployment.md",
+      "status": "context_not_fully_read",
+      "reviewer": null,
+      "lines": 423,
+      "sha256": "8ae4fbb03037a14af265d8871cd7ddf986608362d5ca68216334e8fd1f91fbaf"
+    },
+    {
+      "path": "docs/sp500_pit_and_daily_publication.md",
+      "status": "context_not_fully_read",
+      "reviewer": null,
+      "lines": 193,
+      "sha256": "46c73002d1da7d30284afee2c1540333899a53e37b4afd99e96ec487235271ec"
+    },
+    {
+      "path": "docs/strategy_decision_replay.md",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 155,
+      "sha256": "45f46e1997ccf9258f41b10ecbc0df4dde32ab9739cef45905d5b491b9ecaa0d"
+    },
+    {
+      "path": "docs/trading_costs.md",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 201,
+      "sha256": "c98a78ff66c4b3e2197927782c2af6db601d6da0705043637c5fcc4c01ec5f2f"
+    },
+    {
+      "path": "docs/unified_data_storage.md",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 381,
+      "sha256": "cafe4ca61d15740de30a420427d846b68b4f96b6306da87ebeca4ade2c9c7606"
+    },
+    {
+      "path": "docs/us_broad_factor_research_implementation.md",
+      "status": "context_not_fully_read",
+      "reviewer": null,
+      "lines": 981,
+      "sha256": "cad7e5714cce901367ae1967d6bede96e97caa386625cc3ea976e033b1a9682e"
+    },
+    {
+      "path": "docs/us_broad_factor_research_requirements.md",
+      "status": "context_not_fully_read",
+      "reviewer": null,
+      "lines": 1631,
+      "sha256": "1ae9d2d9313f1c951a6897b213aa26461ca49bfa6a890ee01116e1cf7037f584"
+    },
+    {
+      "path": "logs/.gitkeep",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "notebooks/01_mvp_exploration.ipynb",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 196,
+      "sha256": "7b986c059164141763863268254589fd8a45a5198480563fffa4f656ef1e4553"
+    },
+    {
+      "path": "requirements-dev.txt",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 6,
+      "sha256": "f851dd27f79fcb931b3280c131d57977eb35300415124e816dab375c25be8db1"
+    },
+    {
+      "path": "requirements.txt",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 31,
+      "sha256": "e4ae7847e1879a9a57031a95cccfe6ff6e082f9e3e31d07e6b141a0243e54db4"
+    },
+    {
+      "path": "scripts/audit_fmp_us_equity_coverage.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 388,
+      "sha256": "21171f22d7adfc54000d8149c6566727e985c33cb4ea71b0f3aa76f903538a85"
+    },
+    {
+      "path": "scripts/backfill_us_equity_coverage.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 863,
+      "sha256": "0206e1d5cef91a079490bffa80de7edb921adc8bf6e4d97d0603807a87a059c9"
+    },
+    {
+      "path": "scripts/benchmark_group_analytics.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 435,
+      "sha256": "cbcbbefea5e7ef9ac59d9a021cdf61e98f0783f69c364c3d60a9684f6958701b"
+    },
+    {
+      "path": "scripts/benchmark_intraday_monitor.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 254,
+      "sha256": "85474fec12e0d757c33147b78d922acb472894e26ad59b83b65cb9ad43f4c5ec"
+    },
+    {
+      "path": "scripts/benchmark_us_broad_capacity.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 403,
+      "sha256": "84e4b8a7a2e345c5bec0ca418b3886e1998f8128a481fd0f72aa2bece7a52fc2"
+    },
+    {
+      "path": "scripts/build_security_master.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 1235,
+      "sha256": "e823b1e60e78261a4376dde0456f951709de67078a3cf1a831568b03e7225c2e"
+    },
+    {
+      "path": "scripts/build_us_liquid_pit.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 369,
+      "sha256": "12fd1028489520087b5f9fcf30a8e7388615dda19aaf9ab5ce407de75499868f"
+    },
+    {
+      "path": "scripts/check_app_storage.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 24,
+      "sha256": "e9c3ba71db5f66c344e853ed8d7c6b66d94a51beb683e4f7d6ed94d6237673dd"
+    },
+    {
+      "path": "scripts/check_broad_research_readiness.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 145,
+      "sha256": "2c3e4674f4dc70217ea806f603a0b0a5560e4cede3f49c635a4297ce1f6f2ca0"
+    },
+    {
+      "path": "scripts/check_broad_resources.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 99,
+      "sha256": "41f9c559bc22bde0ff75aa2a4506278353d2a92bbcf122ed540a7095a0f616db"
+    },
+    {
+      "path": "scripts/check_broad_shadow_observation.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 452,
+      "sha256": "18298221c051187a9ec9009f8d676b2f34e3d4ff5ac5531edacbf10fea4cdb0c"
+    },
+    {
+      "path": "scripts/configure_momentum_discord.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 86,
+      "sha256": "590517ea60ab86aff0811f7d9a15c315f8bbef60166d631a0fa11bf152e7bee8"
+    },
+    {
+      "path": "scripts/configure_paper_discord.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 178,
+      "sha256": "e07b2c7c617d981a4cd7d0f3046095a238a5baafe1926e9f1f705553a54187f1"
+    },
+    {
+      "path": "scripts/configure_premarket_discord.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 139,
+      "sha256": "24aa57c405abb6ae76114f4115eaa3cf76781ef73049af5bc6d499adaf10964c"
+    },
+    {
+      "path": "scripts/migrate_operations_storage.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 60,
+      "sha256": "ed860f726aceec83eabfeae9786b0dd72cad64b163fe6cd43916d1e9914a70fe"
+    },
+    {
+      "path": "scripts/prepare_intraday_momentum_env.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 144,
+      "sha256": "0aae95cd8876870d69ad1ed03cbb6db958df31a31d55631939abbba2323c9731"
+    },
+    {
+      "path": "scripts/prepare_paper_data.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 75,
+      "sha256": "912f7bec3e06dcc8705d9d784c5f463b67d394601fcad35f361c577589a30ba6"
+    },
+    {
+      "path": "scripts/probe_fmp_websocket.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 246,
+      "sha256": "7e2ecec68143c19bf8d73713abd39b78cf72f720b8266271e999872beb8b960e"
+    },
+    {
+      "path": "scripts/propose_research_history_policy.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 229,
+      "sha256": "3e5119e6dcd46afad0e3f0470ffe7b3e91505c65a4693098ee38860a74a76f9c"
+    },
+    {
+      "path": "scripts/refresh_us_active.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 488,
+      "sha256": "c03168bae192bbb2e4f0b85c0a1b35d9fde81bba86250879d3ca62c2a0891c86"
+    },
+    {
+      "path": "scripts/repair_published_coverage_calendar.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 395,
+      "sha256": "0cdfb97db7aa250cb01fc72404c6f4726d9287b297147ab91f24e947ff3a87df"
+    },
+    {
+      "path": "scripts/repair_us_equity_coverage_quality.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 359,
+      "sha256": "23f4568d3e87b63c154d614f324352b2b0dc1353774bf2a18276dcea1968e7af"
+    },
+    {
+      "path": "scripts/replay_cup_handle.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 80,
+      "sha256": "4a5235961ffd1f9506f69ea45db0ad6239a48681d420f27badb3d7e377dcba36"
+    },
+    {
+      "path": "scripts/run_breakout_event_backtest.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 92,
+      "sha256": "998cf6f6640589844c4f81e1021b3d7cfeac656a8677cd958361f3fa5a1a1f94"
+    },
+    {
+      "path": "scripts/run_broad_daily_pipeline.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 217,
+      "sha256": "731189313055abb489714dada532a6529dfee97cfa09c3006618cbe4f550f370"
+    },
+    {
+      "path": "scripts/run_broad_factor_data.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 856,
+      "sha256": "378e7c0a9c1f2b562fcd69bbf0c4cfd7705c6fb4952a7a75b2fb23ee476487ee"
+    },
+    {
+      "path": "scripts/run_broad_initial_rollout.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 326,
+      "sha256": "7d7fbe116ed955f7454798727b0cd044da72bc1012133a0649bc156b9b1ad50c"
+    },
+    {
+      "path": "scripts/run_core_market_data.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 208,
+      "sha256": "b04dd474abf79c170c8f605ad917f8ab34b93a03d8c2fef623d168787412c982"
+    },
+    {
+      "path": "scripts/run_data_pipeline.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 378,
+      "sha256": "bd9e22dccd2cd89c95b07b6ad8eb9958caf1dde92edf528761f42842573aa51e"
+    },
+    {
+      "path": "scripts/run_data_requests.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 43,
+      "sha256": "47a25da0bc1f867402ee289359eceac1a5c5b518ff955cda0e6fb791f6905177"
+    },
+    {
+      "path": "scripts/run_factor_research.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 207,
+      "sha256": "e802c014cdf58eced0c49c0b32764d25d8f8a2f337b4036b1832a8af4e4b732b"
+    },
+    {
+      "path": "scripts/run_group_analytics.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 235,
+      "sha256": "e12329d1f584e8c07468a6fd7c89c8894ee25232056b3e84914df03ce32c6328"
+    },
+    {
+      "path": "scripts/run_intraday_momentum_monitor.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 160,
+      "sha256": "92bbf188dc561e2d79bc843a012582263aa482d905ba198ed28e85560660dfac"
+    },
+    {
+      "path": "scripts/run_market_regime_research.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 418,
+      "sha256": "374470a3c9228720a9ba53f0bc03360fcb7d400327cf2a5f24559e3d71dd4ec1"
+    },
+    {
+      "path": "scripts/run_momentum_alerts.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 203,
+      "sha256": "665ab9432e6d02df7dbe319cf97decc396a6b9d592e417ec0904ebbf1add6cb8"
+    },
+    {
+      "path": "scripts/run_mvp.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 809,
+      "sha256": "0c4f00186ca88ac70cde8e17f7461bb0a237639cba7f7f2598a1583b1a0fc792"
+    },
+    {
+      "path": "scripts/run_operations_watchdog.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 47,
+      "sha256": "8b5643d0289d32992e3ae4c2483c61bbc883e326d957e833d23736c0a9fb5e0a"
+    },
+    {
+      "path": "scripts/run_operations_web.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 44,
+      "sha256": "da4ff787499d0b2f2cf0b1c98c3275fcd71ce889b2243db5b1390110a454f6dc"
+    },
+    {
+      "path": "scripts/run_paper.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 155,
+      "sha256": "7349b65a3ebc1a318ef7cf418e3cd57bcb158841416bde1cc916a5d37368901c"
+    },
+    {
+      "path": "scripts/run_paper_notifications.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 98,
+      "sha256": "3d00ef5365d68ab29cf66bba38dc8d9b621b8e66c34f37f36f25abf217dca50e"
+    },
+    {
+      "path": "scripts/run_premarket_digest.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 152,
+      "sha256": "6a70e25fc5953ab365a73133d9b0d1b746cefcf5b9f4c0ab6270b6826a5b1915"
+    },
+    {
+      "path": "scripts/update_us_equity_coverage.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 995,
+      "sha256": "a00c4265dcd95c05a5e4cb463c86709029f583e46bfe17ab53f54dc38d0c9050"
+    },
+    {
+      "path": "scripts/verify_momentum_discord_routing.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 174,
+      "sha256": "0af83571f60761013138e817c53a07cadf8adf4e5e454dd4de2305a3889cfd8e"
+    },
+    {
+      "path": "src/__init__.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 3,
+      "sha256": "5f1944714b9a332e01a5944d7a7e5bf39415912d80f7b9dd90c3165fcbc37b2c"
+    },
+    {
+      "path": "src/alerts/__init__.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 13,
+      "sha256": "673710f5ef7f95dba83b7120801d5b6ec2771bc22c7f7f7a17ff9874979d2d8e"
+    },
+    {
+      "path": "src/alerts/config.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 141,
+      "sha256": "18baf1c29901ae16781988a354ebabda046803dc50cd204c6d59ea40198c31ec"
+    },
+    {
+      "path": "src/alerts/discord.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 499,
+      "sha256": "05659d05ffa9d3061835258b3f8fd9e1673e0292cdb712553827510e1fcf3ae0"
+    },
+    {
+      "path": "src/alerts/engine.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 422,
+      "sha256": "d2a48d0bfb6fd88142414523478db9bbf4b496e6fd00f9b6f9fcd195e1bda857"
+    },
+    {
+      "path": "src/alerts/state.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 170,
+      "sha256": "893fbfb0e2503c5495c60407792688eb14b426b36fd0fb1838d0c699f0039098"
+    },
+    {
+      "path": "src/analysis/__init__.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 26,
+      "sha256": "354c8cc29a2722ed9a48b9645e2f41fdd6d51a85aaf5f0dd989c6b6f29eedf73"
+    },
+    {
+      "path": "src/analysis/confidence.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 677,
+      "sha256": "bca0c2fd2f37086ec18d60dcf20351a61945ae1357810bc95f34a7fe033d4b88"
+    },
+    {
+      "path": "src/analysis/confidence_hac.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 63,
+      "sha256": "c541feaa9f42f6962a01f65af6688e010d9ce9247ae6d07179f518384d7e1c6a"
+    },
+    {
+      "path": "src/analysis/forward_outcomes.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 218,
+      "sha256": "e2e134a7a3cf0137b459ffa94f5adcf2fdaaa84ad8375314ee2443cb4f308f0b"
+    },
+    {
+      "path": "src/analysis/hac.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 90,
+      "sha256": "e758730cd36c3748803ee16ef45af62a2d8429a1e0d2ecbf89ff64c09331b2c7"
+    },
+    {
+      "path": "src/analysis/ic.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 282,
+      "sha256": "0ad365677993be39aa749e248788a701503589dd14d65718d484362cb2721039"
+    },
+    {
+      "path": "src/backtest/__init__.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 41,
+      "sha256": "f4ae4c3f456e1fde3ebf28521c0630011c8259187c1859162c6fcf2c8ea4c6f4"
+    },
+    {
+      "path": "src/backtest/adhoc.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 233,
+      "sha256": "44ae8070dffa6ec92b5dc314559fa090af782a98db1495f7ffc1c7759c723fa3"
+    },
+    {
+      "path": "src/backtest/composer.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 241,
+      "sha256": "dad62a0ded721081930763e6e2b16427688e6c0c8b6b54b08797bc042926c733"
+    },
+    {
+      "path": "src/backtest/double_sort.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 351,
+      "sha256": "780d767a7beeae3b1bfaee99d9b9da0123e2faa5d7a4db994ea82baf2bfe94c8"
+    },
+    {
+      "path": "src/backtest/membership_exit_v2.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 295,
+      "sha256": "21f32d166525ef361cd08bcc08c8c1ffa91e366bbd5a7016300914da5a91203a"
+    },
+    {
+      "path": "src/backtest/metrics.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 210,
+      "sha256": "98290cdca8ea6855d81958be1f357627ef0a9e02154a44943655ba0cdd0b5cb8"
+    },
+    {
+      "path": "src/backtest/portfolio.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 684,
+      "sha256": "9aeefd4a5ba9f168a2ed425bdeaeb8363e774427d594bc587eb49bf8c13362f3"
+    },
+    {
+      "path": "src/backtest/quintile.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 1397,
+      "sha256": "042d63cf36ba2d5fbb1bc0fd07fa981d0528a2ace09ea7b9bc684b75eb7be854"
+    },
+    {
+      "path": "src/backtest/quintile_v2.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 291,
+      "sha256": "78a504660affb2583a01b64f239e3c93ec180acbd9bc84f46bf64c2e79cc86a1"
+    },
+    {
+      "path": "src/backtest/rebalance.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 37,
+      "sha256": "57d1f039a59bd6c37fc1b4bcfa2d69a75fa7a5fd764750d77f2f53199edc3152"
+    },
+    {
+      "path": "src/backtest/runner.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 914,
+      "sha256": "f3ad5e270a3dcad33a12096089669e0f8de6b03426ec09fd02c9d05af972bfc6"
+    },
+    {
+      "path": "src/backtest/store.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 286,
+      "sha256": "d5ef8d30e208167ae976ae8ec9a94459b7972a55feb789b5bf12ace0b36bbadb"
+    },
+    {
+      "path": "src/breakouts/__init__.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 25,
+      "sha256": "1e6ae387d4695edccbb4f6017cf774942ce0d15aaa71a98908190176503690ac"
+    },
+    {
+      "path": "src/breakouts/application.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 425,
+      "sha256": "a87074094a739b658d856cb164b4fe35caee88518ca0ae0a594f42cf14da39c1"
+    },
+    {
+      "path": "src/breakouts/broad_daily_data.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 505,
+      "sha256": "d62bd03ead9201bbb77186fe1603f69ae7d711a15b43e8d84a1df0b58b861601"
+    },
+    {
+      "path": "src/breakouts/daily_data.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 159,
+      "sha256": "42cf20b374d1590fd8e7cf09c798ed7a2618a760cf2c1ec47e8df01753addfcf"
+    },
+    {
+      "path": "src/breakouts/historical_backtest.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 407,
+      "sha256": "ca5a00317b4acd74a51056076ab69b6ace44a88c18f84972526c283012db9e4d"
+    },
+    {
+      "path": "src/breakouts/intraday.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 198,
+      "sha256": "3e941b1123e8d34fd999c3fa0695e1270a115f4416fd636ced2dc6711151f60e"
+    },
+    {
+      "path": "src/breakouts/live/__init__.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 25,
+      "sha256": "63b8a6e8347bbf07b383f32ba1ed14f25a9d994b66bbb7340ff2abfbeb49494d"
+    },
+    {
+      "path": "src/breakouts/live/candidates.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 326,
+      "sha256": "1a9b9e6350735a4df9daaea07966a721183d1b30b7ced6616dbd68bd939ce23c"
+    },
+    {
+      "path": "src/breakouts/live/cup_handle.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 562,
+      "sha256": "6253c9fa4597459925c8da8ca6cb36640093e3013945075bf6f88635f8d5f156"
+    },
+    {
+      "path": "src/breakouts/live/cup_handle_replay.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 288,
+      "sha256": "ccadc5a1343735a766cc79640702732e41559d874d64050233acf1d220caa957"
+    },
+    {
+      "path": "src/breakouts/live/delivery.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 152,
+      "sha256": "166e79c15a8a84bc4703151801096f59c8863525aecc29d59931590674d2eff6"
+    },
+    {
+      "path": "src/breakouts/live/detector.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 197,
+      "sha256": "ab54a020f1b98970eb09029f99d2f227219e189aa44885188fd0a9c81a53cecf"
+    },
+    {
+      "path": "src/breakouts/live/feeds/__init__.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 6,
+      "sha256": "996574456bf52306319ee91c6a2cfe036d5a5e687e750916a12c3685cc981035"
+    },
+    {
+      "path": "src/breakouts/live/feeds/base.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 33,
+      "sha256": "4365f67e537bd29edb4a7d73beb2e65d7e8440a719556158b75130a9de87f685"
+    },
+    {
+      "path": "src/breakouts/live/feeds/fmp_rest.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 126,
+      "sha256": "ab97b7e4afe5dbc56833b41bdc27f9851fe843780c772d54b1aa4a4df2cfd4b8"
+    },
+    {
+      "path": "src/breakouts/live/models.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 198,
+      "sha256": "dbdd7fb18b816ba1091541d8512a45a72ab7b3e8a00b0e48668b992cc5b04ced"
+    },
+    {
+      "path": "src/breakouts/live/rolling.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 482,
+      "sha256": "530d9b139296ca9427aa7ee081d0f954392674a7ada798836546997f4640b658"
+    },
+    {
+      "path": "src/breakouts/live/selector.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 69,
+      "sha256": "d68a7f86821e37fece581c02d755776572e3827249ceffadf796d131bdac3e9a"
+    },
+    {
+      "path": "src/breakouts/live/service.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 839,
+      "sha256": "17f0e2d00710778ff9333b962d7048162d32f72b54e2268fc4d4de0667c0f38f"
+    },
+    {
+      "path": "src/breakouts/live/session.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 105,
+      "sha256": "f3850989a9317fa43b8107348ee2c59c57b05d21a530d53a0fa0e15cec95988c"
+    },
+    {
+      "path": "src/breakouts/live/settings.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 409,
+      "sha256": "2d6683a01be8bdc8b6f84e3bc7dea60649a5d878adbc828f17d5587e28bc9bdf"
+    },
+    {
+      "path": "src/breakouts/live/state.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 1360,
+      "sha256": "5e7fb1c702dce807fd35e3f7296113892c9336f1ced09caa8f5456422c65e6c6"
+    },
+    {
+      "path": "src/breakouts/scan_cache.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 61,
+      "sha256": "3d6f03894bbe07b060c9539cc997875989396866e8a6a81ce2272de0d20829dd"
+    },
+    {
+      "path": "src/breakouts/scanner.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 474,
+      "sha256": "ac81db3a9f8d53ce0a78f322ee2fa3def7ed8652c4bcc0138c07d07c54eb5d0c"
+    },
+    {
+      "path": "src/config.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 86,
+      "sha256": "a02411b45c50b2ea76103f39bcc45cbe9aef7567fe95cb43c92309546ddf0e96"
+    },
+    {
+      "path": "src/data/__init__.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 12,
+      "sha256": "85f3f7161348e1f36e6b7626d65dcc3f4065820a1cabe5bacd4c4ea5c61a99fe"
+    },
+    {
+      "path": "src/data/access.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 934,
+      "sha256": "7118b8043df52e3121ae23bfb3d7a1202b95dcfd2052c8c5ec31108913224b9d"
+    },
+    {
+      "path": "src/data/benchmark.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 336,
+      "sha256": "aebafd8d72861b30ac79be66c7802168262217b20d7a098770c0f832b97cd338"
+    },
+    {
+      "path": "src/data/broad_coverage.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 1456,
+      "sha256": "63a84c7229f72bb5823e3df44cc4fced48ff1fd84eaa95f3dcd1cd5ab883ac69"
+    },
+    {
+      "path": "src/data/cleaner.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 58,
+      "sha256": "52bd96988e7cd1fea686afb40d881372061cd06a8493639b798d898f5f25b60c"
+    },
+    {
+      "path": "src/data/derived_universe.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 1227,
+      "sha256": "9dda484039a7fa2166e621b9857ef79dd8544282278aeef3bccba6e24956540e"
+    },
+    {
+      "path": "src/data/fmp.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 1352,
+      "sha256": "391e9baeb4ceb7b765e27016657246dd624aa1c3f8f828b8aa7734b257a31c39"
+    },
+    {
+      "path": "src/data/foundation.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 2661,
+      "sha256": "68bb0f27798c8e2937321495081e6c3b43e2046aab9df8184178c99592dc00e3"
+    },
+    {
+      "path": "src/data/membership_state.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 211,
+      "sha256": "f50025a55f441ef450b551c808e95f457af4500803a488f5374fa0d013588c09"
+    },
+    {
+      "path": "src/data/nasdaq100_pit.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 1160,
+      "sha256": "3e1a91d74901b5b55940f896a384c7cfbf244812052de63afed416981acc06a9"
+    },
+    {
+      "path": "src/data/pit.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 359,
+      "sha256": "cfa6f534c7a76ec0d92247d992ec1087dd6cdfaadb1cca599aa36aad245dcd61"
+    },
+    {
+      "path": "src/data/price_semantics.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 222,
+      "sha256": "a42404143fbefa1c60cfc94218f5e121b43d1a975991f524f8cd8687a2c7d817"
+    },
+    {
+      "path": "src/data/request_worker.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 199,
+      "sha256": "33dfc3b5476fc280fe33014458ed4283158a97b28934d2a183edbbdf3bacbaa8"
+    },
+    {
+      "path": "src/data/research_history_policy.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 196,
+      "sha256": "ab301aae48712f33cdba785c8e31959a50735485cc39c4748730e6d76747297e"
+    },
+    {
+      "path": "src/data/security_master.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 211,
+      "sha256": "ecbff9242af9d662b9562196bb7cb569271ee3e460ac3620aaa8daf7fdd0cfdd"
+    },
+    {
+      "path": "src/data/security_master_store.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 1733,
+      "sha256": "26f20a6f9c92bf900bc249bda26b7751542ad1f4ffb691505c479d845dbce3fa"
+    },
+    {
+      "path": "src/data/semantic_recovery.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 22,
+      "sha256": "3ef34369d4a693ac3f56f63b3219d78eb898ddc6ebfde9b20cee76fba9564f27"
+    },
+    {
+      "path": "src/data/sp500_pit.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 561,
+      "sha256": "abd65b571d98a292c64523c47c41cc5d63f9976e6f0ed6ed47110f1bdf61ac43"
+    },
+    {
+      "path": "src/data/universe.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 235,
+      "sha256": "7a67b8de77f205ae406d408cfcc79481bbef5a86cf5d8099e4d4152ec7cff537"
+    },
+    {
+      "path": "src/data/universe_ids.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 67,
+      "sha256": "cc1a911b9508906b908d8b198832da62e84c4aee4d7ca47a0f766ae96a524cec"
+    },
+    {
+      "path": "src/data/universe_publication.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 609,
+      "sha256": "519dcb2285597efc08dbcb746bf2ea2599b64cf6a4835ddce054a215e6f3c9a5"
+    },
+    {
+      "path": "src/decision_replay/__init__.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 25,
+      "sha256": "a8b493481e8196bb83b91431ce6288c8216258aa9325c4163d51f64f624bbae8"
+    },
+    {
+      "path": "src/decision_replay/builder.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 630,
+      "sha256": "316e104055b53e809f1f138b86ab6a07ef248bbcbc59426d7d908fba3687270e"
+    },
+    {
+      "path": "src/decision_replay/models.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 28,
+      "sha256": "d2c97c8a20d817bf6d08d36d7bf8d5d15f9d5e37341522e0fada6f0837f2a602"
+    },
+    {
+      "path": "src/decision_replay/query.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 605,
+      "sha256": "4918ddcc006e213a32a5550f161e50faae248d0eb6a4face758764f951f5c38b"
+    },
+    {
+      "path": "src/decision_replay/store.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 360,
+      "sha256": "c6ce90982e723053c52cabc0ce852515a4615fc3f1b679bc0519c77e0b9317fd"
+    },
+    {
+      "path": "src/execution/__init__.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 19,
+      "sha256": "f49d3803a04a95f0160d16a47458f16289fb67973337ea26e5bdd016176cef4d"
+    },
+    {
+      "path": "src/execution/models.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 552,
+      "sha256": "e50d654a2c1db7a5a58f43f83075fd0506a234f500ff0de1f3a0819522b44d73"
+    },
+    {
+      "path": "src/factors/__init__.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 42,
+      "sha256": "0ccbdc4609f5493ebda91bec30e89e0dc9f55223ed60150f19c4c21ca50ce8b4"
+    },
+    {
+      "path": "src/factors/artifacts.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 239,
+      "sha256": "c20cbed70606ea37b2b3bae9e8c74030c1a55e0af35304fbc3f2dfb91de9cc5e"
+    },
+    {
+      "path": "src/factors/base.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 88,
+      "sha256": "dab8e33d213578f6ff199a6039b0eb64c29938a974943b3ecc6eeca019a707a8"
+    },
+    {
+      "path": "src/factors/broad_observations.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 1082,
+      "sha256": "204d4a37848ea27106f401f8cf8f8f3453ec857b141e3d4a32a0cdbeb5af56f6"
+    },
+    {
+      "path": "src/factors/broad_pipeline.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 693,
+      "sha256": "e79112bfefcd69f1d0e1c15ba19aeebbaca0b49e59be4831ce4f7293b8f2f7ef"
+    },
+    {
+      "path": "src/factors/broad_research_gate.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 325,
+      "sha256": "e9a3a7ba8985944400384d45dea680f87afbffa286fe292199cc1958580532d8"
+    },
+    {
+      "path": "src/factors/data_publication.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 810,
+      "sha256": "d65b7eec358c7fb138fea947a7db7b66297199c90c39c38156c496b73304ea94"
+    },
+    {
+      "path": "src/factors/library.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 176,
+      "sha256": "0eec93e05d4c88d3926f06c8c5a17398aa46edb2e622c4181eac2a1d2563fb59"
+    },
+    {
+      "path": "src/factors/momentum.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 85,
+      "sha256": "2c2d8e0a792bd408e924c80fb903ea1135042072f8e71b2c093eec7bf9074bbc"
+    },
+    {
+      "path": "src/factors/observations.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 1333,
+      "sha256": "63f4c58981c62ed24c7498608a838bfa83149c4949d0e618f87e94ecc8d0ce01"
+    },
+    {
+      "path": "src/factors/publication.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 342,
+      "sha256": "25136c114a8d156ea014a86b176d4c027e83fb5a445641e6898acfa542a0242d"
+    },
+    {
+      "path": "src/factors/reversal.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 51,
+      "sha256": "8c3e4cf35623135099dc242693032c2dcf3ec3724d6ab903bb70365814734e8a"
+    },
+    {
+      "path": "src/factors/turnover.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 53,
+      "sha256": "439b63252b4c42508a677fffcb81312d4047d3a8685b038cf8bce72ce9427212"
+    },
+    {
+      "path": "src/factors/volatility.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 59,
+      "sha256": "030ef6d2b15b4f16a5a5325acbf12d89b330d0869487420e5c7cfbb9d8cd2302"
+    },
+    {
+      "path": "src/group_analytics/__init__.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 11,
+      "sha256": "2845488a18e9c670745d12064392b37f384aba1515ba975dababd760531250ed"
+    },
+    {
+      "path": "src/group_analytics/adapters.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 909,
+      "sha256": "512a9002dcd362f87f1624ff1da59f57050a1c9830dc5683bf33577888394842"
+    },
+    {
+      "path": "src/group_analytics/aggregation.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 566,
+      "sha256": "d28f57027a1f5a700ee3d8f1800ce6a0fd6365aa45f61215f88638929c4ff8db"
+    },
+    {
+      "path": "src/group_analytics/artifacts.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 2209,
+      "sha256": "168b1595b2477dfe836de2a292d1a7cac12971400c3faea9937cad31a8343bc2"
+    },
+    {
+      "path": "src/group_analytics/calendar.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 95,
+      "sha256": "96eb9ce550d3504e14add57a37e72c96520a8249be89a1f5c70cd2a53405c41e"
+    },
+    {
+      "path": "src/group_analytics/classification.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 982,
+      "sha256": "437eb8f6879ef81a03c5801cc3b0a9d032ea4054dc4a9376ffd783e8c0ed7c79"
+    },
+    {
+      "path": "src/group_analytics/confidence.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 198,
+      "sha256": "acc3e06be7319b42a3bd9c7a23191cef5811f8fa6f9ef03e82c3830925d8d3fd"
+    },
+    {
+      "path": "src/group_analytics/models.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 266,
+      "sha256": "d6f32843c08bbe49debf685bbda2fca767aeadb04cfb66315341a2d6c762009e"
+    },
+    {
+      "path": "src/group_analytics/returns.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 197,
+      "sha256": "1ab442572e41760e6faea53da48a93d0207144cddfb7be91d88b30bf98048427"
+    },
+    {
+      "path": "src/group_analytics/service.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 741,
+      "sha256": "f1a99aa9e05b2e726f20fc564f3f84b49063c66095e55262e7ab2dfa51eed72c"
+    },
+    {
+      "path": "src/group_analytics/settings.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 260,
+      "sha256": "1f71eaf9f858357bbff39726487187d3bee2b1aff690a2e90bafc9ac9f08ff90"
+    },
+    {
+      "path": "src/market_regime_research/__init__.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 20,
+      "sha256": "e7596b4c5e62565092e7a378dbc38e3c3768a52baeab61e9107d835e131c62a8"
+    },
+    {
+      "path": "src/market_regime_research/artifacts.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 251,
+      "sha256": "31c59d1863f2805a9cd9eb37dd89eff6e9b219fa66979e1a5ec632d71a7df65b"
+    },
+    {
+      "path": "src/market_regime_research/features.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 1023,
+      "sha256": "8f7beebf7cf7a0fc89e56ec127ddf9ae716a046bdf9b1e343fa37ff8869064f6"
+    },
+    {
+      "path": "src/market_regime_research/labels.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 264,
+      "sha256": "78644314f8065186ebc6ad07174fc02e44a54c1c3f0fec4cbc1587ae7f194d92"
+    },
+    {
+      "path": "src/market_regime_research/models.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 103,
+      "sha256": "3db0c5a7a413421f0c530e3fc296f65ec92962cfe6ea0f5f5f6bdc2adbe5bbb5"
+    },
+    {
+      "path": "src/market_regime_research/pipeline.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 718,
+      "sha256": "342ec20596040dc97934e61993ca8f27b5e63e7e21ca05b640e4fe272a66c3ce"
+    },
+    {
+      "path": "src/market_regime_research/pit.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 492,
+      "sha256": "5b7008602f3c7d5931d1775f0c2bf698c6f0a42855387495f75c336000a4ce20"
+    },
+    {
+      "path": "src/market_regime_research/screening.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 1424,
+      "sha256": "f421d83334f407ea765831a7a623bb54f7ed16b8ed438f0930dd7a326fdf5ac4"
+    },
+    {
+      "path": "src/market_regime_research/screening_artifacts.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 347,
+      "sha256": "baafc0283814272d9e3f32ca0420ea5cc345147aee65667328145cf652159e35"
+    },
+    {
+      "path": "src/market_regime_research/screening_pipeline.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 175,
+      "sha256": "6475d2d07e4f6c2d38a7bca5ffff4f22da9302540cca2fc47772de9254e9cb5f"
+    },
+    {
+      "path": "src/market_regime_research/settings.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 540,
+      "sha256": "012ca9b7f70bae032a8057b08c36e6f903356719bd8ff8bf3456d20999125812"
+    },
+    {
+      "path": "src/market_regime_research/sources.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 1204,
+      "sha256": "136e44c31a74809d47b33d19ce2348d04df2160075d494e7ae341dd34bc6358e"
+    },
+    {
+      "path": "src/operations/__init__.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 36,
+      "sha256": "0db3e1c960d5718b7b76f1776818b4c557623f301a8dfa04eab511bbbf43c864"
+    },
+    {
+      "path": "src/operations/adapters/__init__.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 15,
+      "sha256": "e467523bd3e17e15bb4de4c274a8494f5755919cbc0bd021b7be273bed96303c"
+    },
+    {
+      "path": "src/operations/adapters/application.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 617,
+      "sha256": "cc36edab53ab0ca6e5e32ac48b22b13e31278582de8cf938d866525aa916fcc4"
+    },
+    {
+      "path": "src/operations/adapters/broad.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 896,
+      "sha256": "78f3899cd7c3efd65bc90b333d58be4e2a50512b63ad5d6bd6f983793f466d76"
+    },
+    {
+      "path": "src/operations/adapters/delivery.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 1155,
+      "sha256": "38d32b494e2fb4fb68ed234fbcae464afb084f4a15008b7acac3ec6f37d1b540"
+    },
+    {
+      "path": "src/operations/adapters/market.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 267,
+      "sha256": "0711c111ebf68cec36db097839b331e8f082408c7b65036f50218576eec342d4"
+    },
+    {
+      "path": "src/operations/adapters/research.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 348,
+      "sha256": "62c87df758896943e4a4104c7b55f9298808b0a8f458e1883a0a1581930c5f95"
+    },
+    {
+      "path": "src/operations/evidence.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 294,
+      "sha256": "7e512c4118c7bde1409c1403379fbe384891306ea0749f59a09d4af182a6e4f5"
+    },
+    {
+      "path": "src/operations/models.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 236,
+      "sha256": "42a045f42475bb9feed8f12b125ce3e8f279ab8cb07b421e8b15f3d447f27c0d"
+    },
+    {
+      "path": "src/operations/registry.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 169,
+      "sha256": "c7a0fcc0c376ebefc918dea58be962fef4f2d3aef965a6bbaa10d7ebb081ef00"
+    },
+    {
+      "path": "src/operations/store.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 943,
+      "sha256": "2617e55f2a280a5f7f7f22af6ab51fcd6b5938e53eb764fa9719b236115531ff"
+    },
+    {
+      "path": "src/operations/systemd.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 101,
+      "sha256": "7fcd5b3d66a4458164b86c87053e6ccf5f2b56d08f54c81e30867ea655f6f26e"
+    },
+    {
+      "path": "src/operations/watchdog.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 435,
+      "sha256": "fa8951b1ae60a7b2067aca229e3b791d3a7e6ce5e7e7dd7f4af54426a4ba48d6"
+    },
+    {
+      "path": "src/operations_web/__init__.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 5,
+      "sha256": "9a6fdac062e7fd393d445ce2d0f62eb8a783f1c7aa3c944844ed16bb730d7629"
+    },
+    {
+      "path": "src/operations_web/app.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 291,
+      "sha256": "1f281be7f2d996a4ea9b46669ba328bd67cbea289a5e40ab6079b5feea7d26b2"
+    },
+    {
+      "path": "src/operations_web/security.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 137,
+      "sha256": "08df80f58ed9a1319c3ba81fedbf0b39372ad334880551391ad1634159b0e93f"
+    },
+    {
+      "path": "src/operations_web/static/css/operations.css",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 321,
+      "sha256": "a5615fa1daeb8cec7fb18d222e83563960e09af67434fbc8b606db97c3512c7a"
+    },
+    {
+      "path": "src/operations_web/static/js/operations.js",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 98,
+      "sha256": "441e44f6c870a81c08f5b1283f3e7c9d19268ba4f5a3676a90751e2d9d60b8c6"
+    },
+    {
+      "path": "src/operations_web/templates/base.html",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 49,
+      "sha256": "1719028c1d7ee2dd3080601bfee39a0e8d7c6fb337064a831311ab4e4f73ea3a"
+    },
+    {
+      "path": "src/operations_web/templates/deliveries.html",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 25,
+      "sha256": "5ea1dbc77b6961be953c3db676217c4ad7ccd7d5dbce363595ce18fc51092661"
+    },
+    {
+      "path": "src/operations_web/templates/freshness.html",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 25,
+      "sha256": "ed5b3c2b56383e780e2da15f1b10ef84d5bf0f561629238a3f3f1250b79c8c6c"
+    },
+    {
+      "path": "src/operations_web/templates/incidents.html",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 27,
+      "sha256": "965eb58d6b8fcab6f80974cde8b52bfdd4386d4853ff1dca727c72e12895d16b"
+    },
+    {
+      "path": "src/operations_web/templates/job_detail.html",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 130,
+      "sha256": "407b115380bf4173ced9b43e92fdbdf10a36d1cc3095e2b856aac4cd8a59506a"
+    },
+    {
+      "path": "src/operations_web/templates/jobs.html",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 29,
+      "sha256": "d38aefad3417c6a830172dfe9834cf5105000b8a024d7377801f10e6a28db70b"
+    },
+    {
+      "path": "src/operations_web/templates/overview.html",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 134,
+      "sha256": "c489cf8350e68791b16695150c2b777832056a9cb89f74f166b9e901a88f7fbd"
+    },
+    {
+      "path": "src/operations_web/templates/projects.html",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 32,
+      "sha256": "de7f2a7012c4d2a7d2eb1614fa78225c8507817621a411a23cab97223d061adc"
+    },
+    {
+      "path": "src/operations_web/templates/run_detail.html",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 47,
+      "sha256": "b281a2aa4c20adc7d1f90fb3d68908859bb5a4d58371089dc9c3ba97f9a3df9b"
+    },
+    {
+      "path": "src/papertrading/__init__.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 28,
+      "sha256": "89ec70977f2ca21df6c448029e7faf14b02d8472efa73a051f35b12554875c51"
+    },
+    {
+      "path": "src/papertrading/definition.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 189,
+      "sha256": "5301ed4425f911a7cb137ae8342909da2787052233a435af149e843f3305452e"
+    },
+    {
+      "path": "src/papertrading/notification_state.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 383,
+      "sha256": "6ac73a77ccdd9f120101b30810c47effddc765977b56342de3ccb3bd9ce43b0d"
+    },
+    {
+      "path": "src/papertrading/notifications.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 528,
+      "sha256": "90f757dfa26a94d1df66cf6706ad903cb6609897f999032494375737c55ef6dc"
+    },
+    {
+      "path": "src/papertrading/runner.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 1167,
+      "sha256": "cfce2a8e4dc4a13e6270298bf8a9fbe5b0b415e5907bf158b1e886e3c847ab86"
+    },
+    {
+      "path": "src/papertrading/store.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 215,
+      "sha256": "bd8ab37afaf7d9f2e704c8867a739d2fdac34f845ac5645abd238a721a7bde0a"
+    },
+    {
+      "path": "src/papertrading/target.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 337,
+      "sha256": "82f6427b4279d6bba2ba66f1c124f15240083da9e06fd4318b5cb91be74ec6b4"
+    },
+    {
+      "path": "src/premarket_digest/__init__.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 18,
+      "sha256": "4ff8f845428c1a12085147d1aaa658ee922a2765328711fdbf0f90fb928af05f"
+    },
+    {
+      "path": "src/premarket_digest/groups.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 267,
+      "sha256": "21f62115d76a93602885bb1498026992ed3e52f336176ff0850566db54c3dad6"
+    },
+    {
+      "path": "src/premarket_digest/models.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 68,
+      "sha256": "13a335ade2fd3b1e5b516f2395f16adb838a447b70cd161cc505b5fee3cc7f64"
+    },
+    {
+      "path": "src/premarket_digest/momentum.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 467,
+      "sha256": "256cd71a091c12643132ddb9f36766f711af0c930d4a20ad03de06f6634ace36"
+    },
+    {
+      "path": "src/premarket_digest/render.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 335,
+      "sha256": "633ae45464c98ff38defa7e63493dfbdcd4c9e19f3eca5989a8f6cbd87bea498"
+    },
+    {
+      "path": "src/premarket_digest/schedule.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 89,
+      "sha256": "7a514af89bbcb87cfc20578ac9ee0c432047b50a43cb26867db62c441250a9bd"
+    },
+    {
+      "path": "src/premarket_digest/service.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 671,
+      "sha256": "ade084b1c0d4de5d00bbe17f48c0b8451e2a3468ae5ad9c2ff380b4e1a39564c"
+    },
+    {
+      "path": "src/premarket_digest/settings.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 204,
+      "sha256": "69931f861aa86a67a09789911c5caec71ba48b9ccdf9392f7dcb37bf06380653"
+    },
+    {
+      "path": "src/premarket_digest/state.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 432,
+      "sha256": "618bad864cd8ec4c78eac5d400697ffd0400187e8fa303767f4efbe55765b741"
+    },
+    {
+      "path": "src/preprocessing/__init__.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 16,
+      "sha256": "f09db3ba2dabdc75ba83b68876cd72b89160bfa49ff486d0b2030e041ea1ef4b"
+    },
+    {
+      "path": "src/preprocessing/neutralize.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 424,
+      "sha256": "786798d3eed26ad4fa2462260b2811d0cadd6a4009016d20ce4a2f9e18b90e6e"
+    },
+    {
+      "path": "src/preprocessing/pipeline.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 146,
+      "sha256": "56e09288637583dbc3bc4a369a2a1a3a8595d37699051130246fb50170593652"
+    },
+    {
+      "path": "src/preprocessing/standardize.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 22,
+      "sha256": "dec5d81590143c8f70420645496137becbb1b2d9ca6a6dbeec4602ea19cce50c"
+    },
+    {
+      "path": "src/preprocessing/winsorize.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 48,
+      "sha256": "60f2686d7cbf7824018eaa692b553d216bf8ded806cd72a739cb3f0c1b7d7349"
+    },
+    {
+      "path": "src/research_universes/__init__.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 30,
+      "sha256": "02602f427b65afc9aa8509b1b3e8dadf77a14b89e11eb640ccbb68114f3fe001"
+    },
+    {
+      "path": "src/research_universes/cross_universe.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 266,
+      "sha256": "011ef3e59b0d4ceec3858c4f93aa3ad50cc8b8b64db4b3a49451ade57a198f90"
+    },
+    {
+      "path": "src/research_universes/models.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 75,
+      "sha256": "ce4c261478c9fe78729be0d6ba1123ac19b47c1ebb6cc40c73391df831058040"
+    },
+    {
+      "path": "src/research_universes/publication.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 163,
+      "sha256": "6d3667c62d343281559032115255374bf8fe6ef673ea5d95230f871f99666abd"
+    },
+    {
+      "path": "src/research_universes/registry.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 239,
+      "sha256": "e040153d5c6a495f8e3046cc310e2c891176717c74eb98b9aa17d271ebf0103c"
+    },
+    {
+      "path": "src/research_universes/service.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors",
+      "lines": 177,
+      "sha256": "da4c9d8e12463f58869cae0ff9a032f000aa1563eba66af0d04a34bedb772ae8"
+    },
+    {
+      "path": "src/storage/__init__.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 27,
+      "sha256": "e747c14d547b72bc5a8a976a96a8460e0ba4189417882d01d459444a47e13519"
+    },
+    {
+      "path": "src/storage/app_db.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 902,
+      "sha256": "b8204b9692e679d236ca04d89476cf803f5efe9b3e88637133f408f17d874c9c"
+    },
+    {
+      "path": "src/strategies/__init__.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 29,
+      "sha256": "722695bd19f5c0ac50eb03c70d758b3862e7ea7181b42d28d4d07bdec7c16f77"
+    },
+    {
+      "path": "src/strategies/definition.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 152,
+      "sha256": "d6b92c30af9d868f77d15f0f79ac6a6c8641ac6c3cf633a0f28c463b0282e23f"
+    },
+    {
+      "path": "src/strategies/store.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 88,
+      "sha256": "923be95bb1fa7e1122cab9e0995e87d5fe386a5c67311cd67435930653fafd11"
+    },
+    {
+      "path": "src/utils/__init__.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 20,
+      "sha256": "2ecc08fb8ac078f0c56b64dda4228b32f1d378feff32cf00dba813a80d650844"
+    },
+    {
+      "path": "src/utils/date_utils.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 106,
+      "sha256": "ccbbf9f9f54b937f3d779a5fd535ffcad378cc49e6d588758253f59d6618d498"
+    },
+    {
+      "path": "src/utils/env.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 33,
+      "sha256": "99915898f8d23f965d7c428f849ec9d5716e70a82976326b02720c76dd123b82"
+    },
+    {
+      "path": "src/utils/file_lock.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 43,
+      "sha256": "b574e800b96ea274093b85ef0d59ed3adea71b2b3e8c99e608bca50a9f01f3df"
+    },
+    {
+      "path": "src/utils/identifiers.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 64,
+      "sha256": "30b4f09cce07526d14936ae025410cdbc88e138448ab7376b54eab230913a08b"
+    },
+    {
+      "path": "src/utils/io.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 95,
+      "sha256": "a5aeab354dad053b69a03eebc906b164bdd2cfe4f0c778cc67de988fc041eda5"
+    },
+    {
+      "path": "src/utils/logger.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 81,
+      "sha256": "1f04b92dabe17d0d478e8b1cd768c73d36ad9eeeafd055d8ff97551c2b567e79"
+    },
+    {
+      "path": "src/utils/market_calendar.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 176,
+      "sha256": "48b45e6967ce5c9d2d308e489bf6c1ddaf2e8e4fd93c96b3f70c5421fb189f16"
+    },
+    {
+      "path": "src/visualization/__init__.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 42,
+      "sha256": "058f9a89d6623d4d2ea91df2c1dc9579073c821bb7f933c863efacb9fcfc79c9"
+    },
+    {
+      "path": "src/visualization/plots_mpl.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 140,
+      "sha256": "af32f371c326d6c2c11bc220c796de94f0b496949cea4ecf28aa93c33aa91cc0"
+    },
+    {
+      "path": "src/visualization/plots_plotly.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 479,
+      "sha256": "96e90177040ffc137e3a1f97d755e01796c699ee5d99f36c074368c1ba295c72"
+    },
+    {
+      "path": "src/watchlists/__init__.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 41,
+      "sha256": "4301cda213e51e75b618e48e5ea58ca92dcf8dcbfdcd37a1090b491a5356796c"
+    },
+    {
+      "path": "src/watchlists/definition.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 157,
+      "sha256": "91a84c0d885508dc9b63809d2d1658917fb5be72d9add1a525388d13fd6c5ebe"
+    },
+    {
+      "path": "src/watchlists/store.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 168,
+      "sha256": "a9257d870ee78d206fd4dc05981888114fae91815725e4fb24b604359dcf845f"
+    },
+    {
+      "path": "src/webapp/__init__.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 9,
+      "sha256": "566a031acbd20fd4bb6d806dbfe8b7c6c474916d395fa6c46e4c494c83b7e08a"
+    },
+    {
+      "path": "src/webapp/app.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 219,
+      "sha256": "dbb2f476dab12f50638ce52da9af0896b9771c872d53397ff0e7e01d5cd56ac1"
+    },
+    {
+      "path": "src/webapp/breakout_routes.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 538,
+      "sha256": "efafa689b6460264bc5e048f172e942b0b58b2cc00287f4241c650a85dd594bc"
+    },
+    {
+      "path": "src/webapp/decision_replay_routes.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 244,
+      "sha256": "2c24008c5044323a4bab92a2ecaf4a8935936204b6a7982da8898570e286fd28"
+    },
+    {
+      "path": "src/webapp/group_analytics_routes.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 1265,
+      "sha256": "6585ede36974bb50741fddfc2be32945eb63db609680c7fc0a37b5a77fb68512"
+    },
+    {
+      "path": "src/webapp/market_regime_status.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 939,
+      "sha256": "6886841faef1de257af8079304c3d57390b24c859c5386fa976ca24f3cd4ae70"
+    },
+    {
+      "path": "src/webapp/research_labels.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 226,
+      "sha256": "f529b6b980f76cef989474302043235bf89d3a5859fef1169f159ca6315270f9"
+    },
+    {
+      "path": "src/webapp/research_routes.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 1272,
+      "sha256": "143c4238dbebb9bb76a7e06b7ed9ff08867c0940e4b0f966a70dd446a37b4736"
+    },
+    {
+      "path": "src/webapp/results_store.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 203,
+      "sha256": "e08336aaadce25d68dc828d5594946938aad5d7bdff5734425aec39ac721346a"
+    },
+    {
+      "path": "src/webapp/routes.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 698,
+      "sha256": "f9fa82962d269838d4c2df1746c23660e74c0b2ed71d4fd6028a5d8e2885a7f8"
+    },
+    {
+      "path": "src/webapp/routes_v2.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 1809,
+      "sha256": "23c875f1563287ec824871fd39336942c2a8d1d784028d58a925ab718e2aa675"
+    },
+    {
+      "path": "src/webapp/security.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 168,
+      "sha256": "b9545babf768571b0d065837d1c8836b625434c97b289b00a860be1ace7479bc"
+    },
+    {
+      "path": "src/webapp/static/css/group_analytics.css",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 89,
+      "sha256": "abaf7cb4c3e87693e9330390e81318a0338cd389ef1a493c148514ba4617be28"
+    },
+    {
+      "path": "src/webapp/static/css/style.css",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 3412,
+      "sha256": "b16baeca495d192bc9aece81d2b0959935313f16cf4174034d4e6753955f7c40"
+    },
+    {
+      "path": "src/webapp/static/js/app.js",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 86,
+      "sha256": "da8b77beb62055c74ad15542a4661c5331abdb4fdd7cc3f9fc892ec5cfd7f6eb"
+    },
+    {
+      "path": "src/webapp/static/js/backtest_detail.js",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 69,
+      "sha256": "8f5ed09cf299fd724eefd085074926e86f43399171a565d68336680ff93f3a8d"
+    },
+    {
+      "path": "src/webapp/static/js/breakout_detail.js",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 126,
+      "sha256": "23115fc863723d06df2eb65e799826b8afe795b9ca695821c0640069faaea75f"
+    },
+    {
+      "path": "src/webapp/static/js/decision_replay.js",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 527,
+      "sha256": "fb85c41c9562e7da2c848c23b2dd746c6c180eb98595db4e87db79a2bdff13c5"
+    },
+    {
+      "path": "src/webapp/static/js/factor_data.js",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 885,
+      "sha256": "4ca7ff6b263f520ac2bc175a9393c52b440e9778926f228feac787fbb6dab957"
+    },
+    {
+      "path": "src/webapp/static/js/group_analytics.js",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 541,
+      "sha256": "85b10c21280965b1eb320adc0c3dedd8b21e579725c3e20eed1b0a9ece9aa1fd"
+    },
+    {
+      "path": "src/webapp/static/js/market_regime_status.js",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 259,
+      "sha256": "1bfbcfd713d49e31f288423b3607870a683ac90437fccad596d7ba57cebb74d2"
+    },
+    {
+      "path": "src/webapp/static/js/strategy_evidence.js",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 63,
+      "sha256": "86d7e0a782cb7c97685c28e883eaf956c3e7ed75bd6b98c6976ed992c835ae88"
+    },
+    {
+      "path": "src/webapp/static/js/strategy_form.js",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 143,
+      "sha256": "a7f2243fe66e434f43c7539774f07cdcb0ad18ea9e9742ad48cad2e4a0cdf6bd"
+    },
+    {
+      "path": "src/webapp/static/js/watchlist_edit.js",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 378,
+      "sha256": "d3c7d00e29d9e759ca547111deaef665948972a13430a605df877256f284bb10"
+    },
+    {
+      "path": "src/webapp/templates/_run_contract.html",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 140,
+      "sha256": "6f45102e631a1faabe78b2c9ac143cde11e5118f12d0ee95b63b856b47195473"
+    },
+    {
+      "path": "src/webapp/templates/backtest.html",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 92,
+      "sha256": "05594e7d73f027b41db942b1ff9c9dfb969513b3c6b4d221b8553441ffa8dc41"
+    },
+    {
+      "path": "src/webapp/templates/backtest_detail.html",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 391,
+      "sha256": "1fe7c78c888c3d2ee5843b9145332a30a737bd131b1b4fcf10a613e3a72b3fcf"
+    },
+    {
+      "path": "src/webapp/templates/backtest_list.html",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 88,
+      "sha256": "26fdec0f0ca76a1cf95baf9f2deaf9e5ee6a2dbc3d16bd447364354957e53588"
+    },
+    {
+      "path": "src/webapp/templates/backtest_new.html",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 211,
+      "sha256": "f7a9e1e96381feb18928ea5a1cb287d129eea7de4ea8b2d3d53c3c57db7792f2"
+    },
+    {
+      "path": "src/webapp/templates/base.html",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 123,
+      "sha256": "fe28be1087134efcd2a07a55399ee2de3b9ac415f43911fbd9a246810c9153ab"
+    },
+    {
+      "path": "src/webapp/templates/breakout_detail.html",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 97,
+      "sha256": "ab647d3e2412a2812012ce0eb137ccb28092ad2910137cf9b1464a265a41cc8f"
+    },
+    {
+      "path": "src/webapp/templates/breakout_list.html",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 281,
+      "sha256": "c9f5f7ca998980c0c979c1d85e861bd09bf74fc24de0c76e863c98a0ee4188c7"
+    },
+    {
+      "path": "src/webapp/templates/decision_replay.html",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 179,
+      "sha256": "dcfbfc6b50b417b017250941f883cae9fc7fbc31e64b32b1d012e15b6f6e8d55"
+    },
+    {
+      "path": "src/webapp/templates/decision_replay_index.html",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 27,
+      "sha256": "174c97ecf98eb4451c24661fb41e8a8bb31cbe8acf918950f31a23acbed8b71a"
+    },
+    {
+      "path": "src/webapp/templates/factor.html",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 263,
+      "sha256": "bc2ff83e4666efb9aab406e4861c6cffcde95d3d29a36db7f0ff4a21898d4e22"
+    },
+    {
+      "path": "src/webapp/templates/factor_data.html",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 167,
+      "sha256": "619a57526c61b7332f814ecd9b25d655a5baf72adaf7bac0aa55d511c34bf6ab"
+    },
+    {
+      "path": "src/webapp/templates/factor_library.html",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 52,
+      "sha256": "64f63ff11b5e4b1b464eb5c3797bec603312e1983a4bb6060e2ea86e748d57f8"
+    },
+    {
+      "path": "src/webapp/templates/group_analytics.html",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 91,
+      "sha256": "d4507ce9e511f08b234cb4ba23b47a6dee3bf048f18d8a81f7af5694a814ef23"
+    },
+    {
+      "path": "src/webapp/templates/group_detail.html",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 72,
+      "sha256": "de6f88fcdd39063d797d7a29d0be10a2d0bd8c3c2e404a9b337776b80fd5c5ca"
+    },
+    {
+      "path": "src/webapp/templates/index.html",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 133,
+      "sha256": "5ec3d47e4ceab251c24a8f196e83d29de7fa28cff4654e7cde5dcd0bdf166a55"
+    },
+    {
+      "path": "src/webapp/templates/market_regime_status.html",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 234,
+      "sha256": "facf6cb83516a54b993ad80609b2913bba41614fe9040cd4c4f5a51287aa21a0"
+    },
+    {
+      "path": "src/webapp/templates/paper_detail.html",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 364,
+      "sha256": "716a41828e86285fb67035019ee7e353ed9944bf411a16ff885160b7aa816076"
+    },
+    {
+      "path": "src/webapp/templates/paper_list.html",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 92,
+      "sha256": "10747ea99787fbefdab5cdcd60d41a506c4d1f530f0dc085c315dcab9e973af2"
+    },
+    {
+      "path": "src/webapp/templates/paper_new.html",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 200,
+      "sha256": "01086db88aee5be714ceb5b3159aa4728bfa42ea08efe65ba6f44a924af256f3"
+    },
+    {
+      "path": "src/webapp/templates/research_factor.html",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 106,
+      "sha256": "245f723b3ee7011d3d65a0c884e622c66e1b7ffd84d8d626cf19bd95cdec2496"
+    },
+    {
+      "path": "src/webapp/templates/research_overview.html",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 209,
+      "sha256": "48018a70f6d5e197f73b23e1ac3a852d7ca076e576c5003fc4b10c66fa536b58"
+    },
+    {
+      "path": "src/webapp/templates/research_universe_detail.html",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 176,
+      "sha256": "520ee294678f6bd60b94928d62eeab1d057c9f1b573d482f3fc914abd62a78a2"
+    },
+    {
+      "path": "src/webapp/templates/research_universes.html",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 61,
+      "sha256": "7a24eb285ba957cd85e7f09ac235ac84712d0c34bd6e313bde3f80734e5773b0"
+    },
+    {
+      "path": "src/webapp/templates/strategy_detail.html",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 89,
+      "sha256": "9f9365cd474571024aa2a2b0849bf308f5f69ec6cdd336fa1bbc7501d4d2ac28"
+    },
+    {
+      "path": "src/webapp/templates/strategy_list.html",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 64,
+      "sha256": "7cc80e7c4094f6782f7f89de1280040e61cc3ef10b7bfbd47a20e634d93cbb80"
+    },
+    {
+      "path": "src/webapp/templates/strategy_new.html",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 88,
+      "sha256": "0bad86cd6cb5568513a904445950c9c4d1fe3469a3a278a7ed347c9b4840d2be"
+    },
+    {
+      "path": "src/webapp/templates/watchlist_edit.html",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 116,
+      "sha256": "17125f8949bc9de5364fb92e361fafae02eb4e095a5be88de8e89b13d22ef247"
+    },
+    {
+      "path": "src/webapp/templates/watchlist_list.html",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 89,
+      "sha256": "80ca3a4280e31dad83c204b795f2be973d62b9ce8aaefa7f400edefd7f846e23"
+    },
+    {
+      "path": "tests/fixtures/group_analytics/golden_10_sessions.json",
+      "status": "full_text_read",
+      "reviewer": "data_factors_tests",
+      "lines": 54,
+      "sha256": "fa9697ff6e2c1798bcb628dc7f8be344e93431fb05ac3266be5526d1697e9525"
+    },
+    {
+      "path": "tests/test_app_storage.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 341,
+      "sha256": "a5250abf3e2dd13bf40892430e6a97b7c304091218680d49064b67edabe4caf2"
+    },
+    {
+      "path": "tests/test_benchmark_contract_integration.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors_tests",
+      "lines": 143,
+      "sha256": "c8933b96d37d2853ca939ae698485e5a3b62a97922755e0db45d9367df63198c"
+    },
+    {
+      "path": "tests/test_breakout_isolation.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 169,
+      "sha256": "0cbdfc5238a9dd3dee1fc170ec8bc83defa6cc7cdf1025fa3753e2cbe2783d39"
+    },
+    {
+      "path": "tests/test_breakouts.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 230,
+      "sha256": "2940f15bd98c90e0ab9e7998e0f2ed2e80190a9fd8c628be02df832d876f42e7"
+    },
+    {
+      "path": "tests/test_broad_breakout_adapter.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 114,
+      "sha256": "d887d41e3847cf6b45380784aa4e66d6f70333319d716f8deb797fe99b84f3d5"
+    },
+    {
+      "path": "tests/test_broad_coverage.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors_tests",
+      "lines": 724,
+      "sha256": "078cb53047ab083dfbe20596284c6dd429b021c69e976c642a19fd3e86a13671"
+    },
+    {
+      "path": "tests/test_broad_factor_data.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors_tests",
+      "lines": 525,
+      "sha256": "54ddadbd836d1d931225bc42f7e208c016180238011c642b783d85a83d60e1ef"
+    },
+    {
+      "path": "tests/test_broad_operations.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 882,
+      "sha256": "54f58d53f990b666ec14b59b2c2926bd29420c4864b8334f8d9c40d87cf4eb8b"
+    },
+    {
+      "path": "tests/test_broad_pit_universe.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors_tests",
+      "lines": 423,
+      "sha256": "2f4123be07e0dde9558cdd45a851c9008736cbc7b35b1d43806fb79502652d87"
+    },
+    {
+      "path": "tests/test_broad_research_gate.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors_tests",
+      "lines": 90,
+      "sha256": "aea7f2e93fe45195370552001b660a3ed8f4052272435ffa5ece43ffd0a89ae2"
+    },
+    {
+      "path": "tests/test_core_market_data_recovery.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors_tests",
+      "lines": 93,
+      "sha256": "6218e11e6325801315d381646de91e4a12f63c9f58fcbaa7094100d9ddef0557"
+    },
+    {
+      "path": "tests/test_cross_universe_assessment.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors_tests",
+      "lines": 149,
+      "sha256": "905f3f2b4f9c823066d9c398caee00c385f802ebc1442d00372f480c1a9c1167"
+    },
+    {
+      "path": "tests/test_cup_handle.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 562,
+      "sha256": "11d36f80928cab6281b43bd249e43d43eff16f32879a5cb42457684540adf8d5"
+    },
+    {
+      "path": "tests/test_data_foundation.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors_tests",
+      "lines": 1094,
+      "sha256": "172bf53f7ac74911b055cab2145c15e0a9d6548ec728c5ac82a4da184e954a1f"
+    },
+    {
+      "path": "tests/test_data_pipeline_contract.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors_tests",
+      "lines": 65,
+      "sha256": "115842fc24309e1792180f2536c6aa809c8c104c9618bf4dd2c27255e467eca9"
+    },
+    {
+      "path": "tests/test_decision_replay.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 286,
+      "sha256": "21810f99ca2c976cf85cc10af296e80b7975f9b6274aa59ae6067716d6ab7eab"
+    },
+    {
+      "path": "tests/test_decision_replay_store_integrity.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 113,
+      "sha256": "66f255eae55bed455060c2b7108f3d3e230089ed4f6f20a198dab2c6f6cccdb9"
+    },
+    {
+      "path": "tests/test_discord_transport.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 311,
+      "sha256": "a09c591b60e92d8f5eaa29233cbdf156db2dfa69ded9b5ed47647721a94d8d21"
+    },
+    {
+      "path": "tests/test_double_sort_integrity.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 119,
+      "sha256": "5f24e4889891d2014df96438f602aeeda3e8967364d64c301cb18c26c0845e94"
+    },
+    {
+      "path": "tests/test_factor_artifact_provenance.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors_tests",
+      "lines": 97,
+      "sha256": "c498174be56bc7c6404e49f458d5608dc1478b4502fd5e32d526ca186e289f2e"
+    },
+    {
+      "path": "tests/test_factor_observations.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 610,
+      "sha256": "4e48fafe991d1fd686809bb0f11704228759c30d93a8f66d622a0a5a72b9959e"
+    },
+    {
+      "path": "tests/test_factor_research_publication.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors_tests",
+      "lines": 184,
+      "sha256": "d50bbc130aec40a5f2c31142fe74dc1472772e75fba9ff0ff8cb78882173c7ae"
+    },
+    {
+      "path": "tests/test_fmp_coverage_audit.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors_tests",
+      "lines": 294,
+      "sha256": "8ec12e8500430c369399f2d2f61a1869ee3f80a02dd826123ec3c0830aa5ef2d"
+    },
+    {
+      "path": "tests/test_fmp_websocket_probe.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 42,
+      "sha256": "02da72390f7deeb5d867548f585ea669770cc6d1a86a2335aee7348fc39e037b"
+    },
+    {
+      "path": "tests/test_group_analytics_aggregation.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 164,
+      "sha256": "63217d30d48dcb8538ca0365e6a2ba72802e6c0f2c7aeaafcc845a4a19cab51e"
+    },
+    {
+      "path": "tests/test_group_analytics_api.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 525,
+      "sha256": "d669e8e3b817db80870229ade911a7a3add4f434a8c819aa7652eaeef1183093"
+    },
+    {
+      "path": "tests/test_group_analytics_classification_artifacts.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 787,
+      "sha256": "1ccdcf0b2ad4f209cbb055928ea560c938c6e82226d6bf44176e528295b7fca9"
+    },
+    {
+      "path": "tests/test_group_analytics_golden_replay.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 111,
+      "sha256": "3013bb21820fa620e6794edc376971930012d96b03a635251d43345b1543ba84"
+    },
+    {
+      "path": "tests/test_group_analytics_isolation.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 126,
+      "sha256": "6c6e377622c70060ab94a465f18d4c6ba0284f3c7a9d6c003fb0b5cd49f0beca"
+    },
+    {
+      "path": "tests/test_group_analytics_market_provider.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 102,
+      "sha256": "dda97c684709dc9e2eb1be4dc2258f8d607bbc460a43d89cf47dfa065f434f8a"
+    },
+    {
+      "path": "tests/test_group_analytics_returns.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 157,
+      "sha256": "6924d9018fabbaf31a191d9ad045a26d597bc0f206779373c1208b48ecda0d70"
+    },
+    {
+      "path": "tests/test_group_analytics_service.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 325,
+      "sha256": "82cb3a66ab86b1c32fd2800b5053759f80c7249365c583168a14de4e181e7f1f"
+    },
+    {
+      "path": "tests/test_ic_hac_confidence.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors_tests",
+      "lines": 35,
+      "sha256": "d1be28969e080b9e3fd8efec7b851a79d609c0e7788b71c0c8f47aeeedb51f46"
+    },
+    {
+      "path": "tests/test_intraday_monitor.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 967,
+      "sha256": "88b75b7d36cb40845ad83307ec2434e63a15cf1ad3d6bde8fb7c303c54b68c2d"
+    },
+    {
+      "path": "tests/test_market_calendar.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 30,
+      "sha256": "ba8f9ba029f8b15dbf428ce0ff2f256358885e5d96a92a37c271efaf1ec51dcb"
+    },
+    {
+      "path": "tests/test_market_regime_cli.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 41,
+      "sha256": "4b99e4895e2e657b7922f86de9ecabaf56bb5a17e160e009bc7516d876888f7b"
+    },
+    {
+      "path": "tests/test_market_regime_features.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 280,
+      "sha256": "167ac5d2f2a687c165714d4166db50cf1440d0b1c521b561de2c118da9cbe7b8"
+    },
+    {
+      "path": "tests/test_market_regime_labels.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 101,
+      "sha256": "5792319619862cb1b126edfff249f1ed4f74db1902084cff551075e74b7d8b6f"
+    },
+    {
+      "path": "tests/test_market_regime_pipeline.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 446,
+      "sha256": "8633b1f1972b23245b8bf6b2c47be742849ed2a1eb0e09ed3612b39345bb9549"
+    },
+    {
+      "path": "tests/test_market_regime_pit.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 222,
+      "sha256": "8212cb1577305a9c88bbea322da51e06df5d1a33d65d0fb2358037e385c8a8ac"
+    },
+    {
+      "path": "tests/test_market_regime_screening.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 348,
+      "sha256": "fc0ae2803eeef2bdc318a3402d1b3fcbe8464d27d4331a49a900c69e765dbfd9"
+    },
+    {
+      "path": "tests/test_market_regime_settings.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 127,
+      "sha256": "20ad1a78791f54db29c17e8ceef143a0c3a429fb476750abc3fab499764e5d00"
+    },
+    {
+      "path": "tests/test_market_regime_sources.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 354,
+      "sha256": "faeb31eb869c6633ee6fd344ec0f07cd86b9fcefee5d49fc4817512f9f2e9e91"
+    },
+    {
+      "path": "tests/test_market_regime_web.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 294,
+      "sha256": "41c7bf469a586be36f52665a923d40a5e91103f77925217d7d2e857295b50ef1"
+    },
+    {
+      "path": "tests/test_membership_exit_price_semantics.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors_tests",
+      "lines": 122,
+      "sha256": "d94ddfc88f26280fd5ed3589b40e77a23550cf820671d6491e5d5d3c9764ad33"
+    },
+    {
+      "path": "tests/test_momentum_alerts.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 360,
+      "sha256": "cad0f7f897440d13dee11854523b20f6dfc895d597dcd4d7b2e7bc6489d893bd"
+    },
+    {
+      "path": "tests/test_momentum_discord_routing.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 121,
+      "sha256": "6b84eaefcc180f1fffba85904e0d86f84e938ba10ce308158e0d0d5e541c9f0e"
+    },
+    {
+      "path": "tests/test_nasdaq100_pit.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors_tests",
+      "lines": 592,
+      "sha256": "9eeb24cc24097171e97f0bed1fa390a8ae81d88fe4466af46a0ad0ef76234e18"
+    },
+    {
+      "path": "tests/test_operations_application_adapter.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 237,
+      "sha256": "c1eaa97c3c547d0df7aef8fbd33e2053eaa40c37c77016293de418d548c6ed90"
+    },
+    {
+      "path": "tests/test_operations_store.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 166,
+      "sha256": "3b4fdb0c13a046df2b90a0d0c3b8727545e7a4926f74bcb90a48b24ab36a1af2"
+    },
+    {
+      "path": "tests/test_operations_watchdog.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 503,
+      "sha256": "3e9893ba4519622dc71746ac090bd827aeb223ea07bc17808d77d2942c92b130"
+    },
+    {
+      "path": "tests/test_operations_web.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 128,
+      "sha256": "1c0e1475f475147fe9b1c1279663e7b323f25df4cded9e0b7553376b039f9cf4"
+    },
+    {
+      "path": "tests/test_paper_notifications.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 259,
+      "sha256": "e2a36fce67e82733a44df50dae4c3620caa57784382a2b7bca03645ff29b45c4"
+    },
+    {
+      "path": "tests/test_paper_trading_integrity.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 280,
+      "sha256": "a0b3f99e11ce21217dce0ca733c01820289ac557e2c72d721a9d8bf4226c6407"
+    },
+    {
+      "path": "tests/test_point_in_time_universe.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors_tests",
+      "lines": 198,
+      "sha256": "8b2f1db5cfc692ef6937438cfefb0a1994d8c35253441e1cace5327921f699bf"
+    },
+    {
+      "path": "tests/test_portfolio_run_snapshots.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 127,
+      "sha256": "38f5913c9167cdeaec56c6e5b8271bc6b135da23a17137e688824381329314fc"
+    },
+    {
+      "path": "tests/test_premarket_digest.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 1851,
+      "sha256": "b608d5496cc2ebe1046dfbd78513c376b6666e6b32fc65ef36db232a7751bbc8"
+    },
+    {
+      "path": "tests/test_preprocessing_audit.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors_tests",
+      "lines": 52,
+      "sha256": "ffc63fbce6e3979c92ae9139aa6757adc6f467f1e01a0a9b39dd50e84d3636fc"
+    },
+    {
+      "path": "tests/test_research_history_policy_proposal.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors_tests",
+      "lines": 111,
+      "sha256": "f72b70cdd9057e283b04af6d946fa31cd55ec852925d6db866522de7ace2d3e4"
+    },
+    {
+      "path": "tests/test_research_integrity_repairs.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors_tests",
+      "lines": 420,
+      "sha256": "0459411fdf6361b6cdd7e37ba009dbad1225e2bffd5a896c85332f36d6dcc3b7"
+    },
+    {
+      "path": "tests/test_research_labels.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 41,
+      "sha256": "b3fd673f920d08f64ceee5ccb32ece0276eee41218d19c885171c1f20671f86d"
+    },
+    {
+      "path": "tests/test_research_universe_registry.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors_tests",
+      "lines": 98,
+      "sha256": "0ff829fe617101a71625ef097272fc96d41a52ad36e6e135badc07de311ba98b"
+    },
+    {
+      "path": "tests/test_research_web.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 271,
+      "sha256": "bb52a4934c00564e7d02e975958eb2e5e168cee33620f25fe0d32a21cc5bd326"
+    },
+    {
+      "path": "tests/test_run_group_analytics_cli.py",
+      "status": "full_text_read",
+      "reviewer": "signals_groups",
+      "lines": 133,
+      "sha256": "a4a4327352d0e32126f4f373a6a285775fa153c51d51b1d00dc3df71a1842801"
+    },
+    {
+      "path": "tests/test_run_mvp_cli.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors_tests",
+      "lines": 53,
+      "sha256": "d02ba14ddc91aed5156f8aa88f95b734859cb63bcb45459620712b58c0bb22b9"
+    },
+    {
+      "path": "tests/test_security_master_build.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors_tests",
+      "lines": 665,
+      "sha256": "4a03e47385aded56ce3333810f282f8d06908832dd84d64ea6b13f7f00387d09"
+    },
+    {
+      "path": "tests/test_security_master_store.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors_tests",
+      "lines": 732,
+      "sha256": "24e77595d92f21a2e3115d0212caf24d242c147f4ec74b846c5dd186f6a23f00"
+    },
+    {
+      "path": "tests/test_sp500_main_pit.py",
+      "status": "full_text_read",
+      "reviewer": "data_factors_tests",
+      "lines": 128,
+      "sha256": "30f1f838829d3873eb6c4e65b35bed02f1c1a8de567c22428695c62a51023485"
+    },
+    {
+      "path": "tests/test_store_concurrency.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 131,
+      "sha256": "1bfe5753bc1b8bb13f3835fe487fccd86b4c08154cbfd2fc10ab3b66e9029f12"
+    },
+    {
+      "path": "tests/test_strategy_composition_integrity.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 91,
+      "sha256": "5ccc0beb18a7360843ff833e9924129ac3200742d8d050a1949f771606d33705"
+    },
+    {
+      "path": "tests/test_systemd_units.py",
+      "status": "full_text_read",
+      "reviewer": "root",
+      "lines": 264,
+      "sha256": "28f1c1c9c2eaa9148f631fe87d4b83a89fd2e4908deea780af0a60a6e1140727"
+    },
+    {
+      "path": "tests/test_trading_integrity.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 644,
+      "sha256": "b1c42cb581471fc89ec21fcb1274435b29460e082ff544bd6c4ecc8d72945231"
+    },
+    {
+      "path": "tests/test_web_backtest_detail.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 463,
+      "sha256": "5866f40cad57ed3a55240f447fc10bfac741e76345609e8800404cfdc4d0ae02"
+    },
+    {
+      "path": "tests/test_web_paper_detail.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 141,
+      "sha256": "3bcc8a9067addc59cc5528b9666db325364bd2997e476947cddae74c8fdae353"
+    },
+    {
+      "path": "tests/test_web_security.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 172,
+      "sha256": "886ec7f919b31136b8165217b0e934ab3990e53235ac50f3a1ac3b9fe9df79a3"
+    },
+    {
+      "path": "tests/test_web_startup.py",
+      "status": "full_text_read",
+      "reviewer": "trading_web",
+      "lines": 18,
+      "sha256": "dbc8fe2481c7fbe62c721f37093e5f3107f9cd0292ba94dc3ccdc58e70b00de7"
+    },
+    {
+      "path": "tmp/pdfs/msci_momentum/msci_momentum_methodology_20250725.pdf",
+      "status": "external_reference_pdf",
+      "reviewer": null,
+      "lines": null,
+      "sha256": "571000a02174815785a57134a094a5d85f4cd5ac514ad9209625f9b47e3b248c"
+    }
+  ]
+}

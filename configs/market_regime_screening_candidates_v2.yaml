@@ -1,0 +1,349 @@
+registry_version: "2.0.0"
+frozen_at: "2026-08-20T17:24:45+08:00"
+registration_type: "frozen_before_first_v2_stage_b_screen"
+retrospective_holdout_start: "2022-01-01"
+prospective_shadow_start: "2026-08-21"
+description: >
+  Version 2 retains every v1 hypothesis and preregisters PIT moving-average
+  breadth plus Cboe COR1M hypotheses before their first effectiveness screen.
+  Higher means a larger feature value is expected to increase event
+  probability; lower means the opposite. Features not listed here are still
+  scanned and retained as exploratory attempts, but they cannot enter the
+  confirmatory shortlist. The 2022 historical holdout remains code-sealed;
+  observations after the freeze date are the truly prospective shadow sample.
+
+hypotheses:
+  # Top risk: overextension, weak participation, and early stress near a high.
+  - candidate_id: top_spx_return_20d
+    feature_name: spx_return_20d
+    side: top
+    horizons: [5, 20, 60]
+    expected_direction: higher
+    family: price_overextension
+    mechanism: "Strong recent appreciation may leave the index vulnerable near a trailing high."
+    overlap_reason: "Compared with MA distance because return and price extension need not rank dates identically."
+
+  - candidate_id: top_spx_distance_ma20
+    feature_name: spx_distance_ma20
+    side: top
+    horizons: [5, 20]
+    expected_direction: higher
+    family: price_overextension
+    mechanism: "A large short-term extension above trend may precede mean reversion."
+    overlap_reason: "Short-horizon extension is tested separately from medium- and long-term trend."
+
+  - candidate_id: top_spx_distance_ma50
+    feature_name: spx_distance_ma50
+    side: top
+    horizons: [20, 60]
+    expected_direction: higher
+    family: price_overextension
+    mechanism: "A large medium-term extension may indicate mature trend positioning."
+    overlap_reason: "MA50 captures a slower state than MA20."
+
+  - candidate_id: top_spx_close_location
+    feature_name: spx_close_location
+    side: top
+    horizons: [5, 20]
+    expected_direction: lower
+    family: price_reversal
+    mechanism: "A weak close within the daily range can be an early loss-of-demand signal."
+    overlap_reason: "Intraday location is distinct from close-to-close momentum."
+
+  - candidate_id: top_spx_down_volume_share
+    feature_name: spx_down_volume_share_20d
+    side: top
+    horizons: [5, 20, 60]
+    expected_direction: higher
+    family: liquidity_participation
+    mechanism: "Rising declining-day volume near an index high may reveal weakening participation."
+    overlap_reason: "Volume participation is tested beside, not substituted by, price trend."
+
+  - candidate_id: top_vix_change_5d
+    feature_name: vix_change_5d
+    side: top
+    horizons: [5, 20]
+    expected_direction: higher
+    family: implied_volatility
+    mechanism: "A fast rise in option-implied volatility may identify stress beginning near a high."
+    overlap_reason: "VIX change measures acceleration rather than absolute fear."
+
+  - candidate_id: top_vix_percentile
+    feature_name: vix_percentile_252d
+    side: top
+    horizons: [20, 60]
+    expected_direction: lower
+    family: implied_volatility
+    mechanism: "Low relative implied volatility is a testable complacency hypothesis."
+    overlap_reason: "A rolling percentile is more regime-comparable than the raw VIX level."
+
+  - candidate_id: top_vix_term_ratio
+    feature_name: vix_vix3m_ratio
+    side: top
+    horizons: [5, 20]
+    expected_direction: higher
+    family: volatility_term_structure
+    mechanism: "Near-term volatility repricing versus three-month volatility may signal an incipient break."
+    overlap_reason: "Term structure can move independently of the VIX level."
+
+  - candidate_id: top_cor1m_change_5d
+    feature_name: cor1m_change_5d
+    side: top
+    horizons: [5, 20]
+    expected_direction: higher
+    family: implied_correlation
+    mechanism: "A fast rise in option-implied co-movement near an index high may reveal an emerging systemic shock."
+    overlap_reason: "COR1M isolates expected co-movement, whereas VIX mixes constituent volatility and correlation."
+
+  - candidate_id: top_breadth_above_ma60
+    feature_name: breadth_above_ma60_pct
+    side: top
+    horizons: [20, 60]
+    expected_direction: lower
+    family: breadth_participation
+    mechanism: "Weak quarterly-trend participation while the index remains near a high is a testable narrowing-breadth hypothesis."
+    overlap_reason: "MA60 reacts faster than the half-year MA120 state and remains exploratory relative to the established MA50 convention."
+
+  - candidate_id: top_breadth_above_ma120
+    feature_name: breadth_above_ma120_pct
+    side: top
+    horizons: [20, 60]
+    expected_direction: lower
+    family: breadth_participation
+    mechanism: "A low share of constituents in half-year uptrends may expose cap-weighted index concentration near a high."
+    overlap_reason: "MA120 captures slower participation deterioration than MA60."
+
+  - candidate_id: top_breadth_ma20_change_20d
+    feature_name: breadth_above_ma20_change_20d
+    side: top
+    horizons: [5, 20]
+    expected_direction: lower
+    family: breadth_deterioration
+    mechanism: "A rapid one-month contraction in short-term participation may precede an index break."
+    overlap_reason: "The change measures deterioration speed rather than the absolute breadth level."
+
+  - candidate_id: top_iwm_spy_return_20d
+    feature_name: iwm_spy_return_20d
+    side: top
+    horizons: [20, 60]
+    expected_direction: lower
+    family: cross_asset_participation
+    mechanism: "Small-cap underperformance may expose narrowing equity participation."
+    overlap_reason: "This liquid proxy is retained while PIT constituent breadth remains unavailable."
+
+  - candidate_id: top_hyg_lqd_return_20d
+    feature_name: hyg_lqd_return_20d
+    side: top
+    horizons: [20, 60]
+    expected_direction: lower
+    family: credit_risk_appetite
+    mechanism: "High-yield underperformance versus investment grade may reveal weakening risk appetite."
+    overlap_reason: "The ETF ratio is a tradable proxy while point-in-time HY OAS is unavailable."
+
+  - candidate_id: top_qqq_spy_return_20d
+    feature_name: qqq_spy_return_20d
+    side: top
+    horizons: [20, 60]
+    expected_direction: higher
+    family: cross_asset_participation
+    mechanism: "Extreme technology leadership is tested as a concentration and crowding proxy."
+    overlap_reason: "Technology concentration differs from small-cap breadth deterioration."
+
+  # Bottom reversal: capitulation pressure plus evidence of intraday recovery.
+  - candidate_id: bottom_spx_return_5d
+    feature_name: spx_return_5d
+    side: bottom
+    horizons: [5, 20]
+    expected_direction: lower
+    family: price_capitulation
+    mechanism: "Sharp recent losses may create a short-horizon reversal setup inside a drawdown."
+    overlap_reason: "Five-day pressure is tested separately from the slower 20-day state."
+
+  - candidate_id: bottom_spx_return_20d
+    feature_name: spx_return_20d
+    side: bottom
+    horizons: [20, 60]
+    expected_direction: lower
+    family: price_capitulation
+    mechanism: "Large medium-term losses may identify a mature stressed state."
+    overlap_reason: "Twenty-day loss captures sustained pressure rather than a one-week shock."
+
+  - candidate_id: bottom_spx_drawdown_252d
+    feature_name: spx_drawdown_252d
+    side: bottom
+    horizons: [5, 20, 60]
+    expected_direction: lower
+    family: price_capitulation
+    mechanism: "Deeper drawdown is a direct measure of accumulated price stress."
+    overlap_reason: "Depth may add information within the bottom-label eligibility filter."
+
+  - candidate_id: bottom_spx_distance_ma20
+    feature_name: spx_distance_ma20
+    side: bottom
+    horizons: [5, 20]
+    expected_direction: lower
+    family: price_capitulation
+    mechanism: "A large discount to short trend is a deterministic oversold hypothesis."
+    overlap_reason: "MA distance scales the loss relative to the current trend level."
+
+  - candidate_id: bottom_spx_distance_ma200
+    feature_name: spx_distance_ma200
+    side: bottom
+    horizons: [20, 60]
+    expected_direction: lower
+    family: price_capitulation
+    mechanism: "A large discount to long trend identifies severe cyclical stress."
+    overlap_reason: "The long moving average represents a different regime from MA20."
+
+  - candidate_id: bottom_spx_realized_vol
+    feature_name: spx_realized_vol_20d
+    side: bottom
+    horizons: [5, 20, 60]
+    expected_direction: higher
+    family: realized_stress
+    mechanism: "High realized volatility is a measurable forced-deleveraging state."
+    overlap_reason: "Realized volatility is observed price variation, unlike option-implied volatility."
+
+  - candidate_id: bottom_spx_atr
+    feature_name: spx_atr14_pct
+    side: bottom
+    horizons: [5, 20]
+    expected_direction: higher
+    family: realized_stress
+    mechanism: "Large true ranges may mark liquidation and intraday dislocation."
+    overlap_reason: "ATR includes gaps and ranges that close-to-close volatility omits."
+
+  - candidate_id: bottom_spx_close_location
+    feature_name: spx_close_location
+    side: bottom
+    horizons: [5, 20]
+    expected_direction: higher
+    family: price_reversal
+    mechanism: "A strong close after intraday weakness is a causal same-day reversal confirmation."
+    overlap_reason: "This tests recovery inside the bar rather than the preceding drawdown."
+
+  - candidate_id: bottom_spx_volume_shock
+    feature_name: spx_volume_shock_20d
+    side: bottom
+    horizons: [5, 20]
+    expected_direction: higher
+    family: liquidity_participation
+    mechanism: "Abnormally high volume may indicate capitulation and ownership transfer."
+    overlap_reason: "Volume shock measures intensity, while down-volume share measures direction."
+
+  - candidate_id: bottom_spx_down_volume_share
+    feature_name: spx_down_volume_share_20d
+    side: bottom
+    horizons: [5, 20]
+    expected_direction: higher
+    family: liquidity_participation
+    mechanism: "Concentrated declining-day volume may identify forced selling."
+    overlap_reason: "Directional volume is distinct from total volume shock."
+
+  - candidate_id: bottom_vix_level
+    feature_name: vix_level
+    side: bottom
+    horizons: [5, 20, 60]
+    expected_direction: higher
+    family: implied_volatility
+    mechanism: "High option-implied volatility measures acute demand for protection."
+    overlap_reason: "The level is retained beside percentile and term structure for separate testing."
+
+  - candidate_id: bottom_vix_percentile
+    feature_name: vix_percentile_252d
+    side: bottom
+    horizons: [5, 20, 60]
+    expected_direction: higher
+    family: implied_volatility
+    mechanism: "A high trailing percentile normalizes fear across volatility regimes."
+    overlap_reason: "Percentile may remain comparable when the structural VIX level changes."
+
+  - candidate_id: bottom_vix_term_ratio
+    feature_name: vix_vix3m_ratio
+    side: bottom
+    horizons: [5, 20]
+    expected_direction: higher
+    family: volatility_term_structure
+    mechanism: "VIX above VIX3M measures front-end stress and possible capitulation."
+    overlap_reason: "Term inversion measures urgency rather than absolute volatility."
+
+  - candidate_id: bottom_vix9d_term_ratio
+    feature_name: vix9d_vix3m_ratio
+    side: bottom
+    horizons: [5, 20]
+    expected_direction: higher
+    family: volatility_term_structure
+    mechanism: "Nine-day volatility above three-month volatility isolates very short-term fear."
+    overlap_reason: "The shorter maturity may improve timing over VIX/VIX3M but has less history."
+
+  - candidate_id: bottom_cor1m_percentile
+    feature_name: cor1m_percentile_252d
+    side: bottom
+    horizons: [5, 20]
+    expected_direction: higher
+    family: implied_correlation
+    mechanism: "High regime-relative expected co-movement may identify systemic capitulation inside an established drawdown."
+    overlap_reason: "The trailing percentile reduces raw-level and earnings-season comparability problems."
+
+  - candidate_id: bottom_cor1m_change_5d
+    feature_name: cor1m_change_5d
+    side: bottom
+    horizons: [5, 20]
+    expected_direction: lower
+    family: implied_correlation_recovery
+    mechanism: "Falling implied co-movement after acute stress may confirm that systemic pressure is receding."
+    overlap_reason: "The change is a recovery confirmation, unlike the high-level capitulation hypothesis."
+
+  - candidate_id: bottom_breadth_above_ma20
+    feature_name: breadth_above_ma20_pct
+    side: bottom
+    horizons: [5, 20]
+    expected_direction: lower
+    family: breadth_capitulation
+    mechanism: "Extremely weak short-term participation may identify broad liquidation inside an eligible drawdown."
+    overlap_reason: "The level measures pressure and is separate from a subsequent breadth recovery."
+
+  - candidate_id: bottom_breadth_ma20_change_5d
+    feature_name: breadth_above_ma20_change_5d
+    side: bottom
+    horizons: [5, 20]
+    expected_direction: higher
+    family: breadth_recovery
+    mechanism: "A fast rebound in the share of constituents above MA20 may confirm broad demand returning after a selloff."
+    overlap_reason: "The five-day change tests breadth expansion rather than oversold depth."
+
+  - candidate_id: bottom_breadth_above_ma120
+    feature_name: breadth_above_ma120_pct
+    side: bottom
+    horizons: [20, 60]
+    expected_direction: lower
+    family: breadth_capitulation
+    mechanism: "Weak half-year participation may distinguish a mature market-wide drawdown from an isolated index pullback."
+    overlap_reason: "MA120 represents cyclical damage and should not be substituted by the faster MA20 state."
+
+  - candidate_id: bottom_hyg_lqd_return_20d
+    feature_name: hyg_lqd_return_20d
+    side: bottom
+    horizons: [20, 60]
+    expected_direction: lower
+    family: credit_risk_appetite
+    mechanism: "Severe high-yield underperformance marks broad risk-off pressure."
+    overlap_reason: "Credit stress may persist differently from equity drawdown."
+
+  - candidate_id: bottom_hyg_lqd_return_5d
+    feature_name: hyg_lqd_return_5d
+    side: bottom
+    horizons: [5, 20]
+    expected_direction: higher
+    family: credit_recovery
+    mechanism: "A short-term recovery in high yield may confirm improving risk appetite."
+    overlap_reason: "Recovery and stress are separate hypotheses with different lookbacks."
+
+  - candidate_id: bottom_iwm_spy_return_5d
+    feature_name: iwm_spy_return_5d
+    side: bottom
+    horizons: [5, 20]
+    expected_direction: higher
+    family: cross_asset_recovery
+    mechanism: "Small-cap relative strength may confirm broad participation in a rebound."
+    overlap_reason: "This is a liquid breadth proxy until PIT stock-level breadth is approved."

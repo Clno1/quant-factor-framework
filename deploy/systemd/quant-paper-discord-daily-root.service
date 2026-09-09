@@ -1,0 +1,29 @@
+[Unit]
+Description=Deliver the daily paper-trading account summary to Discord
+After=network-online.target quant-paper-trading.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/home/projects/quant
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONPATH=/home/projects/quant
+EnvironmentFile=/etc/quant/paper-notifications.env
+ExecStartPre=/home/projects/quant/.venv/bin/python /home/projects/quant/scripts/run_paper_notifications.py --check-config
+ExecStart=/home/projects/quant/.venv/bin/python /home/projects/quant/scripts/run_paper_notifications.py --daily
+TimeoutStartSec=5min
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/projects/quant/outputs /home/projects/quant/logs
+ReadWritePaths=-/home/projects/quant/runlog
+MemoryHigh=160M
+MemoryMax=220M
+
+[Install]
+WantedBy=multi-user.target

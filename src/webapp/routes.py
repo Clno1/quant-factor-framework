@@ -6,7 +6,6 @@
   GET /factor/{name}        因子详情页
   GET /backtest             回测结果页
   GET /backtest/{name}      回测结果页（指定因子）
-  GET /stock/{ticker}       单股诊断页（A 诊断卡 + B 时序图）
 
 JSON API：
   GET /api/universes
@@ -14,9 +13,10 @@ JSON API：
   GET /api/factor/{name}/ic
   GET /api/factor/{name}/nav
   GET /api/factor/{name}/summary
-  GET /api/stock/{ticker}                  完整因子 + 快照 JSON
 """
 from __future__ import annotations
+
+import json
 
 import math
 from pathlib import Path
@@ -27,8 +27,11 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from src.analysis import compute_single_stock_factors
 from src.config import CONFIG
+from src.utils.identifiers import (
+    InvalidResourceId,
+    safe_path_component,
+)
 from src.visualization import (
     fig_to_json,
     plot_drawdown_plotly,
@@ -231,14 +234,87 @@ def _confidence_detail(conf: dict | None, checks_df: pd.DataFrame | None) -> dic
     }
 
 
+def _json_records(frame: pd.DataFrame) -> list[dict[str, Any]]:
+    if frame is None or frame.empty:
+        return []
+    return json.loads(frame.to_json(orient="records", date_format="iso"))
+
+
+def _ic_outcome_detail(
+    ic_summary: dict[str, Any],
+    audit: pd.DataFrame | None,
+) -> dict[str, Any]:
+    summary = ic_summary.get("forward_outcomes") or {}
+    frame = audit if audit is not None else pd.DataFrame()
+    cross_sections = (
+        frame.loc[frame.get("record_type").eq("IC_CROSS_SECTION")]
+        if not frame.empty and "record_type" in frame.columns
+        else pd.DataFrame()
+    )
+    selectively_censored = (
+        int(cross_sections.get("status", pd.Series(dtype=str)).eq("selectively_censored").sum())
+        if not cross_sections.empty
+        else int(ic_summary.get("censored_dates") or 0)
+    )
+    security = (
+        frame.loc[frame.get("record_type").eq("SECURITY_OUTCOME")].copy()
+        if not frame.empty and "record_type" in frame.columns
+        else pd.DataFrame()
+    )
+    exceptional = (
+        security.loc[
+            security.get("status", pd.Series(index=security.index, dtype=str)).isin(
+                {
+                    "RESOLVED_REVIEWED_EVENT",
+                    "UNRESOLVED_MISSING_OUTCOME",
+                    "UNRESOLVED_EVENT_SETTLEMENT",
+                }
+            )
+        ]
+        if not security.empty
+        else pd.DataFrame()
+    )
+    display_rows: list[dict[str, Any]] = []
+    for row in _json_records(exceptional.tail(50)):
+        display_rows.append(
+            {
+                "decision_date": str(row.get("decision_date") or "")[:10],
+                "horizon_date": str(row.get("horizon_date") or "")[:10] or "—",
+                "ticker": row.get("ticker") or "—",
+                "status": row.get("status") or "—",
+                "settlement_method": row.get("settlement_method") or "—",
+                "outcome": _format_pct(row.get("outcome")),
+                "event_reason": row.get("event_reason") or "—",
+            }
+        )
+    return {
+        "available": bool(summary),
+        "ordinary_complete": int(summary.get("ordinary_complete") or 0),
+        "resolved_events": int(summary.get("resolved_reviewed_events") or 0),
+        "right_edge": int(summary.get("right_edge_not_observable") or 0),
+        "unresolved": int(summary.get("unresolved_missing_outcomes") or 0),
+        "selectively_censored_dates": selectively_censored,
+        "hac_lags": int(ic_summary.get("HAC_lags") or 0),
+        "rows": display_rows,
+    }
+
+
 def _resolve_universe(requested: str | None) -> str:
-    """规范化 universe 参数：未指定则取配置默认。"""
+    """规范化 universe 参数：未指定则取注册表中的 PRIMARY。"""
     if requested:
-        return requested.upper()
-    try:
-        return str(CONFIG.universes.default).upper()
-    except AttributeError:
-        return DEFAULT_UNIVERSE
+        try:
+            return safe_path_component(
+                requested.upper(),
+                label="universe",
+            )
+        except InvalidResourceId as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    from src.research_universes.registry import research_universe_registry
+
+    return safe_path_component(
+        research_universe_registry().primary().universe_id,
+        label="universe",
+    )
 
 
 def _ic_summary_rows(universe: str) -> list[dict]:
@@ -342,51 +418,7 @@ def index(
     factor: str | None = None,
     universe: str | None = Query(None),
 ):
-    universe = _resolve_universe(universe)
-    factors = list_factors(universe=universe)
-    rows = _ic_summary_rows(universe)
-    universes = list_universes()
-    hero_fig_json = None
-    hero_factor = None
-    hero_metrics = {}
-
-    if factors:
-        if factor and factor in factors:
-            hero_factor = factor
-        else:
-            best = None
-            best_abs_ir = -1.0
-            for name in factors:
-                d = load_factor(name, universe=universe)
-                if not d:
-                    continue
-                ir = d["ic_summary"].get("IC_IR")
-                if ir is None or (isinstance(ir, float) and math.isnan(ir)):
-                    continue
-                if abs(ir) > best_abs_ir:
-                    best_abs_ir = abs(ir)
-                    best = name
-            hero_factor = best or factors[0]
-
-        data = load_factor(hero_factor, universe=universe)
-        if data:
-            fig = plot_quintile_nav_plotly(
-                data["group_nav"], data["ls_nav"],
-                title=f"[{universe}] {hero_factor} · 五分位累计净值",
-            )
-            hero_fig_json = fig_to_json(fig)
-            hero_metrics = _performance_card(data["group_metrics"], "LongShort")
-
-    return templates.TemplateResponse(request, "index.html", {
-        "title": CONFIG.webapp.title,
-        "universe": universe,
-        "universes": universes,
-        "factors": factors,
-        "rows": rows,
-        "hero_factor": hero_factor,
-        "hero_fig_json": hero_fig_json,
-        "hero_metrics": hero_metrics,
-    })
+    return RedirectResponse(url="/research", status_code=307)
 
 
 @router.get("/factor/{name}", response_class=HTMLResponse)
@@ -453,6 +485,10 @@ def factor_detail(
         "confidence": _confidence_detail(
             data.get("confidence"),
             data.get("confidence_checks"),
+        ),
+        "outcome_audit": _ic_outcome_detail(
+            data["ic_summary"],
+            data.get("ic_outcome_audit"),
         ),
         "factor_quality": _factor_quality_summary(factor_values),
         "ic_fig_json": fig_to_json(ic_fig),
@@ -523,87 +559,6 @@ def backtest_detail(
         "nav_fig_json": fig_to_json(nav_fig),
         "bar_fig_json": fig_to_json(bar_fig),
         "dd_fig_json": fig_to_json(dd_fig),
-    })
-
-
-# ---- 单股 ----
-
-@router.get("/stock", response_class=HTMLResponse)
-def stock_search(request: Request, ticker: str = Query(...)):
-    """支持顶部搜索框：/stock?ticker=INTC -> 跳到 /stock/INTC。"""
-    ticker = (ticker or "").strip().upper()
-    if not ticker:
-        raise HTTPException(status_code=400, detail="ticker is required")
-    return RedirectResponse(url=f"/stock/{ticker}", status_code=302)
-
-
-@router.get("/stock/{ticker}", response_class=HTMLResponse)
-def stock_detail(
-    request: Request,
-    ticker: str,
-    universe: str | None = Query(None),
-):
-    universe = _resolve_universe(universe)
-    ticker = ticker.upper().strip()
-    res = compute_single_stock_factors(ticker, reference_universe=universe)
-
-    # 时序图：每个因子一条线（双 Y 轴：左轴动量/反转/换手率值域较大，右轴波动率较小）
-    ts_fig_json = None
-    if not res.factor_ts.empty:
-        import plotly.graph_objects as go
-        from plotly.subplots import make_subplots
-        # 简单方案：所有因子归一化到 z-score 后画在同一张图上，便于对比形态
-        ts = res.factor_ts.copy()
-        # 沿时间标准化：x -> (x - mean) / std
-        ts_z = (ts - ts.mean()) / ts.std(ddof=1).replace(0, pd.NA)
-        fig = go.Figure()
-        palette = ["#42A5F5", "#FF5252", "#00C853", "#FFB300",
-                   "#AB47BC", "#26C6DA", "#FF9100", "#9CCC65"]
-        for i, col in enumerate(ts_z.columns):
-            fig.add_trace(go.Scatter(
-                x=ts_z.index, y=ts_z[col].values, mode="lines",
-                name=col,
-                line=dict(color=palette[i % len(palette)], width=1.6),
-            ))
-        fig.update_layout(
-            title=dict(text=f"{ticker} · 8 因子时序（Z-Score 标准化）",
-                       font=dict(color="#E8EAED", size=15)),
-            paper_bgcolor="#0E1117", plot_bgcolor="#1A1F2E",
-            font=dict(color="#E8EAED"),
-            margin=dict(l=40, r=40, t=60, b=40),
-            height=460,
-            hovermode="x unified",
-            legend=dict(bgcolor="rgba(0,0,0,0)", bordercolor="#262B3A", borderwidth=0.5),
-        )
-        fig.update_xaxes(gridcolor="#262B3A")
-        fig.update_yaxes(gridcolor="#262B3A", title_text="Z-Score")
-        ts_fig_json = fig_to_json(fig)
-
-    # 把 snapshot 格式化成模板友好的列表
-    snapshot_rows: list[dict] = []
-    snapshot = res.snapshot or {}
-    for fname, item in (snapshot.get("factors") or {}).items():
-        snapshot_rows.append({
-            "factor": fname,
-            "value":  _format_num(item.get("value"), 4),
-            "rank":   item.get("rank"),
-            "pool_size": item.get("pool_size"),
-            "quintile": item.get("quintile") or "—",
-            "percentile": _format_num(item.get("percentile"), 1) if item.get("percentile") is not None else "—",
-        })
-
-    return templates.TemplateResponse(request, "stock.html", {
-        "title": f"{ticker} · 单股诊断",
-        "universe": universe,
-        "universes": list_universes(),
-        "ticker": ticker,
-        "result": res,
-        "meta": res.meta,
-        "source": res.source,
-        "snapshot_date": (res.snapshot or {}).get("date") or "—",
-        "snapshot_rows": snapshot_rows,
-        "ts_fig_json": ts_fig_json,
-        "error": res.error,
     })
 
 
@@ -700,24 +655,46 @@ def api_factor_confidence(name: str, universe: str | None = Query(None)):
     return JSONResponse(_sanitize(payload))
 
 
-@router.get("/api/stock/{ticker}")
-def api_stock(ticker: str, universe: str | None = Query(None)):
+@router.get("/api/factor/{name}/outcomes")
+def api_factor_outcomes(
+    name: str,
+    universe: str | None = Query(None),
+    status: str | None = Query(None),
+    limit: int = Query(500, ge=1, le=5000),
+):
     universe = _resolve_universe(universe)
-    res = compute_single_stock_factors(ticker, reference_universe=universe)
-    ts = res.factor_ts
-    payload = {
-        "ticker": res.ticker,
-        "source": res.source,
-        "pool_universe": res.pool_universe,
-        "meta":   res.meta,
-        "snapshot": res.snapshot,
-        "factor_ts": {
-            "dates":   [dt.strftime("%Y-%m-%d") for dt in ts.index],
-            "factors": {col: ts[col].tolist() for col in ts.columns},
-        } if not ts.empty else {},
-        "error": res.error,
-    }
-    return JSONResponse(_sanitize(payload))
+    data = load_factor(name, universe=universe)
+    if not data:
+        raise HTTPException(status_code=404, detail="Factor not found")
+    audit = data.get("ic_outcome_audit")
+    frame = audit.copy() if isinstance(audit, pd.DataFrame) else pd.DataFrame()
+    if status and not frame.empty:
+        if "status" not in frame.columns:
+            frame = frame.iloc[0:0]
+        else:
+            frame = frame.loc[
+                frame["status"].fillna("").astype(str).str.upper().eq(status.upper())
+            ]
+    total = len(frame)
+    records = _json_records(frame.head(limit))
+    return JSONResponse(
+        _sanitize(
+            {
+                "universe": universe,
+                "name": name,
+                "summary": data["ic_summary"].get("forward_outcomes") or {},
+                "censoring": {
+                    "dates": data["ic_summary"].get("censored_dates", 0),
+                    "observations": data["ic_summary"].get(
+                        "censored_observations", 0
+                    ),
+                },
+                "total": total,
+                "limit": limit,
+                "records": records,
+            }
+        )
+    )
 
 
 __all__ = ["router"]

@@ -1,0 +1,60 @@
+{
+  "no_event_rollforward": {
+    "error": "no securities passed broad PIT eligibility",
+    "prior_passed": true,
+    "full_rebuild_passed": true
+  },
+  "future_split_pit": {
+    "before": [
+      "AAA",
+      "BBB"
+    ],
+    "after": [
+      "BBB"
+    ]
+  },
+  "split_published_after_actual_gates": {
+    "all_checks_passed": true,
+    "checks": [
+      "unique_date_security",
+      "required_values",
+      "valid_ohlcv",
+      "no_future_rows",
+      "xnys_session_calendar",
+      "target_session_coverage",
+      "historical_exit_bar_presence",
+      "selected_security_scope"
+    ],
+    "quarantined_rows": 0,
+    "published": "PUBLISHED",
+    "wrong_total_return": -0.5
+  },
+  "resume_changed_preprocessing": {
+    "checkpoint_identity_equal": true,
+    "actual_factor_fingerprint_changed": true,
+    "old_completed_accepted": true
+  },
+  "mag7_real_publication": {
+    "membership_none": true,
+    "actual_factor_columns": [
+      "AAPL",
+      "AMZN",
+      "GOOGL",
+      "META",
+      "MSFT",
+      "NVDA",
+      "QQQ",
+      "TSLA"
+    ],
+    "QQQ_mask_true": true,
+    "current_only": [
+      "AAPL",
+      "AMZN",
+      "GOOGL",
+      "META",
+      "MSFT",
+      "NVDA",
+      "TSLA"
+    ]
+  }
+}

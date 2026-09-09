@@ -40,7 +40,7 @@ class FactorBase(ABC):
 
     name: str = ""            # 因子唯一标识（例如 'MOM_6M'）
     description: str = ""     # 人类可读描述
-    direction: int = 0        # +1 正向 / -1 负向 / 0 由 IC 自动判断
+    direction: int = 0        # +1 正向 / -1 负向；0 表示尚未配置，不能用于正式回测
     inputs: tuple[str, ...] = ("adj_close",)   # 需要的宽表字段（用于校验）
 
     # ------------------------------------------------------------

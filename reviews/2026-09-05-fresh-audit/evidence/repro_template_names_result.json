@@ -1,0 +1,14 @@
+[
+  {
+    "name": "O'Brien",
+    "onclick": "deleteStrategy('12345678-1234-1234-1234-123456789abc', 'O'Brien')",
+    "error": "SyntaxError: missing ) after argument list",
+    "auditMarker": null
+  },
+  {
+    "name": "x');globalThis.auditMarker=1;//",
+    "onclick": "deleteStrategy('12345678-1234-1234-1234-123456789abc', 'x');globalThis.auditMarker=1;//')",
+    "error": null,
+    "auditMarker": 1
+  }
+]

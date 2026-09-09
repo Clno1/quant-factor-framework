@@ -6,7 +6,7 @@ from src.backtest.metrics import (
     sharpe_ratio,
     max_drawdown,
 )
-from src.backtest.quintile import QuintileResult, quintile_backtest
+from src.backtest.quintile import QuintileResult, quintile_backtest as legacy_quintile_backtest
 from src.backtest.double_sort import DoubleSortResult, double_sort_backtest
 from src.backtest.composer import (
     CompositionResult,
@@ -17,10 +17,15 @@ from src.backtest.adhoc import (
     AdhocResult,
     adhoc_compose,
 )
+from src.backtest.quintile_v2 import quintile_backtest_v2
+
+# Legacy/synthetic callers must opt into the explicit legacy name. The ambiguous
+# package-level ``quintile_backtest`` entry point is intentionally gone.
 
 __all__ = [
     "QuintileResult",
-    "quintile_backtest",
+    "legacy_quintile_backtest",
+    "quintile_backtest_v2",
     "DoubleSortResult",
     "double_sort_backtest",
     "performance_summary",

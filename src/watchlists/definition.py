@@ -4,7 +4,11 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
+import hashlib
+import math
 from typing import Any, Iterable
+
+from src.utils.identifiers import canonical_ticker
 
 
 @dataclass
@@ -68,6 +72,8 @@ class WatchlistDefinition:
             "name": self.name,
             "description": self.description,
             "items": [it.to_dict() for it in self.items],
+            "universe_type": "TARGET",
+            "ticker_revision_sha256": self.ticker_revision_sha256(),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "schema_version": self.schema_version,
@@ -96,16 +102,29 @@ class WatchlistDefinition:
             raise ValueError("Watchlist 至少需要包含 1 个股票")
         seen: set[str] = set()
         for it in self.items:
-            if not it.ticker:
-                raise ValueError("存在空 ticker")
+            it.ticker = canonical_ticker(it.ticker)
             if it.ticker in seen:
                 raise ValueError(f"ticker 重复：{it.ticker}")
             seen.add(it.ticker)
+            if not math.isfinite(float(it.weight)):
+                raise ValueError(f"权重必须是有限数字：{it.ticker}")
             if it.weight < 0:
                 raise ValueError(f"权重不能为负：{it.ticker} -> {it.weight}")
 
     def tickers(self) -> list[str]:
         return [it.ticker for it in self.items]
+
+    def ticker_revision_sha256(self) -> str:
+        """Hash the canonical ticker set that defines this target-pool revision."""
+        normalized = sorted(
+            {
+                str(item.ticker).strip().upper()
+                for item in self.items
+                if str(item.ticker).strip()
+            }
+        )
+        digest = hashlib.sha256(",".join(normalized).encode("utf-8")).hexdigest()
+        return f"sha256:{digest}"
 
     def set_equal_weights(self) -> None:
         """一键等权。"""

@@ -1,0 +1,36 @@
+[Unit]
+Description=Publish main-factor research from validated daily bars
+After=quant-market-data.service
+StartLimitIntervalSec=6h
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+User=quant
+Group=quant
+WorkingDirectory=/opt/quant
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/quant
+Environment=MPLCONFIGDIR=/opt/quant/data/cache/matplotlib
+Environment=OMP_NUM_THREADS=1
+Environment=OPENBLAS_NUM_THREADS=1
+Environment=MKL_NUM_THREADS=1
+ExecStartPre=/opt/quant/.venv/bin/python -c "import duckdb, exchange_calendars, matplotlib, sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
+ExecStart=/opt/quant/.venv/bin/python /opt/quant/scripts/run_factor_research.py
+TimeoutStartSec=5h
+Restart=on-failure
+RestartSec=30min
+MemoryHigh=700M
+MemoryMax=900M
+MemorySwapMax=0
+CPUQuota=100%
+TasksMax=64
+OOMPolicy=stop
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

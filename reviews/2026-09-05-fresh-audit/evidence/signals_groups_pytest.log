@@ -1,0 +1,11 @@
+.............................................................. [ 33%]
+......................................................... [ 64%]
+................................................... [ 92%]
+..............                                                 [100%]
+=============================== warnings summary ===============================
+tests/test_group_analytics_returns.py::GroupAnalyticsReturnTests::test_missing_delisting_return_is_flagged
+  /private/tmp/quant_fresh_audit_20260905/repo/src/group_analytics/returns.py:146: FutureWarning: Downcasting object dtype arrays on .fillna, .ffill, .bfill is deprecated and will change in a future version. Call result.infer_objects(copy=False) instead. To opt-in to the future behavior, set `pd.set_option('future.no_silent_downcasting', True)`
+    required = values.reindex(current.index).fillna(False).astype(bool)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+184 passed, 1 warning, 56 subtests passed in 2.59s

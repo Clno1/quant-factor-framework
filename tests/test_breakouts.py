@@ -10,7 +10,10 @@ import pandas as pd
 
 from src.breakouts import BreakoutFilters, build_intraday_snapshot, evaluate_daily_setup
 from src.breakouts import scan_cache
-from src.breakouts.scanner import _merge_daily_cache
+from src.breakouts.application import (
+    BreakoutScanNotReadyError,
+    get_breakout_scan,
+)
 from src.data.fmp import get_intraday_ohlcv, get_us_active_equities
 
 
@@ -30,28 +33,6 @@ class DailyBreakoutScannerTests(unittest.TestCase):
         _, kwargs = request_mock.call_args
         self.assertEqual(kwargs["headers"], {"apikey": "secret-key"})
         self.assertEqual(kwargs["params"], {"limit": 1})
-
-    def test_daily_refresh_preserves_history_and_appends_new_dates(self):
-        existing = pd.DataFrame({
-            "open": [100.0, 101.0],
-            "high": [102.0, 103.0],
-            "low": [99.0, 100.0],
-            "close": [101.0, 102.0],
-            "volume": [1_000.0, 1_100.0],
-        }, index=pd.to_datetime(["2026-05-07", "2026-05-08"]))
-        incoming = pd.DataFrame({
-            "open": [201.0, 103.0],
-            "high": [203.0, 105.0],
-            "low": [200.0, 102.0],
-            "close": [202.0, 104.0],
-            "volume": [9_100.0, 1_200.0],
-        }, index=pd.to_datetime(["2026-05-08", "2026-05-11"]))
-
-        merged = _merge_daily_cache(existing, incoming)
-
-        self.assertEqual(merged.loc[pd.Timestamp("2026-05-08"), "close"], 102.0)
-        self.assertEqual(merged.loc[pd.Timestamp("2026-05-11"), "close"], 104.0)
-        self.assertEqual(len(merged), 3)
 
     def test_daily_metrics_use_qullamaggie_adr_formula(self):
         index = pd.bdate_range("2025-01-02", periods=100)
@@ -127,14 +108,56 @@ class DailyBreakoutScannerTests(unittest.TestCase):
     def test_persistent_scan_cache_round_trip_and_clear(self):
         with tempfile.TemporaryDirectory() as temporary:
             with patch.object(scan_cache, "_CACHE_DIR", Path(temporary)):
-                parameters = {"universe": "US_ACTIVE", "min_return_20d": 20.0}
+                parameters = {
+                    "universe": "US_ACTIVE",
+                    "min_return_20d": 20.0,
+                    "dataset_version_id": "version-1",
+                }
                 payload = {"asof": "2026-07-10", "rows": [{"ticker": "AEVA"}]}
 
                 scan_cache.save_scan_cache(parameters, payload)
 
                 self.assertEqual(scan_cache.load_scan_cache(parameters), payload)
+                next_version = {
+                    **parameters,
+                    "dataset_version_id": "version-2",
+                }
+                self.assertIsNone(scan_cache.load_scan_cache(next_version))
                 self.assertEqual(scan_cache.clear_scan_cache(), 1)
                 self.assertIsNone(scan_cache.load_scan_cache(parameters))
+
+    @patch("src.breakouts.application.build_breakout_scan")
+    @patch("src.breakouts.application.load_scan_cache", return_value=None)
+    @patch("src.breakouts.application.resolve_breakout_universe")
+    def test_web_cache_miss_never_builds_broad_scan(
+        self,
+        resolve_mock,
+        _cache_mock,
+        build_mock,
+    ):
+        resolve_mock.return_value = {
+            "data_universe": "US_LIQUID_5M",
+            "dataset_version_id": "version-1",
+        }
+
+        with self.assertRaises(BreakoutScanNotReadyError):
+            get_breakout_scan(
+                universe="US_ACTIVE",
+                enabled_universes=("US_ACTIVE",),
+                asof=None,
+                min_return_20d=20.0,
+                min_adr_20d=6.0,
+                min_dollar_volume_m=10.0,
+                min_avg_dollar_volume_m=10.0,
+                min_consolidation_days=9,
+                max_distance_ma50=35.0,
+                pivot_proximity=3.0,
+                market_symbol="QQQ",
+                view="all",
+                allow_build=False,
+            )
+
+        build_mock.assert_not_called()
 
 
 class IntradayBreakoutTests(unittest.TestCase):

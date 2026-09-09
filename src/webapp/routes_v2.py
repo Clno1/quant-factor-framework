@@ -2,7 +2,7 @@
 V2 路由：因子库 / 策略库 / 回测 三件套。
 
 页面：
-  GET  /factors                          因子库（只读列表）
+  GET  /factors                          重定向到统一研究总览
   GET  /strategies                       策略列表
   GET  /strategies/new                   新建策略页
   GET  /strategies/{sid}                 策略详情
@@ -24,32 +24,32 @@ JSON API：
 """
 from __future__ import annotations
 
+from datetime import datetime
 import math
 from pathlib import Path
-import threading
+import re
 from typing import Any
+from urllib.parse import urlencode
+from uuid import UUID
 
 import pandas as pd
 from fastapi import APIRouter, Body, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from src.backtest import store as bt_store
 from src.backtest.runner import get_runner
-from src.breakouts import (
-    BreakoutFilters,
-    build_intraday_snapshot,
-    evaluate_daily_setup,
-    load_intraday_1min,
-    load_market_regime,
-    refresh_daily_frame,
-    scan_breakouts,
+from src.config import CONFIG
+from src.data.access import (
+    MarketDataNotReadyError,
+    enqueue_market_data_request,
+    watchlist_universe_frame,
 )
-from src.breakouts.scanner import load_daily_frame
-from src.breakouts.scan_cache import load_scan_cache, save_scan_cache
-from src.config import CONFIG, PROJECT_ROOT
+from src.data.foundation import MarketDataCatalog
+from src.data.universe_ids import watchlist_snapshot_data_universe
 from src.factors import assert_valid_factor_ids, get_factor_catalog, list_factor_ids
 from src.factors.library import FactorLibraryError
+from src.execution import resolve_execution_config
 from src.papertrading import (
     PaperTradingValidationError,
     create_account as create_paper_account,
@@ -61,6 +61,8 @@ from src.papertrading import (
 )
 from src.papertrading.definition import create_account_payload
 from src.papertrading.target import generate_target_weights
+from src.risk.industry import paper_industry_report
+from src.research_universes.registry import research_universe_registry
 from src.strategies import (
     StrategyComponent,
     StrategyDefinition,
@@ -71,6 +73,12 @@ from src.strategies import (
     load_strategy,
 )
 from src.utils.date_utils import resolve_date_range
+from src.utils.identifiers import (
+    InvalidResourceId,
+    canonical_ticker,
+    canonical_uuid,
+)
+from src.utils.market_calendar import latest_publishable_xnys_session
 from src.webapp.results_store import list_universes
 from src.visualization.plots_plotly import fig_to_json
 import plotly.graph_objects as go
@@ -82,6 +90,30 @@ templates = Jinja2Templates(directory=str(_HERE / "templates"))
 router_v2 = APIRouter()
 
 
+def _queue_watchlist_market_data(
+    snapshot: dict[str, Any],
+    *,
+    consumer_kind: str,
+    consumer_id: str,
+):
+    start_iso, end_iso, _ = resolve_date_range(
+        CONFIG.date_range.start,
+        CONFIG.date_range.end,
+    )
+    return enqueue_market_data_request(
+        data_universe=watchlist_snapshot_data_universe(snapshot),
+        universe_frame=watchlist_universe_frame(snapshot),
+        start=start_iso,
+        end=end_iso,
+        initial_start=(
+            pd.Timestamp(start_iso) - pd.Timedelta(days=400)
+        ).strftime("%Y-%m-%d"),
+        consumer_kind=consumer_kind,
+        consumer_id=consumer_id,
+        force=True,
+    )
+
+
 # ---------------------------------------------------------------
 # 工具
 # ---------------------------------------------------------------
@@ -90,14 +122,6 @@ _PLOT_BG = "#0E1117"
 _PLOT_PANEL = "#1A1F2E"
 _PLOT_GRID = "#262B3A"
 _PLOT_TEXT = "#E8EAED"
-
-_MOMENTUM_UNIVERSE_LABELS = {
-    "US_ACTIVE": "美股活跃标的 · 股票 + ETF · NASDAQ / NYSE / AMEX",
-    "SP500": "S&P 500",
-    "MAG7": "科技龙头 · MAG7",
-}
-_MOMENTUM_SCAN_LOCK = threading.Lock()
-
 
 def _sanitize(obj: Any) -> Any:
     if isinstance(obj, dict):
@@ -131,12 +155,240 @@ def _format_money(x, digits: int = 2) -> str:
         return "—"
 
 
+_LEGACY_ADV_ERROR = re.compile(
+    r"decision_date=(?P<decision_date>\d{4}-\d{2}-\d{2}).*?"
+    r"ticker=(?P<ticker>[A-Z0-9.\-]+).*?"
+    r"requested=(?P<requested>[+\-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+\-]?\d+)?).*?"
+    r"allowed=(?P<allowed>[+\-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+\-]?\d+)?).*?"
+    r"adv=(?P<adv>[+\-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+\-]?\d+)?)",
+    re.DOTALL,
+)
+
+
+def _backtest_failure_view(task: dict[str, Any]) -> dict[str, Any] | None:
+    """Turn persisted engine failures into a concise operator-facing diagnosis."""
+    if task.get("status") != bt_store.STATUS_FAILED:
+        return None
+    technical_error = str(task.get("error") or "未知错误")
+    details = task.get("error_details") or {}
+    if details.get("code") == "ADV_CAPACITY_EXCEEDED":
+        order = dict(details.get("worst_order") or {})
+        portfolio_value = float(details.get("portfolio_value") or 0.0)
+        max_portfolio_value = float(details.get("max_portfolio_value") or 0.0)
+        breach_count = int(details.get("breach_count") or 0)
+        capacity_scope = "全区间最严格订单"
+        recommendation_is_full_period = True
+    else:
+        match = _LEGACY_ADV_ERROR.search(technical_error)
+        if match is None:
+            first_line = technical_error.splitlines()[0] if technical_error else "未知错误"
+            return {
+                "kind": "generic",
+                "title": "回测执行失败",
+                "message": first_line,
+                "technical_error": technical_error,
+            }
+        requested = float(match.group("requested"))
+        allowed = float(match.group("allowed"))
+        adv = float(match.group("adv"))
+        portfolio_value = float(
+            (task.get("execution") or {}).get("portfolio_value") or 0.0
+        )
+        max_portfolio_value = (
+            portfolio_value * allowed / requested
+            if requested > 0 and portfolio_value > 0
+            else 0.0
+        )
+        volume_limit = float(
+            (((task.get("execution") or {}).get("slippage") or {}).get(
+                "volume_limit", 0.025
+            ))
+            or 0.0
+        )
+        order = {
+            "decision_date": match.group("decision_date"),
+            "execution_date": None,
+            "group": None,
+            "ticker": match.group("ticker"),
+            "requested_quantity": requested,
+            "allowed_quantity": allowed,
+            "adv": adv,
+            "participation_rate": requested / adv if adv > 0 else None,
+            "volume_limit": volume_limit,
+        }
+        breach_count = None
+        capacity_scope = "首个失败订单推算"
+        recommendation_is_full_period = False
+
+    suggested_portfolio_value = None
+    if max_portfolio_value > 0:
+        step = 100.0 if max_portfolio_value >= 1000 else 10.0
+        suggested_portfolio_value = max(
+            step,
+            math.floor(max_portfolio_value * 0.90 / step) * step,
+        )
+    retry_url = None
+    universe = str(task.get("universe") or "")
+    strategy_id = str(task.get("strategy_id") or "")
+    if suggested_portfolio_value and strategy_id:
+        params = {
+            "strategy_id": strategy_id,
+            "portfolio_value": f"{suggested_portfolio_value:.2f}",
+        }
+        if universe.startswith("watchlist:"):
+            params["watchlist_id"] = universe.split(":", 1)[1]
+        retry_url = f"/backtests/new?{urlencode(params)}"
+
+    return {
+        "kind": "capacity",
+        "title": "组合规模超过历史流动性容量",
+        "message": (
+            "系统拒绝假装整笔成交。请降低名义组合资金、扩大股票池，"
+            "或另行建设能跨交易日挂单的事件驱动部分成交模型。"
+        ),
+        "portfolio_value": portfolio_value,
+        "max_portfolio_value": max_portfolio_value,
+        "suggested_portfolio_value": suggested_portfolio_value,
+        "recommendation_is_full_period": recommendation_is_full_period,
+        "capacity_scope": capacity_scope,
+        "breach_count": breach_count,
+        "order": order,
+        "retry_url": retry_url,
+        "technical_error": technical_error,
+    }
+
+
+def _backtest_group_view(task: dict[str, Any]) -> dict[str, Any]:
+    """Resolve requested versus effective groups, including legacy small-pool tasks."""
+    requested_n_groups = int(task.get("n_groups") or CONFIG.backtest.n_groups)
+    requested_top_group = int(task.get("top_group") or requested_n_groups)
+    diagnostics = task.get("diagnostics") or {}
+    plan = diagnostics.get("execution_plan") or {}
+    if plan:
+        return {
+            "requested_n_groups": int(
+                plan.get("requested_n_groups") or requested_n_groups
+            ),
+            "effective_n_groups": int(
+                plan.get("effective_n_groups") or requested_n_groups
+            ),
+            "requested_top_group": int(
+                plan.get("requested_top_group") or requested_top_group
+            ),
+            "effective_top_group": int(
+                plan.get("effective_top_group") or requested_top_group
+            ),
+            "n_tickers": int(plan.get("n_tickers") or 0),
+            "small_universe_adjusted": bool(
+                plan.get("small_universe_adjusted", False)
+            ),
+        }
+
+    effective_n_groups = diagnostics.get("effective_n_groups")
+    effective_top_group = diagnostics.get("effective_top_group")
+    snapshot_items = (task.get("watchlist_snapshot") or {}).get("items") or []
+    tickers = {
+        str(item.get("ticker") or "").strip().upper()
+        for item in snapshot_items
+        if str(item.get("ticker") or "").strip()
+    }
+    n_tickers = len(tickers)
+    if effective_n_groups is None:
+        effective_n_groups = requested_n_groups
+        if n_tickers and n_tickers < requested_n_groups * 2:
+            effective_n_groups = max(
+                2,
+                min(requested_n_groups, n_tickers // 2),
+            )
+    effective_n_groups = int(effective_n_groups)
+    effective_top_group = int(
+        effective_top_group
+        if effective_top_group is not None
+        else min(requested_top_group, effective_n_groups)
+    )
+    return {
+        "requested_n_groups": requested_n_groups,
+        "effective_n_groups": effective_n_groups,
+        "requested_top_group": requested_top_group,
+        "effective_top_group": effective_top_group,
+        "n_tickers": n_tickers,
+        "small_universe_adjusted": effective_n_groups != requested_n_groups,
+    }
+
+
+def _backtest_timing_view(
+    task: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Return refresh-stable wall-clock and active-stage durations."""
+
+    def parse(value: Any) -> datetime | None:
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(str(value))
+        except ValueError:
+            return None
+
+    def seconds_between(start: datetime | None, end: datetime | None) -> float | None:
+        if start is None or end is None:
+            return None
+        if start.tzinfo is None and end.tzinfo is not None:
+            end = end.replace(tzinfo=None)
+        elif start.tzinfo is not None and end.tzinfo is None:
+            end = end.replace(tzinfo=start.tzinfo)
+        return round(max(0.0, (end - start).total_seconds()), 1)
+
+    created_at = parse(task.get("created_at"))
+    status_changed_at = parse(task.get("status_changed_at"))
+    started_at = parse(task.get("started_at"))
+    finished_at = parse(task.get("finished_at"))
+    reference = now
+    if reference is None:
+        anchor = started_at or created_at
+        reference = datetime.now(anchor.tzinfo) if anchor and anchor.tzinfo else datetime.now()
+    status = str(task.get("status") or "")
+    active = status in {
+        bt_store.STATUS_PENDING,
+        bt_store.STATUS_WAITING_FOR_DATA,
+        bt_store.STATUS_RUNNING,
+    }
+    end = reference if active else finished_at
+    total_elapsed = seconds_between(created_at, end)
+
+    stage_names = {
+        bt_store.STATUS_PENDING: "queue",
+        bt_store.STATUS_WAITING_FOR_DATA: "waiting_for_data",
+        bt_store.STATUS_RUNNING: "running",
+    }
+    stage = stage_names.get(status, "finished")
+    if status == bt_store.STATUS_RUNNING:
+        stage_elapsed = seconds_between(started_at, reference)
+    elif status in {bt_store.STATUS_PENDING, bt_store.STATUS_WAITING_FOR_DATA}:
+        stage_elapsed = seconds_between(
+            status_changed_at or created_at,
+            reference,
+        )
+    elif task.get("duration_sec") is not None:
+        stage_elapsed = round(max(0.0, float(task["duration_sec"])), 1)
+    else:
+        stage_elapsed = seconds_between(started_at, finished_at)
+
+    return {
+        "active": active,
+        "stage": stage,
+        "total_elapsed_sec": total_elapsed,
+        "stage_elapsed_sec": stage_elapsed,
+    }
+
+
 def _enabled_universes() -> list[str]:
-    """配置 + 已有产物的并集。"""
-    try:
-        cfg_list = [str(u).upper() for u in (CONFIG.universes.enabled or [])]
-    except Exception:
-        cfg_list = []
+    """Return registered presets plus readable historical output partitions."""
+    cfg_list = [
+        entry.universe_id
+        for entry in research_universe_registry().full_research_entries()
+    ]
     existing = list_universes()
     seen: dict[str, None] = {}
     for u in cfg_list + existing:
@@ -168,23 +420,124 @@ def _strategy_component_rows(strategy: StrategyDefinition) -> list[dict[str, Any
     rows: list[dict[str, Any]] = []
     for c in strategy.components:
         entry = catalog.get(c.factor_id)
+        direction = int(entry.direction) if entry else 0
         rows.append({
             "factor_id": c.factor_id,
             "display_name": entry.display_name if entry else c.factor_id,
             "category": entry.category if entry else "—",
+            "direction": direction,
             "weight": c.weight,
+            "direction_mismatch": (
+                direction in {-1, 1}
+                and float(c.weight) != 0.0
+                and (1 if float(c.weight) > 0 else -1) != direction
+            ),
         })
     return rows
 
 
+def _strategy_research_rows(
+    strategy: StrategyDefinition,
+    *,
+    assessments: dict[str, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    if assessments is None:
+        from src.webapp.research_routes import factor_assessment_map
+
+        assessments = factor_assessment_map()
+    components = _strategy_component_rows(strategy)
+    for component in components:
+        assessment = assessments.get(component["factor_id"], {})
+        component["cross_verdict"] = assessment.get("verdict") or "INSUFFICIENT"
+        component["sp500_verdict"] = (
+            (assessment.get("sp500") or {}).get("verdict")
+            or (assessment.get("sp500") or {}).get("status")
+            or "MISSING"
+        )
+        component["nasdaq100_verdict"] = (
+            (assessment.get("nasdaq100") or {}).get("verdict")
+            or (assessment.get("nasdaq100") or {}).get("status")
+            or "MISSING"
+        )
+        component["research_target_session"] = assessment.get("target_session")
+    return components
+
+
+def _strategy_research_map(
+    summaries: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    from src.webapp.research_routes import factor_assessment_map
+
+    assessments = factor_assessment_map()
+    output: dict[str, list[dict[str, Any]]] = {}
+    for summary in summaries:
+        strategy = load_strategy(str(summary["id"]))
+        if strategy is not None:
+            output[strategy.id] = _strategy_research_rows(
+                strategy,
+                assessments=assessments,
+            )
+    return output
+
+
+def _strategy_research_snapshot(
+    strategy: StrategyDefinition,
+) -> dict[str, Any]:
+    from src.webapp.research_routes import factor_research_snapshot
+
+    snapshot = factor_research_snapshot(
+        [component.factor_id for component in strategy.components]
+    )
+    assessments = {
+        str(item["factor_id"]): item
+        for item in snapshot.get("factors", [])
+    }
+    snapshot["components"] = _strategy_research_rows(
+        strategy,
+        assessments=assessments,
+    )
+    return snapshot
+
+
+def _risk_config_snapshot() -> dict[str, Any]:
+    return {
+        "require_point_in_time_universe": bool(
+            getattr(CONFIG.backtest, "require_point_in_time_universe", True)
+        ),
+        "tradability": dict(getattr(CONFIG.backtest, "tradability", {})),
+    }
+
+
+def _target_universe_snapshot(
+    universe: str,
+    watchlist_snapshot: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if watchlist_snapshot is not None:
+        return {
+            **watchlist_snapshot,
+            "requested_universe": universe,
+            "universe_type": "TARGET",
+        }
+    try:
+        registered = research_universe_registry().get(universe)
+        return {
+            **registered.to_dict(),
+            "requested_universe": universe,
+            "universe_type": "RESEARCH_PRESET_AS_TARGET",
+        }
+    except Exception:  # noqa: BLE001
+        return {
+            "universe_id": universe,
+            "requested_universe": universe,
+            "universe_type": "NAMED_TARGET",
+        }
+
+
 def _default_universe() -> str:
     enabled = _enabled_universes()
-    try:
-        configured = str(CONFIG.universes.default).upper()
-        if configured in enabled:
-            return configured
-    except Exception:  # noqa: BLE001
-        pass
+    configured = research_universe_registry().primary().universe_id
+    if configured in enabled:
+        return configured
     return enabled[0] if enabled else "SP500"
 
 
@@ -193,293 +546,33 @@ def _normalize_ranking_universe(raw: str | None) -> str:
     if not value:
         return _default_universe()
     if value.lower().startswith("watchlist:"):
-        return f"watchlist:{value.split(':', 1)[1].strip()}"
+        try:
+            watchlist_id = canonical_uuid(
+                value.split(":", 1)[1].strip(),
+                label="watchlist_id",
+            )
+        except InvalidResourceId as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return f"watchlist:{watchlist_id}"
     return value.upper()
 
 
 def _resolve_watchlist_snapshot(universe: str) -> tuple[dict[str, Any] | None, str]:
     if not universe.lower().startswith("watchlist:"):
         return None, universe
-    wid = universe.split(":", 1)[1].strip()
+    try:
+        wid = canonical_uuid(
+            universe.split(":", 1)[1].strip(),
+            label="watchlist_id",
+        )
+    except InvalidResourceId as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     from src.watchlists import load_watchlist
     wl = load_watchlist(wid)
     if wl is None:
         raise HTTPException(status_code=404, detail=f"股票池不存在: {wid}")
     wl.validate()
     return wl.to_dict(), wl.name
-
-
-def _ranking_universe_options() -> tuple[list[str], list[dict[str, Any]]]:
-    from src.watchlists import list_watchlists
-    return _enabled_universes(), list_watchlists()
-
-
-def _momentum_universe_options() -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
-    from src.watchlists import list_watchlists
-
-    values = ["US_ACTIVE"] + [value for value in _enabled_universes() if value != "US_ACTIVE"]
-    options = [
-        {"value": value, "label": _MOMENTUM_UNIVERSE_LABELS.get(value, value)}
-        for value in dict.fromkeys(values)
-    ]
-    return options, list_watchlists()
-
-
-def _normalize_momentum_universe(raw: str | None) -> str:
-    return _normalize_ranking_universe(raw) if str(raw or "").strip() else "US_ACTIVE"
-
-
-def _breakout_universe_context(raw: str | None) -> dict[str, Any]:
-    """Resolve a preset universe or Watchlist into tickers and display metadata."""
-    universe = _normalize_momentum_universe(raw)
-    watchlist_snapshot, label = _resolve_watchlist_snapshot(universe)
-    if watchlist_snapshot is not None:
-        items = watchlist_snapshot.get("items") or []
-        tickers = [str(item.get("ticker") or "").upper() for item in items]
-        names = {
-            str(item.get("ticker") or "").upper(): str(item.get("name") or "")
-            for item in items
-        }
-        return {
-            "universe": universe,
-            "label": label,
-            "tickers": [ticker for ticker in tickers if ticker],
-            "names": names,
-            "sectors": {},
-            "current_dollar_volume": {},
-            "refresh_daily": True,
-        }
-
-    if universe not in _enabled_universes() and universe != "US_ACTIVE":
-        raise HTTPException(status_code=400, detail=f"未知股票池: {universe}")
-
-    if universe == "US_ACTIVE":
-        from src.data.universe import get_universe
-        meta = get_universe(name=universe).copy()
-        tickers = meta["ticker"].astype(str).str.upper().tolist()
-    else:
-        from src.data.cleaner import load_wide_tables
-        try:
-            wide = load_wide_tables(universe)
-            tickers = [str(t).upper() for t in wide["close"].columns]
-        except Exception:
-            tickers = []
-        meta = pd.DataFrame()
-        universe_cache = PROJECT_ROOT / "data" / "raw" / "universe" / f"{universe.lower()}.parquet"
-        if universe_cache.exists():
-            try:
-                meta = pd.read_parquet(universe_cache)
-            except Exception:
-                meta = pd.DataFrame()
-        elif universe == "MAG7":
-            from src.data.universe import get_universe
-            meta = get_universe(name=universe).copy()
-    if not meta.empty and "ticker" in meta.columns:
-        meta["ticker"] = meta["ticker"].astype(str).str.upper()
-        if not tickers:
-            tickers = meta["ticker"].tolist()
-        names = meta.set_index("ticker").get("name", pd.Series(dtype="object")).fillna("").to_dict()
-        sectors = meta.set_index("ticker").get("sector", pd.Series(dtype="object")).fillna("").to_dict()
-        if "current_dollar_volume" in meta.columns:
-            current_dollar_volume = (
-                pd.to_numeric(meta.set_index("ticker")["current_dollar_volume"], errors="coerce")
-                .dropna()
-                .to_dict()
-            )
-        else:
-            current_dollar_volume = {}
-    else:
-        names, sectors, current_dollar_volume = {}, {}, {}
-    return {
-        "universe": universe,
-        "label": _MOMENTUM_UNIVERSE_LABELS.get(universe, universe),
-        "tickers": tickers,
-        "names": names,
-        "sectors": sectors,
-        "current_dollar_volume": current_dollar_volume,
-        "refresh_daily": False,
-    }
-
-
-def _build_breakout_scan(
-    *,
-    universe: str | None,
-    asof: str | None,
-    min_return_20d: float,
-    min_adr_20d: float,
-    min_dollar_volume_m: float,
-    min_avg_dollar_volume_m: float,
-    min_consolidation_days: int,
-    max_distance_ma50: float,
-    pivot_proximity: float,
-    market_symbol: str,
-    view: str,
-) -> dict[str, Any]:
-    context = _breakout_universe_context(universe)
-    if context.get("refresh_daily"):
-        target = (
-            pd.Timestamp(asof).normalize()
-            if asof
-            else pd.offsets.BDay().rollback(pd.Timestamp.now().normalize())
-        )
-        for ticker in context["tickers"]:
-            refresh_daily_frame(ticker, end=target)
-    filters = BreakoutFilters(
-        min_return_20d=min_return_20d,
-        min_adr_20d=min_adr_20d,
-        min_dollar_volume=min_dollar_volume_m * 1_000_000,
-        min_avg_dollar_volume=min_avg_dollar_volume_m * 1_000_000,
-        min_consolidation_days=min_consolidation_days,
-        max_distance_ma50=max_distance_ma50,
-        pivot_proximity=pivot_proximity,
-    ).normalized()
-    total_universe_count = len(context["tickers"])
-    scan_tickers = context["tickers"]
-    current_liquidity = context.get("current_dollar_volume") or {}
-    if current_liquidity and filters.min_dollar_volume > 0:
-        scan_tickers = [
-            ticker
-            for ticker in scan_tickers
-            if ticker not in current_liquidity
-            or float(current_liquidity[ticker]) >= filters.min_dollar_volume
-        ]
-    scan = scan_breakouts(
-        scan_tickers,
-        filters=filters,
-        asof=asof or None,
-        names=context["names"],
-        sectors=context["sectors"],
-    )
-    all_rows = scan["rows"]
-    normalized_view = view if view in {"all", "setup", "ready", "breakout"} else "all"
-    if normalized_view == "setup":
-        visible_rows = [row for row in all_rows if row["setup_qualified"]]
-    elif normalized_view == "ready":
-        visible_rows = [row for row in all_rows if row["status"] in {"READY", "BREAKOUT"}]
-    elif normalized_view == "breakout":
-        visible_rows = [row for row in all_rows if row["status"] == "BREAKOUT"]
-    else:
-        visible_rows = all_rows
-    for row in visible_rows:
-        row["checks_passed"] = sum(bool(v) for v in row["setup_checks"].values())
-
-    scan["all_candidate_count"] = scan["candidate_count"]
-    scan["liquidity_prefilter_count"] = scan["universe_count"]
-    scan["universe_count"] = total_universe_count
-    scan["visible_count"] = len(visible_rows)
-    scan["rows"] = visible_rows
-    scan["universe"] = context["universe"]
-    scan["universe_label"] = context["label"]
-    scan["view"] = normalized_view
-    scan["data_lag_days"] = max(0, (pd.Timestamp.now().normalize() - pd.Timestamp(scan["asof"])).days)
-    scan["market"] = load_market_regime(
-        asof=scan["asof"],
-        symbol=market_symbol if market_symbol in {"QQQ", "IWM"} else "QQQ",
-        fetch_missing=True,
-    )
-    return scan
-
-
-def _get_breakout_scan(
-    *,
-    universe: str | None,
-    asof: str | None,
-    min_return_20d: float,
-    min_adr_20d: float,
-    min_dollar_volume_m: float,
-    min_avg_dollar_volume_m: float,
-    min_consolidation_days: int,
-    max_distance_ma50: float,
-    pivot_proximity: float,
-    market_symbol: str,
-    view: str,
-    force: bool = False,
-) -> dict[str, Any]:
-    parameters = {
-        "universe": _normalize_momentum_universe(universe),
-        "asof": asof or "",
-        "min_return_20d": float(min_return_20d),
-        "min_adr_20d": float(min_adr_20d),
-        "min_dollar_volume_m": float(min_dollar_volume_m),
-        "min_avg_dollar_volume_m": float(min_avg_dollar_volume_m),
-        "min_consolidation_days": int(min_consolidation_days),
-        "max_distance_ma50": float(max_distance_ma50),
-        "pivot_proximity": float(pivot_proximity),
-        "market_symbol": str(market_symbol).upper(),
-        "view": view if view in {"all", "setup", "ready", "breakout"} else "all",
-    }
-    is_watchlist = parameters["universe"].lower().startswith("watchlist:")
-    if not force and not is_watchlist:
-        cached = load_scan_cache(parameters)
-        if cached is not None:
-            return cached
-
-    with _MOMENTUM_SCAN_LOCK:
-        if not force and not is_watchlist:
-            cached = load_scan_cache(parameters)
-            if cached is not None:
-                return cached
-        scan = _build_breakout_scan(**parameters)
-        if not is_watchlist:
-            save_scan_cache(parameters, scan)
-        return scan
-
-
-def _breakout_daily_figure(ticker: str, frame: pd.DataFrame, pivot: float | None):
-    from plotly.subplots import make_subplots
-
-    data = frame.tail(180).copy()
-    ma10 = data["close"].rolling(10).mean()
-    ma20 = data["close"].rolling(20).mean()
-    ma50 = data["close"].rolling(50).mean()
-    fig = make_subplots(
-        rows=2,
-        cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.04,
-        row_heights=[0.78, 0.22],
-    )
-    fig.add_trace(go.Candlestick(
-        x=data.index,
-        open=data["open"], high=data["high"], low=data["low"], close=data["close"],
-        name=ticker,
-        increasing_line_color="#00C853",
-        decreasing_line_color="#FF5252",
-    ), row=1, col=1)
-    for values, name, color in [
-        (ma10, "MA10 日线", "#42A5F5"),
-        (ma20, "MA20 日线", "#FFB300"),
-        (ma50, "MA50 日线", "#26C6DA"),
-    ]:
-        fig.add_trace(go.Scatter(
-            x=data.index, y=values, mode="lines", name=name,
-            line=dict(color=color, width=1.5),
-        ), row=1, col=1)
-    fig.add_trace(go.Bar(
-        x=data.index,
-        y=data["volume"],
-        name="成交量",
-        marker_color="rgba(154,160,166,0.55)",
-    ), row=2, col=1)
-    if pivot is not None:
-        fig.add_hline(
-            y=float(pivot), line_width=1, line_dash="dash", line_color="#AB47BC",
-            annotation_text="20日 Pivot", annotation_position="top left", row=1, col=1,
-        )
-    fig.update_layout(
-        title=dict(text=f"{ticker} · 日线 Setup", font=dict(color=_PLOT_TEXT, size=15)),
-        paper_bgcolor=_PLOT_BG,
-        plot_bgcolor=_PLOT_PANEL,
-        font=dict(color=_PLOT_TEXT),
-        height=640,
-        margin=dict(l=44, r=24, t=56, b=32),
-        hovermode="x unified",
-        xaxis_rangeslider_visible=False,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
-    )
-    fig.update_xaxes(gridcolor=_PLOT_GRID)
-    fig.update_yaxes(gridcolor=_PLOT_GRID)
-    return fig
 
 
 def _build_strategy_ranking(
@@ -497,14 +590,31 @@ def _build_strategy_ranking(
                 detail=f"未知股票池 {universe}，可选: {enabled}",
             )
 
-    target = generate_target_weights(
-        strategy=strategy,
-        universe=universe,
-        watchlist_snapshot=watchlist_snapshot,
-        asof=asof or None,
-        n_groups=int(CONFIG.backtest.n_groups),
-        top_group=int(CONFIG.backtest.n_groups),
-    )
+    try:
+        target = generate_target_weights(
+            strategy=strategy,
+            universe=universe,
+            watchlist_snapshot=watchlist_snapshot,
+            asof=asof or None,
+            n_groups=int(CONFIG.backtest.n_groups),
+            top_group=int(CONFIG.backtest.n_groups),
+        )
+    except MarketDataNotReadyError as exc:
+        request_id = exc.request_id
+        if watchlist_snapshot is not None:
+            request = _queue_watchlist_market_data(
+                watchlist_snapshot,
+                consumer_kind="strategy_ranking",
+                consumer_id=strategy.id,
+            )
+            request_id = request.request_id
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"行情尚未发布，已进入补数队列"
+                f"{f'（请求 {request_id}）' if request_id else ''}。"
+            ),
+        ) from exc
     df = target.target_weights.copy()
     if df.empty:
         rows: list[dict[str, Any]] = []
@@ -520,10 +630,23 @@ def _build_strategy_ranking(
 
     target_count = sum(1 for r in rows if r.get("is_target"))
     stock_link_universe = None if universe.lower().startswith("watchlist:") else universe
+    if watchlist_snapshot is not None:
+        from src.watchlists import record_ranking_activity
+
+        record_ranking_activity(
+            str(watchlist_snapshot["id"]),
+            strategy_id=strategy.id,
+            decision_date=target.decision_date,
+            data_contract=target.data_contract,
+        )
     return {
         "strategy": strategy.to_dict(),
         "universe": universe,
         "universe_label": universe_label,
+        "target_universe_snapshot": _target_universe_snapshot(
+            universe,
+            watchlist_snapshot,
+        ),
         "stock_link_universe": stock_link_universe,
         "asof": asof or "",
         "decision_date": target.decision_date,
@@ -536,6 +659,14 @@ def _build_strategy_ranking(
         "tickers_used": len(target.tickers_used),
         "tickers_missing": target.tickers_missing,
         "warnings": target.warnings,
+        "data_contract": target.data_contract,
+        "standardization_scope": {
+            "method": "cross_sectional_zscore_then_weighted_sum",
+            "requested_universe": universe,
+            "data_universe": target.data_contract.get("data_universe"),
+            "decision_date": target.decision_date,
+            "eligible_ticker_count": len(rows),
+        },
         "score_max": max((float(r["score"]) for r in rows if r.get("score") is not None), default=None),
         "score_min": min((float(r["score"]) for r in rows if r.get("score") is not None), default=None),
     }
@@ -547,21 +678,8 @@ def _build_strategy_ranking(
 
 @router_v2.get("/factors", response_class=HTMLResponse)
 def factors_page(request: Request):
-    try:
-        factors = _factor_catalog_payload()
-    except FactorLibraryError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    # 按分类分组
-    categories: dict[str, list[dict]] = {}
-    for f in factors:
-        categories.setdefault(f["category"], []).append(f)
-    return templates.TemplateResponse(request, "factor_library.html", {
-        "title": "因子库",
-        "categories": categories,
-        "factors": factors,
-        "total": len(factors),
-        "universes": _enabled_universes(),
-    })
+    del request
+    return RedirectResponse(url="/research", status_code=307)
 
 
 @router_v2.get("/api/factors_catalog")
@@ -597,11 +715,12 @@ def strategies_new_page(request: Request):
 
 
 @router_v2.get("/strategies/{sid}", response_class=HTMLResponse)
-def strategy_detail_page(request: Request, sid: str):
+def strategy_detail_page(request: Request, sid: UUID):
+    sid = str(sid)
     s = load_strategy(sid)
     if s is None:
         raise HTTPException(status_code=404, detail=f"Strategy not found: {sid}")
-    components = _strategy_component_rows(s)
+    components = _strategy_research_rows(s)
     total_abs = sum(abs(c.weight) for c in s.components) or 1.0
     weights_norm = [{"factor_id": c.factor_id, "weight": c.weight / total_abs}
                     for c in s.components]
@@ -635,43 +754,21 @@ def strategy_detail_page(request: Request, sid: str):
     })
 
 
+@router_v2.get("/rankings", response_class=HTMLResponse)
+def rankings_entry_page(request: Request):
+    del request
+    return RedirectResponse(url="/strategies", status_code=307)
+
+
 @router_v2.get("/strategies/{sid}/ranking", response_class=HTMLResponse)
 def strategy_ranking_page(
     request: Request,
-    sid: str,
+    sid: UUID,
     universe: str | None = Query(None),
     asof: str | None = Query(None),
 ):
-    strategy = load_strategy(sid)
-    if strategy is None:
-        raise HTTPException(status_code=404, detail=f"Strategy not found: {sid}")
-    selected_universe = _normalize_ranking_universe(universe)
-    presets, watchlists = _ranking_universe_options()
-    ranking: dict[str, Any] | None = None
-    error = ""
-    try:
-        ranking = _build_strategy_ranking(
-            strategy=strategy,
-            universe=selected_universe,
-            asof=(asof or "").strip() or None,
-        )
-    except HTTPException:
-        raise
-    except Exception as e:  # noqa: BLE001
-        error = str(e)
-
-    return templates.TemplateResponse(request, "strategy_ranking.html", {
-        "title": f"策略排行 · {strategy.name}",
-        "strategy": strategy.to_dict(),
-        "components": _strategy_component_rows(strategy),
-        "ranking": ranking,
-        "error": error,
-        "selected_universe": selected_universe,
-        "selected_asof": (asof or "").strip(),
-        "preset_universes": presets,
-        "watchlists": watchlists,
-        "universes": _enabled_universes(),
-    })
+    del request, universe, asof
+    return RedirectResponse(url=f"/strategies/{sid}", status_code=307)
 
 
 # ---------- API：策略 ----------
@@ -682,19 +779,23 @@ def api_list_strategies():
 
 
 @router_v2.get("/api/strategies/{sid}")
-def api_get_strategy(sid: str):
+def api_get_strategy(sid: UUID):
+    sid = str(sid)
     s = load_strategy(sid)
     if s is None:
         raise HTTPException(status_code=404, detail="Strategy not found")
-    return JSONResponse(_sanitize(s.to_dict()))
+    payload = s.to_dict()
+    payload["research_evidence"] = _strategy_research_rows(s)
+    return JSONResponse(_sanitize(payload))
 
 
 @router_v2.get("/api/strategies/{sid}/ranking")
 def api_get_strategy_ranking(
-    sid: str,
+    sid: UUID,
     universe: str | None = Query(None),
     asof: str | None = Query(None),
 ):
+    sid = str(sid)
     strategy = load_strategy(sid)
     if strategy is None:
         raise HTTPException(status_code=404, detail="Strategy not found")
@@ -737,7 +838,8 @@ def api_create_strategy(payload: dict = Body(...)):
 
 
 @router_v2.delete("/api/strategies/{sid}")
-def api_delete_strategy(sid: str):
+def api_delete_strategy(sid: UUID):
+    sid = str(sid)
     ok = delete_strategy(sid)
     if not ok:
         raise HTTPException(status_code=404, detail="Strategy not found")
@@ -745,7 +847,7 @@ def api_delete_strategy(sid: str):
 
 
 # ---------------------------------------------------------------
-# 回测 Tab
+# 回测任务
 # ---------------------------------------------------------------
 
 @router_v2.get("/backtests", response_class=HTMLResponse)
@@ -772,6 +874,7 @@ def backtests_new_page(
     request: Request,
     strategy_id: str | None = Query(None),
     watchlist_id: str | None = Query(None),
+    portfolio_value: float | None = Query(None, gt=0, le=1_000_000_000_000),
 ):
     from src.watchlists import list_watchlists
     strategies = list_strategies()
@@ -781,14 +884,22 @@ def backtests_new_page(
     default_end = str(CONFIG.date_range.end)
     default_exec = {
         "timing": str(getattr(CONFIG.backtest.execution, "timing", "next_open")),
+        "portfolio_value": (
+            float(portfolio_value)
+            if portfolio_value is not None
+            else float(getattr(CONFIG.backtest.execution, "portfolio_value", 100000))
+        ),
         "fee_model": str(getattr(CONFIG.backtest.execution, "fee_model", "ibkr_us_pro_fixed")),
         "slippage_model": str(getattr(CONFIG.backtest.execution, "slippage_model", "volume_share")),
         "slippage_bps": float(getattr(CONFIG.backtest.execution, "slippage_bps", 5)),
         "commission_bps": float(getattr(CONFIG.backtest.execution, "commission_bps", 2)),
+        "volume_limit": float(getattr(CONFIG.backtest.execution.slippage, "volume_limit", 0.025)),
+        "adv_window": int(getattr(CONFIG.backtest.execution.slippage, "adv_window", 20)),
     }
     return templates.TemplateResponse(request, "backtest_new.html", {
         "title": "新建回测",
         "strategies": strategies,
+        "strategy_research": _strategy_research_map(strategies),
         "universes": universes,
         "watchlists": watchlists,
         "preselect_strategy_id": strategy_id,
@@ -800,13 +911,15 @@ def backtests_new_page(
 
 
 @router_v2.get("/backtests/{tid}", response_class=HTMLResponse)
-def backtest_detail_page(request: Request, tid: str):
+def backtest_detail_page(request: Request, tid: UUID):
+    tid = str(tid)
     task = bt_store.load_task(tid)
     if task is None:
         raise HTTPException(status_code=404, detail="Backtest not found")
 
-    # 构造 NAV 图（仅成功态）
+    # 构造 NAV 图与逐票执行明细（仅成功态）
     nav_fig_json = None
+    arts: dict[str, Any] = {}
     if task.get("status") == bt_store.STATUS_SUCCESS:
         arts = bt_store.load_task_artifacts(tid)
         nav_df = arts.get("nav")
@@ -846,11 +959,19 @@ def backtest_detail_page(request: Request, tid: str):
     for c in snapshot.get("components", []):
         fid = c.get("factor_id")
         entry = catalog.get(fid) if fid else None
+        direction = int(entry.direction) if entry else 0
+        weight = float(c.get("weight", 0.0))
         components_rows.append({
             "factor_id": fid,
             "display_name": entry.display_name if entry else fid,
             "category": entry.category if entry else "—",
-            "weight": c.get("weight", 0.0),
+            "direction": direction,
+            "weight": weight,
+            "direction_mismatch": (
+                direction in {-1, 1}
+                and weight != 0.0
+                and (1 if weight > 0 else -1) != direction
+            ),
         })
 
     # 格式化指标
@@ -873,10 +994,33 @@ def backtest_detail_page(request: Request, tid: str):
     return templates.TemplateResponse(request, "backtest_detail.html", {
         "title": f"回测 · {task.get('name') or tid[:8]}",
         "task": task,
+        "group_view": _backtest_group_view(task),
+        "task_timing": _backtest_timing_view(task),
+        "failure": _backtest_failure_view(task),
         "metrics_fmt": metrics_fmt,
         "components_rows": components_rows,
+        "research_snapshot": task.get("research_evidence_snapshot") or {},
+        "target_snapshot": task.get("target_universe_snapshot") or {},
+        "data_contract": task.get("data_contract") or {},
+        "risk_config": task.get("risk_config") or {},
+        "holdings_detail": _records_for_table(
+            arts.get("holdings_detail", pd.DataFrame()),
+            limit=200,
+        ),
+        "trades_detail": _records_for_table(
+            arts.get("trades", pd.DataFrame()),
+            limit=200,
+        ),
+        "costs_detail": _records_for_table(
+            arts.get("costs", pd.DataFrame()),
+            limit=100,
+        ),
         "nav_fig_json": nav_fig_json,
-        "is_running": task.get("status") in (bt_store.STATUS_PENDING, bt_store.STATUS_RUNNING),
+        "is_running": task.get("status") in (
+            bt_store.STATUS_PENDING,
+            bt_store.STATUS_WAITING_FOR_DATA,
+            bt_store.STATUS_RUNNING,
+        ),
         "universes": _enabled_universes(),
     })
 
@@ -889,7 +1033,8 @@ def api_list_backtests():
 
 
 @router_v2.get("/api/backtests/{tid}")
-def api_get_backtest(tid: str):
+def api_get_backtest(tid: UUID):
+    tid = str(tid)
     task = bt_store.load_task(tid)
     if task is None:
         raise HTTPException(status_code=404, detail="Backtest not found")
@@ -897,19 +1042,27 @@ def api_get_backtest(tid: str):
 
 
 @router_v2.get("/api/backtests/{tid}/status")
-def api_backtest_status(tid: str):
+def api_backtest_status(tid: UUID):
     """轻量状态轮询端点，仅返回状态、耗时、简要错误。"""
+    tid = str(tid)
     task = bt_store.load_task(tid)
     if task is None:
         raise HTTPException(status_code=404, detail="Backtest not found")
     return JSONResponse(_sanitize({
         "id": task.get("id"),
         "status": task.get("status"),
+        "created_at": task.get("created_at"),
+        "status_changed_at": task.get("status_changed_at"),
         "started_at": task.get("started_at"),
         "finished_at": task.get("finished_at"),
         "duration_sec": task.get("duration_sec"),
+        "timing": _backtest_timing_view(task),
         "error": task.get("error"),
         "metrics": task.get("metrics"),
+        "data_request_id": task.get("data_request_id"),
+        "waiting_for_data": (
+            (task.get("diagnostics") or {}).get("waiting_for_data")
+        ),
     }))
 
 
@@ -926,6 +1079,10 @@ def api_create_backtest(payload: dict = Body(...)):
     if not universe_raw:
         raise HTTPException(status_code=400, detail="universe 必填")
 
+    try:
+        strategy_id = canonical_uuid(strategy_id, label="strategy_id")
+    except InvalidResourceId as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     strategy = load_strategy(strategy_id)
     if strategy is None:
         raise HTTPException(status_code=404, detail=f"策略不存在: {strategy_id}")
@@ -937,12 +1094,18 @@ def api_create_backtest(payload: dict = Body(...)):
         raise HTTPException(status_code=400, detail=str(e))
 
     # universe 两种形态：
-    #   1) 预设股票池："SP500" / "MAG7"（大写）
-    #   2) 自定义 watchlist："watchlist:<uuid>"
+    #   1) 注册的研究股票池："SP500" / "NASDAQ100" / "MAG7"
+    #   2) 用户目标股票池："watchlist:<uuid>"
     watchlist_snapshot: dict | None = None
     universe_for_task: str
     if universe_raw.lower().startswith("watchlist:"):
-        wid = universe_raw.split(":", 1)[1].strip()
+        try:
+            wid = canonical_uuid(
+                universe_raw.split(":", 1)[1].strip(),
+                label="watchlist_id",
+            )
+        except InvalidResourceId as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         from src.watchlists import load_watchlist
         wl = load_watchlist(wid)
         if wl is None:
@@ -978,12 +1141,18 @@ def api_create_backtest(payload: dict = Body(...)):
     raw_exec = payload.get("execution") or {}
     if raw_exec:
         timing = str(raw_exec.get("timing") or "").lower().strip()
-        if timing and timing not in ("close", "next_open"):
+        if timing and timing != "next_open":
             raise HTTPException(
                 status_code=400,
-                detail=f"execution.timing 非法（必须是 close / next_open）：{timing}",
+                detail="execution.timing 只允许 next_open；同日收盘成交已禁用",
             )
         try:
+            portfolio_value = (
+                float(raw_exec["portfolio_value"])
+                if "portfolio_value" in raw_exec
+                and raw_exec["portfolio_value"] is not None
+                else None
+            )
             slip = (
                 float(raw_exec["slippage_bps"])
                 if "slippage_bps" in raw_exec and raw_exec["slippage_bps"] is not None
@@ -999,11 +1168,27 @@ def api_create_backtest(payload: dict = Body(...)):
                 status_code=400,
                 detail=f"execution 数字解析失败：{e}",
             )
-        if slip is not None and (slip < 0 or slip > 1000):
+        if portfolio_value is not None and (
+            not math.isfinite(portfolio_value)
+            or portfolio_value <= 0
+            or portfolio_value > 1_000_000_000_000
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "portfolio_value 超出合理范围 "
+                    f"(0, 1,000,000,000,000]: {portfolio_value}"
+                ),
+            )
+        if slip is not None and (
+            not math.isfinite(slip) or slip < 0 or slip > 1000
+        ):
             raise HTTPException(
                 status_code=400, detail=f"slippage_bps 超出合理范围 [0, 1000]: {slip}",
             )
-        if comm is not None and (comm < 0 or comm > 1000):
+        if comm is not None and (
+            not math.isfinite(comm) or comm < 0 or comm > 1000
+        ):
             raise HTTPException(
                 status_code=400, detail=f"commission_bps 超出合理范围 [0, 1000]: {comm}",
             )
@@ -1023,6 +1208,7 @@ def api_create_backtest(payload: dict = Body(...)):
             )
         execution = {
             "timing": timing or None,
+            "portfolio_value": portfolio_value,
             "fee_model": fee_model or None,
             "slippage_model": slippage_model or None,
             "slippage_bps": slip,
@@ -1032,6 +1218,14 @@ def api_create_backtest(payload: dict = Body(...)):
         execution = {k: v for k, v in execution.items() if v is not None}
         if not execution:
             execution = None
+
+    try:
+        execution = resolve_execution_config(execution or {})
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"execution 配置非法：{exc}",
+        ) from exc
 
     task = bt_store.create_task(
         strategy=strategy,
@@ -1045,13 +1239,31 @@ def api_create_backtest(payload: dict = Body(...)):
         name=name,
         watchlist_snapshot=watchlist_snapshot,
         execution=execution,
+        research_evidence_snapshot=_strategy_research_snapshot(strategy),
+        target_universe_snapshot=_target_universe_snapshot(
+            universe_for_task,
+            watchlist_snapshot,
+        ),
+        risk_config=_risk_config_snapshot(),
     )
     get_runner().submit(task["id"])
     return JSONResponse(_sanitize(task), status_code=201)
 
 
 @router_v2.delete("/api/backtests/{tid}")
-def api_delete_backtest(tid: str):
+def api_delete_backtest(tid: UUID):
+    tid = str(tid)
+    task = bt_store.load_task(tid)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Backtest not found")
+    if task.get("status") in (
+        bt_store.STATUS_PENDING,
+        bt_store.STATUS_RUNNING,
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="运行中的回测不能删除，请等待任务结束",
+        )
     ok = bt_store.delete_task(tid)
     if not ok:
         raise HTTPException(status_code=404, detail="Backtest not found")
@@ -1059,7 +1271,7 @@ def api_delete_backtest(tid: str):
 
 
 # ===============================================================
-# 模拟盘 Tab（内部 FMP 驱动模拟）
+# 模拟盘（内部 FMP 驱动模拟）
 # ===============================================================
 
 def _format_paper_account_summary(a: dict[str, Any]) -> dict[str, Any]:
@@ -1108,6 +1320,7 @@ def paper_new_page(
     watchlist_id: str | None = Query(None),
 ):
     from src.watchlists import list_watchlists
+    strategies = list_strategies()
     default_exec = {
         "timing": "next_open",
         "fee_model": str(getattr(CONFIG.backtest.execution, "fee_model", "ibkr_us_pro_fixed")),
@@ -1118,7 +1331,8 @@ def paper_new_page(
     }
     return templates.TemplateResponse(request, "paper_new.html", {
         "title": "新建模拟盘",
-        "strategies": list_strategies(),
+        "strategies": strategies,
+        "strategy_research": _strategy_research_map(strategies),
         "universes": _enabled_universes(),
         "watchlists": list_watchlists(),
         "preselect_strategy_id": strategy_id,
@@ -1132,7 +1346,8 @@ def paper_new_page(
 
 
 @router_v2.get("/paper/{aid}", response_class=HTMLResponse)
-def paper_detail_page(request: Request, aid: str):
+def paper_detail_page(request: Request, aid: UUID):
+    aid = str(aid)
     account = load_paper_account(aid)
     if account is None:
         raise HTTPException(status_code=404, detail="Paper account not found")
@@ -1140,6 +1355,7 @@ def paper_detail_page(request: Request, aid: str):
     positions = arts.get("positions", pd.DataFrame())
     orders = arts.get("orders", pd.DataFrame())
     fills = arts.get("fills", pd.DataFrame())
+    cash_events = arts.get("cash_events", pd.DataFrame())
     targets = arts.get("target_weights", pd.DataFrame())
     runs = arts.get("runs", pd.DataFrame())
     equity_curve = arts.get("equity_curve", pd.DataFrame())
@@ -1176,16 +1392,31 @@ def paper_detail_page(request: Request, aid: str):
     return templates.TemplateResponse(request, "paper_detail.html", {
         "title": f"模拟盘 · {account.get('name') or aid[:8]}",
         "account": account,
+        "research_snapshot": account.get("research_evidence_snapshot") or {},
+        "target_snapshot": account.get("target_universe_snapshot") or {},
+        "data_contract": account.get("data_contract") or {},
+        "risk_config": account.get("risk_config") or {},
         "summary": summary,
         "positions": _records_for_table(positions, limit=100),
+        "industry_risk": paper_industry_report(account, positions),
         "open_orders": open_orders,
         "orders": _records_for_table(orders, limit=80),
         "fills": _records_for_table(fills, limit=80),
+        "cash_events": _records_for_table(cash_events, limit=80),
         "targets": _records_for_table(targets, limit=50),
         "runs": _records_for_table(runs, limit=20),
         "equity_fig_json": equity_fig_json,
         "universes": _enabled_universes(),
     })
+
+
+@router_v2.get("/api/paper/accounts/{aid}/industry-risk")
+def api_paper_industry_risk(aid: UUID):
+    account = load_paper_account(str(aid))
+    if account is None:
+        raise HTTPException(status_code=404, detail="Paper account not found")
+    positions = load_account_artifacts(str(aid)).get("positions", pd.DataFrame())
+    return paper_industry_report(account, positions)
 
 
 @router_v2.get("/api/paper/accounts")
@@ -1194,7 +1425,8 @@ def api_list_paper_accounts():
 
 
 @router_v2.get("/api/paper/accounts/{aid}")
-def api_get_paper_account(aid: str):
+def api_get_paper_account(aid: UUID):
+    aid = str(aid)
     account = load_paper_account(aid)
     if account is None:
         raise HTTPException(status_code=404, detail="Paper account not found")
@@ -1210,13 +1442,23 @@ def api_create_paper_account(payload: dict = Body(...)):
         raise HTTPException(status_code=400, detail="strategy_id 必填")
     if not universe_raw:
         raise HTTPException(status_code=400, detail="universe 必填")
+    try:
+        strategy_id = canonical_uuid(strategy_id, label="strategy_id")
+    except InvalidResourceId as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     strategy = load_strategy(strategy_id)
     if strategy is None:
         raise HTTPException(status_code=404, detail=f"策略不存在: {strategy_id}")
 
     watchlist_snapshot: dict[str, Any] | None = None
     if universe_raw.lower().startswith("watchlist:"):
-        wid = universe_raw.split(":", 1)[1].strip()
+        try:
+            wid = canonical_uuid(
+                universe_raw.split(":", 1)[1].strip(),
+                label="watchlist_id",
+            )
+        except InvalidResourceId as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         from src.watchlists import load_watchlist
         wl = load_watchlist(wid)
         if wl is None:
@@ -1244,7 +1486,26 @@ def api_create_paper_account(payload: dict = Body(...)):
             top_group=int(payload.get("top_group") or CONFIG.backtest.n_groups),
             rebalance_mode=str(payload.get("rebalance_mode") or getattr(CONFIG.backtest, "rebalance_mode", "month_end")),
             execution=payload.get("execution") or {},
+            research_evidence_snapshot=_strategy_research_snapshot(strategy),
+            target_universe_snapshot=_target_universe_snapshot(
+                universe,
+                watchlist_snapshot,
+            ),
+            risk_config=_risk_config_snapshot(),
         )
+        if watchlist_snapshot is not None:
+            request = _queue_watchlist_market_data(
+                watchlist_snapshot,
+                consumer_kind="paper_account",
+                consumer_id=str(account["id"]),
+            )
+            account["data_request_id"] = request.request_id
+            account["diagnostics"] = {
+                "waiting_for_data": {
+                    "request_id": request.request_id,
+                    "data_universe": request.data_universe,
+                }
+            }
         create_paper_account(account)
     except (PaperTradingValidationError, FactorLibraryError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -1252,7 +1513,8 @@ def api_create_paper_account(payload: dict = Body(...)):
 
 
 @router_v2.post("/api/paper/accounts/{aid}/run")
-def api_run_paper_account(aid: str, payload: dict | None = Body(None)):
+def api_run_paper_account(aid: UUID, payload: dict | None = Body(None)):
+    aid = str(aid)
     asof = None
     if payload:
         raw_asof = payload.get("asof")
@@ -1261,13 +1523,19 @@ def api_run_paper_account(aid: str, payload: dict | None = Body(None)):
         result = run_account_once(aid, asof=asof)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Paper account not found")
+    except MarketDataNotReadyError as e:
+        raise HTTPException(
+            status_code=409,
+            detail=f"模拟盘正在等待统一行情或因子发布：{e}",
+        ) from e
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=str(e))
     return JSONResponse(_sanitize(result))
 
 
 @router_v2.delete("/api/paper/accounts/{aid}")
-def api_delete_paper_account(aid: str):
+def api_delete_paper_account(aid: UUID):
+    aid = str(aid)
     ok = delete_paper_account(aid)
     if not ok:
         raise HTTPException(status_code=404, detail="Paper account not found")
@@ -1275,297 +1543,7 @@ def api_delete_paper_account(aid: str):
 
 
 # ===============================================================
-# 动量交易 Tab
-# ===============================================================
-
-@router_v2.get("/breakouts", response_class=HTMLResponse)
-def breakouts_page(
-    request: Request,
-    universe: str | None = Query(None),
-    asof: str | None = Query(None),
-    min_return_20d: float = Query(20.0, ge=-99.0, le=1000.0),
-    min_adr_20d: float = Query(6.0, ge=0.0, le=100.0),
-    min_dollar_volume_m: float = Query(10.0, ge=0.0),
-    min_avg_dollar_volume_m: float = Query(10.0, ge=0.0),
-    min_consolidation_days: int = Query(9, ge=1, le=120),
-    max_distance_ma50: float = Query(35.0, ge=0.0, le=300.0),
-    pivot_proximity: float = Query(3.0, ge=0.0, le=100.0),
-    market_symbol: str = Query("QQQ"),
-    view: str = Query("all"),
-):
-    selected_universe = _normalize_momentum_universe(universe)
-    error = None
-    scan = None
-    try:
-        scan = _get_breakout_scan(
-            universe=selected_universe,
-            asof=(asof or "").strip() or None,
-            min_return_20d=min_return_20d,
-            min_adr_20d=min_adr_20d,
-            min_dollar_volume_m=min_dollar_volume_m,
-            min_avg_dollar_volume_m=min_avg_dollar_volume_m,
-            min_consolidation_days=min_consolidation_days,
-            max_distance_ma50=max_distance_ma50,
-            pivot_proximity=pivot_proximity,
-            market_symbol=market_symbol.upper(),
-            view=view,
-        )
-    except Exception as exc:  # noqa: BLE001
-        error = str(exc)
-
-    preset_universes, watchlists = _momentum_universe_options()
-    return templates.TemplateResponse(request, "breakout_list.html", {
-        "title": "动量交易",
-        "scan": scan,
-        "error": error,
-        "preset_universes": preset_universes,
-        "watchlists": watchlists,
-        "selected": {
-            "universe": selected_universe,
-            "asof": asof or "",
-            "min_return_20d": min_return_20d,
-            "min_adr_20d": min_adr_20d,
-            "min_dollar_volume_m": min_dollar_volume_m,
-            "min_avg_dollar_volume_m": min_avg_dollar_volume_m,
-            "min_consolidation_days": min_consolidation_days,
-            "max_distance_ma50": max_distance_ma50,
-            "pivot_proximity": pivot_proximity,
-            "market_symbol": market_symbol.upper() if market_symbol.upper() in {"QQQ", "IWM"} else "QQQ",
-            "view": view if view in {"all", "setup", "ready", "breakout"} else "all",
-        },
-    })
-
-
-@router_v2.get("/api/breakouts/scan")
-def api_breakout_scan(
-    universe: str | None = Query(None),
-    asof: str | None = Query(None),
-    min_return_20d: float = Query(20.0, ge=-99.0, le=1000.0),
-    min_adr_20d: float = Query(6.0, ge=0.0, le=100.0),
-    min_dollar_volume_m: float = Query(10.0, ge=0.0),
-    min_avg_dollar_volume_m: float = Query(10.0, ge=0.0),
-    min_consolidation_days: int = Query(9, ge=1, le=120),
-    max_distance_ma50: float = Query(35.0, ge=0.0, le=300.0),
-    pivot_proximity: float = Query(3.0, ge=0.0, le=100.0),
-    market_symbol: str = Query("QQQ"),
-    view: str = Query("all"),
-):
-    payload = _get_breakout_scan(
-        universe=universe,
-        asof=(asof or "").strip() or None,
-        min_return_20d=min_return_20d,
-        min_adr_20d=min_adr_20d,
-        min_dollar_volume_m=min_dollar_volume_m,
-        min_avg_dollar_volume_m=min_avg_dollar_volume_m,
-        min_consolidation_days=min_consolidation_days,
-        max_distance_ma50=max_distance_ma50,
-        pivot_proximity=pivot_proximity,
-        market_symbol=market_symbol.upper(),
-        view=view,
-    )
-    return JSONResponse(_sanitize(payload))
-
-
-@router_v2.get("/api/breakouts/check/{ticker}")
-def api_breakout_check(
-    ticker: str,
-    universe: str | None = Query(None),
-    asof: str | None = Query(None),
-    min_return_20d: float = Query(20.0, ge=-99.0, le=1000.0),
-    min_adr_20d: float = Query(6.0, ge=0.0, le=100.0),
-    min_dollar_volume_m: float = Query(10.0, ge=0.0),
-    min_avg_dollar_volume_m: float = Query(10.0, ge=0.0),
-):
-    ticker = ticker.upper().strip()
-    context = _breakout_universe_context(universe)
-    if ticker not in set(context["tickers"]):
-        return JSONResponse({
-            "ticker": ticker,
-            "universe": context["universe"],
-            "universe_label": context["label"],
-            "in_universe": False,
-            "has_data": False,
-            "passes_hard_screen": False,
-            "rules": [],
-        })
-
-    target = (
-        pd.Timestamp(asof).normalize()
-        if asof
-        else pd.offsets.BDay().rollback(pd.Timestamp.now().normalize())
-    )
-    frame = load_daily_frame(ticker)
-    if frame.empty or pd.Timestamp(frame.index.max()).normalize() < target:
-        frame, _ = refresh_daily_frame(ticker, end=target)
-    filters = BreakoutFilters(
-        min_return_20d=min_return_20d,
-        min_adr_20d=min_adr_20d,
-        min_dollar_volume=min_dollar_volume_m * 1_000_000,
-        min_avg_dollar_volume=min_avg_dollar_volume_m * 1_000_000,
-    ).normalized()
-    metric = evaluate_daily_setup(
-        frame,
-        ticker=ticker,
-        filters=filters,
-        asof=(asof or "").strip() or None,
-        name=str(context["names"].get(ticker) or ""),
-        sector=str(context["sectors"].get(ticker) or ""),
-    ) if not frame.empty else None
-    if metric is None:
-        return JSONResponse({
-            "ticker": ticker,
-            "name": str(context["names"].get(ticker) or ""),
-            "universe": context["universe"],
-            "universe_label": context["label"],
-            "in_universe": True,
-            "has_data": False,
-            "passes_hard_screen": False,
-            "rules": [],
-        })
-
-    rules = [
-        {
-            "key": "return_20d",
-            "label": "20日涨幅",
-            "actual": metric["return_20d"],
-            "threshold": filters.min_return_20d,
-            "actual_text": f"{metric['return_20d']:.2f}%",
-            "threshold_text": f"≥ {filters.min_return_20d:.1f}%",
-            "passed": metric["base_checks"]["return_20d"],
-        },
-        {
-            "key": "adr_20d",
-            "label": "ADR20",
-            "actual": metric["adr_20d"],
-            "threshold": filters.min_adr_20d,
-            "actual_text": f"{metric['adr_20d']:.2f}%",
-            "threshold_text": f"≥ {filters.min_adr_20d:.1f}%",
-            "passed": metric["base_checks"]["adr_20d"],
-        },
-        {
-            "key": "dollar_volume",
-            "label": "当日成交额",
-            "actual": metric["dollar_volume"] / 1_000_000,
-            "threshold": filters.min_dollar_volume / 1_000_000,
-            "actual_text": f"${metric['dollar_volume'] / 1_000_000:.1f}M",
-            "threshold_text": f"≥ ${filters.min_dollar_volume / 1_000_000:.1f}M",
-            "passed": metric["base_checks"]["dollar_volume"],
-        },
-        {
-            "key": "avg_dollar_volume",
-            "label": "20日均成交额",
-            "actual": metric["avg_dollar_volume_20d"] / 1_000_000,
-            "threshold": filters.min_avg_dollar_volume / 1_000_000,
-            "actual_text": f"${metric['avg_dollar_volume_20d'] / 1_000_000:.1f}M",
-            "threshold_text": f"≥ ${filters.min_avg_dollar_volume / 1_000_000:.1f}M",
-            "passed": metric["base_checks"]["avg_dollar_volume"],
-        },
-    ]
-    return JSONResponse(_sanitize({
-        "ticker": ticker,
-        "name": metric["name"],
-        "sector": metric["sector"],
-        "universe": context["universe"],
-        "universe_label": context["label"],
-        "in_universe": True,
-        "has_data": True,
-        "data_date": metric["data_date"],
-        "passes_hard_screen": metric["base_pass"],
-        "status": metric["status"],
-        "score": metric["score"],
-        "rules": rules,
-    }))
-
-
-@router_v2.get("/breakouts/{ticker}", response_class=HTMLResponse)
-def breakout_detail_page(
-    request: Request,
-    ticker: str,
-    universe: str | None = Query(None),
-    asof: str | None = Query(None),
-):
-    ticker = ticker.upper().strip()
-    context = _breakout_universe_context(universe)
-    frame = load_daily_frame(ticker)
-    if frame.empty:
-        raise HTTPException(status_code=404, detail=f"没有 {ticker} 的日线缓存")
-    if asof:
-        frame = frame.loc[frame.index <= pd.Timestamp(asof)]
-    metric = evaluate_daily_setup(
-        frame,
-        ticker=ticker,
-        filters=BreakoutFilters(),
-        name=str(context["names"].get(ticker) or ""),
-        sector=str(context["sectors"].get(ticker) or ""),
-    )
-    if metric is None:
-        raise HTTPException(status_code=422, detail=f"{ticker} 日线样本不足 65 个交易日")
-
-    check_labels = {
-        "prior_move": ("前期大涨", f"{metric['prior_move']:.1f}% / 目标 ≥30%"),
-        "consolidation": ("整理时间", f"{metric['consolidation_days']} 个交易日 / 目标 ≥9"),
-        "ma50_distance": ("距离 MA50", f"{metric['distance_ma50']:.1f}% / 上限 35%"),
-        "ma_trend": ("均线与支撑", "价格靠近 MA20，MA10/MA20 保持上升结构"),
-        "tight_range": ("波动收缩", f"近3日/ADR 比率 {metric['tightness']:.2f} / 目标 ≤0.55"),
-        "higher_lows": ("低点抬高", f"近5日低点斜率 {metric['higher_low_slope']:.2f}%"),
-        "volume_dryup": ("整理缩量", f"近期/基准量比 {metric['volume_dryup']:.2f} / 目标 ≤0.85"),
-        "near_pivot": ("接近 Pivot", f"距20日 Pivot {metric['pivot_distance']:.1f}% / 目标 ≥-3%"),
-        "stop_within_adr": ("止损宽度", f"当日低点风险 {metric['stop_width']:.1f}% vs ADR {metric['adr_20d']:.1f}%"),
-    }
-    check_rows = [
-        {"key": key, "label": check_labels[key][0], "value": check_labels[key][1], "passed": passed}
-        for key, passed in metric["setup_checks"].items()
-    ]
-    market = load_market_regime(asof=metric["data_date"], symbol="QQQ", fetch_missing=True)
-    daily_fig = _breakout_daily_figure(ticker, frame, metric.get("pivot"))
-    return templates.TemplateResponse(request, "breakout_detail.html", {
-        "title": f"{ticker} · 动量诊断",
-        "ticker": ticker,
-        "universe": context["universe"],
-        "universe_label": context["label"],
-        "metric": metric,
-        "market": market,
-        "check_rows": check_rows,
-        "daily_fig_json": fig_to_json(daily_fig),
-    })
-
-
-@router_v2.get("/api/breakouts/{ticker}/intraday")
-def api_breakout_intraday(
-    ticker: str,
-    interval: int = Query(5),
-    session: str | None = Query(None),
-    refresh: bool = Query(True),
-):
-    if interval not in {1, 5, 15, 30, 60}:
-        raise HTTPException(status_code=400, detail="interval 必须是 1/5/15/30/60")
-    ticker = ticker.upper().strip()
-    frame, source = load_intraday_1min(ticker, refresh=refresh)
-    snapshot = build_intraday_snapshot(frame, interval=interval, session_date=session)
-    snapshot["ticker"] = ticker
-    snapshot["source"] = source
-
-    session_date = snapshot.get("session_date")
-    if session_date:
-        daily, daily_source = refresh_daily_frame(ticker, end=session_date)
-    else:
-        daily, daily_source = load_daily_frame(ticker), "cache"
-    snapshot["daily_source"] = daily_source
-    metric = evaluate_daily_setup(daily, ticker=ticker, filters=BreakoutFilters()) if not daily.empty else None
-    if metric and snapshot.get("last_price") is not None:
-        snapshot["daily_data_date"] = metric["data_date"]
-        snapshot["daily_adr_20d"] = metric["adr_20d"]
-        snapshot["daily_pivot"] = metric["pivot"]
-        snapshot["pivot_triggered"] = snapshot["last_price"] >= metric["pivot"]
-        snapshot["stop_within_adr"] = (
-            snapshot.get("stop_width") is not None
-            and snapshot["stop_width"] <= metric["adr_20d"]
-        )
-    return JSONResponse(_sanitize(snapshot))
-
-
-# ===============================================================
-# Watchlist Tab（自定义股票组）
+# 目标股票池（内部存储类型仍叫 Watchlist）
 # ===============================================================
 
 from src.watchlists import (  # noqa: E402
@@ -1574,16 +1552,74 @@ from src.watchlists import (  # noqa: E402
     create_watchlist,
     delete_watchlist,
     list_watchlists,
+    load_ranking_activity,
     load_watchlist,
     update_watchlist,
 )
 
 
+def _target_universe_rows() -> list[dict[str, Any]]:
+    """Build the Target Universe operational view without changing domain IDs."""
+    catalog = MarketDataCatalog()
+    expected = latest_publishable_xnys_session(
+        delay_minutes=int(getattr(CONFIG.data.foundation, "close_delay_minutes", 120))
+    ).date().isoformat()
+    backtests = bt_store.list_tasks()
+    accounts = list_paper_accounts()
+    rows: list[dict[str, Any]] = []
+    for summary in list_watchlists():
+        wid = str(summary["id"])
+        watchlist = load_watchlist(wid)
+        if watchlist is None:
+            continue
+        snapshot = watchlist.to_dict()
+        data_universe = watchlist_snapshot_data_universe(snapshot)
+        version = catalog.latest_version(data_universe)
+        complete_hashes = bool(
+            version
+            and version.checksum_sha256
+            and version.universe_checksum_sha256
+            and version.membership_checksum_sha256
+            and version.manifest_checksum_sha256
+        )
+        if version is None:
+            data_status = "MISSING"
+        elif not complete_hashes:
+            data_status = "INVALID"
+        elif version.target_session.isoformat() != expected:
+            data_status = "STALE"
+        else:
+            data_status = "PUBLISHED"
+        key = f"watchlist:{wid}"
+        activity = load_ranking_activity(wid) or {}
+        rows.append(
+            {
+                **summary,
+                "universe_type": "TARGET",
+                "data_universe": data_universe,
+                "data_status": data_status,
+                "latest_session": (
+                    version.target_session.isoformat() if version else None
+                ),
+                "dataset_version_id": version.version_id if version else None,
+                "latest_ranking_at": activity.get("ranked_at"),
+                "latest_ranking_date": activity.get("decision_date"),
+                "backtest_count": sum(
+                    1 for task in backtests if task.get("universe") == key
+                ),
+                "paper_count": sum(
+                    1 for account in accounts if account.get("universe") == key
+                ),
+            }
+        )
+    return rows
+
+
 @router_v2.get("/watchlists", response_class=HTMLResponse)
 def watchlists_list_page(request: Request):
-    items = list_watchlists()
+    items = _target_universe_rows()
     return templates.TemplateResponse(request, "watchlist_list.html", {
-        "title": "股票组",
+        "title": "目标股票池",
         "watchlists": items,
     })
 
@@ -1591,19 +1627,20 @@ def watchlists_list_page(request: Request):
 @router_v2.get("/watchlists/new", response_class=HTMLResponse)
 def watchlists_new_page(request: Request):
     return templates.TemplateResponse(request, "watchlist_edit.html", {
-        "title": "新建股票组",
+        "title": "新建目标股票池",
         "mode": "new",
         "watchlist": None,
     })
 
 
 @router_v2.get("/watchlists/{wid}", response_class=HTMLResponse)
-def watchlists_edit_page(request: Request, wid: str):
+def watchlists_edit_page(request: Request, wid: UUID):
+    wid = str(wid)
     wl = load_watchlist(wid)
     if wl is None:
         raise HTTPException(status_code=404, detail="Watchlist not found")
     return templates.TemplateResponse(request, "watchlist_edit.html", {
-        "title": f"编辑股票组 · {wl.name}",
+        "title": f"编辑目标股票池 · {wl.name}",
         "mode": "edit",
         "watchlist": wl.to_dict(),
     })
@@ -1613,15 +1650,20 @@ def watchlists_edit_page(request: Request, wid: str):
 
 @router_v2.get("/api/watchlists")
 def api_list_watchlists():
-    return JSONResponse(_sanitize(list_watchlists()))
+    return JSONResponse(_sanitize(_target_universe_rows()))
 
 
 @router_v2.get("/api/watchlists/{wid}")
-def api_get_watchlist(wid: str):
+def api_get_watchlist(wid: UUID):
+    wid = str(wid)
     wl = load_watchlist(wid)
     if wl is None:
         raise HTTPException(status_code=404, detail="Watchlist not found")
-    return JSONResponse(_sanitize(wl.to_dict()))
+    operational = next(
+        (item for item in _target_universe_rows() if item["id"] == wid),
+        {},
+    )
+    return JSONResponse(_sanitize({**wl.to_dict(), **operational}))
 
 
 def _parse_payload_items(raw_items: Any) -> list[WatchlistItem]:
@@ -1633,9 +1675,10 @@ def _parse_payload_items(raw_items: Any) -> list[WatchlistItem]:
     for raw in raw_items:
         if not isinstance(raw, dict):
             raise HTTPException(status_code=400, detail="items 元素必须是对象")
-        ticker = str(raw.get("ticker") or "").strip().upper()
-        if not ticker:
-            raise HTTPException(status_code=400, detail="存在空 ticker")
+        try:
+            ticker = canonical_ticker(raw.get("ticker"))
+        except InvalidResourceId as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         if ticker in seen:
             raise HTTPException(status_code=400, detail=f"ticker 重复: {ticker}")
         seen.add(ticker)
@@ -1646,10 +1689,10 @@ def _parse_payload_items(raw_items: Any) -> list[WatchlistItem]:
                 status_code=400,
                 detail=f"{ticker} 的权重不是数字: {raw.get('weight')!r}",
             )
-        if weight < 0:
+        if not math.isfinite(weight) or weight < 0:
             raise HTTPException(
                 status_code=400,
-                detail=f"{ticker} 的权重不能为负: {weight}",
+                detail=f"{ticker} 的权重必须是有限非负数: {weight}",
             )
         items.append(WatchlistItem(
             ticker=ticker,
@@ -1681,11 +1724,19 @@ def api_create_watchlist(payload: dict = Body(...)):
         wl = create_watchlist(wl)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return JSONResponse(_sanitize(wl.to_dict()), status_code=201)
+    request = _queue_watchlist_market_data(
+        wl.to_dict(),
+        consumer_kind="watchlist",
+        consumer_id=wl.id,
+    )
+    response = wl.to_dict()
+    response["data_request_id"] = request.request_id
+    return JSONResponse(_sanitize(response), status_code=201)
 
 
 @router_v2.put("/api/watchlists/{wid}")
-def api_update_watchlist(wid: str, payload: dict = Body(...)):
+def api_update_watchlist(wid: UUID, payload: dict = Body(...)):
+    wid = str(wid)
     existing = load_watchlist(wid)
     if existing is None:
         raise HTTPException(status_code=404, detail="Watchlist not found")
@@ -1714,11 +1765,19 @@ def api_update_watchlist(wid: str, payload: dict = Body(...)):
         wl = update_watchlist(wl)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return JSONResponse(_sanitize(wl.to_dict()))
+    request = _queue_watchlist_market_data(
+        wl.to_dict(),
+        consumer_kind="watchlist",
+        consumer_id=wl.id,
+    )
+    response = wl.to_dict()
+    response["data_request_id"] = request.request_id
+    return JSONResponse(_sanitize(response))
 
 
 @router_v2.delete("/api/watchlists/{wid}")
-def api_delete_watchlist(wid: str):
+def api_delete_watchlist(wid: UUID):
+    wid = str(wid)
     ok = delete_watchlist(wid)
     if not ok:
         raise HTTPException(status_code=404, detail="Watchlist not found")

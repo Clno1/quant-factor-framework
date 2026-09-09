@@ -28,6 +28,53 @@
         </div>
     </section>
 
+    {% if outcome_audit.available %}
+    <section class="chart-panel">
+        <div class="panel-title"><span>IC 未来收益审计</span></div>
+        <div class="diag-grid">
+            <div><span>普通完整样本</span><span class="mono">{{ outcome_audit.ordinary_complete }}</span></div>
+            <div><span>事件结算样本</span><span class="mono">{{ outcome_audit.resolved_events }}</span></div>
+            <div><span>右边界未到期</span><span class="mono">{{ outcome_audit.right_edge }}</span></div>
+            <div><span>未解析缺失</span><span class="mono">{{ outcome_audit.unresolved }}</span></div>
+            <div><span>作废截面日期</span><span class="mono">{{ outcome_audit.selectively_censored_dates }}</span></div>
+            <div><span>HAC 滞后阶数</span><span class="mono">{{ outcome_audit.hac_lags }}</span></div>
+        </div>
+    </section>
+    {% if outcome_audit.rows %}
+    <section class="table-panel">
+        <div class="table-title">未来收益异常记录</div>
+        <div class="table-wrap">
+            <table class="data">
+                <thead>
+                    <tr>
+                        <th>决策日</th>
+                        <th>目标日</th>
+                        <th>股票</th>
+                        <th>状态</th>
+                        <th>结算方式</th>
+                        <th>收益</th>
+                        <th>事件原因</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for row in outcome_audit.rows %}
+                    <tr>
+                        <td class="mono">{{ row.decision_date }}</td>
+                        <td class="mono">{{ row.horizon_date }}</td>
+                        <td class="mono">{{ row.ticker }}</td>
+                        <td>{{ row.status }}</td>
+                        <td>{{ row.settlement_method }}</td>
+                        <td class="mono">{{ row.outcome }}</td>
+                        <td>{{ row.event_reason }}</td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    {% endif %}
+    {% endif %}
+
     {% if confidence.available %}
     <section class="cards confidence-cards">
         <div class="card">

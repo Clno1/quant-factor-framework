@@ -3,7 +3,7 @@
 {% block content %}
 <h1 class="page-title">新建模拟盘</h1>
 <div class="page-sub">
-    账户 = 策略 × 股票池 × 初始资金。第一版使用 next_open：今日决策，下一根开盘价成交。
+    账户 = 策略 × 目标股票池 × 初始资金。收盘后形成决策，下一根开盘价成交。
 </div>
 
 {% if not strategies %}
@@ -27,8 +27,13 @@
     </div>
 
     <div class="form-field">
-        <label class="form-label">股票池 <span class="req">*</span></label>
-        <div class="universe-group-title">预设股票池</div>
+        <label class="form-label">研究证据</label>
+        <div id="strategy-research-evidence" class="strategy-evidence-inline"></div>
+    </div>
+
+    <div class="form-field">
+        <label class="form-label">目标股票池 <span class="req">*</span></label>
+        <div class="universe-group-title">研究池预设</div>
         <div class="universe-radio-group">
             {% for u in universes %}
             <label class="universe-radio">
@@ -40,7 +45,7 @@
         </div>
 
         {% if watchlists %}
-        <div class="universe-group-title" style="margin-top: 14px;">自定义股票池</div>
+        <div class="universe-group-title" style="margin-top: 14px;">用户目标股票池</div>
         <div class="universe-radio-group">
             {% for w in watchlists %}
             <label class="universe-radio{% if w.item_count < 5 %} warn-small{% endif %}">
@@ -56,7 +61,7 @@
         </div>
         {% else %}
         <div class="form-hint" style="margin-top: 8px;">
-            还没有自定义股票池，<a href="/watchlists/new">点这里创建一个</a>。
+            还没有用户目标股票池，<a href="/watchlists/new">点这里创建一个</a>。
         </div>
         {% endif %}
     </div>
@@ -134,6 +139,12 @@
 </div>
 
 <script>
+const strategyResearchEvidence = {{ strategy_research|tojson }};
+</script>
+<script src="/static/js/strategy_evidence.js?v={{ asset_ver }}"></script>
+<script>
+initStrategyEvidence('strategy-select', 'strategy-research-evidence', strategyResearchEvidence);
+
 async function submitPaper() {
     const btn = document.getElementById('submit-btn');
     const msg = document.getElementById('submit-msg');
@@ -153,7 +164,7 @@ async function submitPaper() {
     const min_order_value = parseFloat(document.getElementById('min-order-value').value);
 
     if (!strategy_id) { msg.textContent = '请选择策略'; msg.className = 'submit-msg err'; return; }
-    if (!universe)    { msg.textContent = '请选择股票池'; msg.className = 'submit-msg err'; return; }
+    if (!universe)    { msg.textContent = '请选择目标股票池'; msg.className = 'submit-msg err'; return; }
     if (!Number.isFinite(initial_cash) || initial_cash <= 0) {
         msg.textContent = '初始资金必须大于 0'; msg.className = 'submit-msg err'; return;
     }

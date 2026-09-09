@@ -1,0 +1,1864 @@
+--- a/configs/security_master_corrections.yaml
++++ b/configs/security_master_corrections.yaml
+@@ -70,6 +70,64 @@
+       - "https://www.sec.gov/Archives/edgar/data/1907223/000121390026028158/ea0281637-8k_greenland.htm"
+
+ reviewed_symbol_transitions:
++  - id: ugro_to_flzh_name_and_symbol_change
++    effective_date: "2026-06-16"
++    old_ticker: UGRO
++    new_ticker: FLZH
++    old_profile:
++      name_contains: "urban-gro"
++      asset_type: STOCK
++      exchange: NASDAQ
++      cik: "0001706524"
++      isin: US91704K3014
++      cusip: 91704K301
++      listing_date: "2019-11-14"
++      is_active: false
++    new_profile:
++      name_contains: "Flash Sports & Media"
++      asset_type: STOCK
++      exchange: OTC
++      cik: "0001706524"
++      isin: US91704K3014
++      cusip: 91704K301
++      listing_date: "2021-02-11"
++      is_active: true
++    provider_lifecycle:
++      inactive_on_or_after: "2026-08-26"
++      delisted_exchange: OTC
++      delisted_name_contains: "Flash Sports & Media"
++    reason: "SEC filings establish the urban-gro corporate name change and show FLZH as the registered common-stock trading symbol from 2026-06-16; FMP retained the issue identifiers but omitted the symbol-change event. The exact exchange values bind the provider's target-session state and do not rewrite historical exchange membership."
++    sources:
++      - "https://www.sec.gov/Archives/edgar/data/1706524/000121390026068776/ea0294769-8k_flash.htm"
++      - "https://www.sec.gov/Archives/edgar/data/1706524/000121390026069290/ea0295000-8k_flash.htm"
++
++  - id: svii_to_nucl_business_combination
++    effective_date: "2026-02-25"
++    old_ticker: SVII
++    new_ticker: NUCL
++    old_profile:
++      name_contains: "Spring Valley Acquisition"
++      asset_type: STOCK
++      exchange: NASDAQ
++      cik: "0002089283"
++      isin: US2697101093
++      cusip: 269710109
++      listing_date: "2022-10-28"
++      is_active: false
++    new_profile:
++      name_contains: "Eagle Nuclear Energy"
++      asset_type: STOCK
++      exchange: NASDAQ
++      cik: "0002089283"
++      isin: US2697101093
++      cusip: 269710109
++      listing_date: "2026-02-25"
++      is_active: true
++    reason: "The business combination closed on 2026-02-24 and SEC-filed primary evidence states that the combined company's common stock began Nasdaq trading as NUCL on 2026-02-25; FMP omitted the symbol-change event and reported the SVII delisting on the same inclusive boundary date."
++    sources:
++      - "https://www.sec.gov/Archives/edgar/data/2089283/000110465926022330/tm267670d1_ex99-6.htm"
++      - "https://www.sec.gov/Archives/edgar/data/2089283/000135445726000211/0001354457-26-000211-index.htm"
++
+   - id: viaca_to_paraa_name_change
+     effective_date: "2022-02-17"
+     old_ticker: VIACA
+--- a/deploy/systemd/quant-intraday-candidate-prepare-root.service
++++ b/deploy/systemd/quant-intraday-candidate-prepare-root.service
+@@ -1,5 +1,5 @@
+ [Unit]
+-Description=Prepare the daily broad-universe intraday momentum candidate snapshot
++Description=Prepare the daily broad-universe intraday and cup-handle candidate snapshot
+ Wants=network-online.target
+ After=network-online.target quant-us-equity-coverage.service quant-group-analytics-eod.service
+ StartLimitIntervalSec=4h
+@@ -20,7 +20,7 @@
+ ExecStartPre=/home/projects/quant/.venv/bin/python -c "import exchange_calendars, sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
+ ExecStart=/home/projects/quant/.venv/bin/python /home/projects/quant/scripts/run_intraday_momentum_monitor.py --env-file /etc/quant/intraday-momentum-monitor.env --prepare-candidates
+ TimeoutStartSec=1h
+-MemoryHigh=500M
++MemoryHigh=620M
+ MemoryMax=700M
+ MemorySwapMax=0
+ CPUQuota=100%
+--- a/deploy/systemd/quant-intraday-candidate-prepare.service
++++ b/deploy/systemd/quant-intraday-candidate-prepare.service
+@@ -1,5 +1,5 @@
+ [Unit]
+-Description=Prepare the daily broad-universe intraday momentum candidate snapshot
++Description=Prepare the daily broad-universe intraday and cup-handle candidate snapshot
+ Wants=network-online.target
+ After=network-online.target quant-us-equity-coverage.service quant-group-analytics-eod.service
+ StartLimitIntervalSec=4h
+@@ -19,7 +19,7 @@
+ ExecStartPre=/opt/quant/.venv/bin/python -c "import exchange_calendars, sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
+ ExecStart=/opt/quant/.venv/bin/python /opt/quant/scripts/run_intraday_momentum_monitor.py --env-file /etc/quant/intraday-momentum-monitor.env --prepare-candidates
+ TimeoutStartSec=1h
+-MemoryHigh=500M
++MemoryHigh=620M
+ MemoryMax=700M
+ MemorySwapMax=0
+ CPUQuota=100%
+--- a/docs/cup_handle_monitoring.md
++++ b/docs/cup_handle_monitoring.md
+@@ -256,3 +256,144 @@
+ 95%，缺口股票比例不超过 5%；缺口过多时分别产生
+ `INSUFFICIENT_EVALUABLE_TICKER_COVERAGE` 和 `EXCESSIVE_MINUTE_DATA_GAPS`，因此错误去重不会
+ 降低质量门槛。发送开关继续保持 false。
++
++## 15. 2026-09-02 v2 首个运行日前的上游恢复
++
++`daily-cup-5m-handle-shadow-v2` 当前仍为 `0/5`，不是已经失败 0 次，也不是沿用 v1 的
++2026-08-31 失败结果。2026-09-01 没有产生 v2 完整日结，原因是候选准备依赖的全美宽基数据链在
++Security Master 身份门禁处 fail closed；缺少真实候选快照时不得启动或补记盘中观察。
++
++上游根因是 FMP 没有提供 `UGRO -> FLZH` 和 `SVII -> NUCL` 的可靠换码历史，同时当前证券资料把
++后继代码标为 OTC。系统已根据 SEC 文件增加精确纠正规则，并修复 PIT 交易所口径：历史日期使用
++当时生效 ticker 的交易所，而不是用当前后继 ticker 的 OTC 状态覆盖整段历史。该修复不会让 OTC
++阶段进入 `US_LIQUID_5M`，也不会猜测缺失的身份关系。
++
++2026-09-01 的正式上游版本已恢复到 Security Master
++`b99fc58963604831b9534af9600e75f2`、coverage
++`a8c3814e7fd444e9b5f0a12cb047aa7f` 和 PIT
++`bbe1288de3684cc3ab6849954cbd9507`。八因子正在从认证 checkpoint 重建；候选准备必须在其自己的
++资源窗口内完成，盘中监控仍按 21:20 SGT 启动。只有完整收盘后的 v2 日结同时满足周期覆盖、实际
++评估、错误率、P95、序列上限、可评估覆盖率和缺口比例，才可记为第一个通过日。发送继续保持
++`delivery_enabled=false`。
++
++18:30 SGT 的 v2 候选准备已按时触发并于 18:57:10 成功完成。快照 session 为 2026-09-02、
++source 为 2026-09-01，精确绑定 coverage `a8c3814e7fd444e9b5f0a12cb047aa7f` 和 bars index
++SHA-256 `3364b06f795790e2a93182461d70f5739b5af47e6382ede96b3a6f9e296b3b5f`；日线评估
++2,848 只、合格 1,314 只、冻结 600 只。候选计算耗时 1,606.824 秒，systemd 峰值 604.5 MiB、
++swap 0。原 `MemoryHigh=500M` 触发持续 cgroup reclaim，运行中仅把软高水位临时提高到 620 MiB，
++`MemoryMax=700M` 和禁用 swap 未变；完成后已恢复 500 MiB。该候选成功只满足盘前输入门槛，不能
++代替盘中评估或收盘后的 session PASS。
++
++## 16. 2026-09-02 盘中前最终交接
++
++20:28 SGT 核查时，`quant-intraday-momentum-monitor.service` 尚未运行，timer 明确等待 21:20
++SGT；这属于盘前正常等待。2026-09-02 候选快照已成功冻结 600 只，v2 算法和参数版本已写入快照，
++发送配置仍为 false。状态接口继续展示 v1 的 2026-08-31 FAIL，是因为 v2 尚无完整日结，不能用
++“等待下一次运行”覆盖最后失败证据。
++
++上游八因子虽然完成计算，publication 因暖机窗口 off-by-one 被严格拒绝。该问题不影响今天已经
++冻结的候选和今晚分钟监控；修复后的八因子重建安排在 2026-09-03 04:20 SGT，即盘中服务正常收盘
++日结之后。若今晚服务没有实际产生 `daily-cup-5m-handle-shadow-v2` 的 cycles、evaluations、
++data_gaps 和 session observation，则 2026-09-02 仍不得计数。
++
++明日验收必须报告 v2 的候选、命中、拒绝、等待、不可评估、错误、唯一缺口分类、可评估覆盖率、
++缺口比例、P95 和最大 bar 数。满足全部门槛才记为 1/5；无信号仍不能表述为 0% 误报。
++
++## 17. 2026-09-03 v2 首个完整交易日通过
++
++`daily-cup-5m-handle-shadow-v2` 的 2026-09-02 完整日结为 PASS，因此独立观察正式记为 `1/5`，
++还需要 4 个不同且连续运行的完整 XNYS 交易日。候选快照绑定 coverage
++`a8c3814e7fd444e9b5f0a12cb047aa7f`、PIT `US_LIQUID_5M` 版本
++`bbe1288de3684cc3ab6849954cbd9507`，并保存 membership、eligibility、Security Master 与 manifest
++哈希。日线阶段评估 2,848 只、合格 1,314 只、冻结 600 只；盘中记录 71/78 个五分钟周期，
++周期覆盖率 91.03%。
++
++盘中共评估 2,840 次：命中 0、拒绝 2,242、等待 548、不可评估 50、错误 0。可评估证券为
++56/58，即 96.55%，超过 95% 门槛；缺口证券为 2/58，即 3.45%，低于 5% 门槛；检测 P95 为
++0.595 ms，最大序列 77 根，也分别满足 250 ms 和 96 根门槛。前八原因是
++`HANDLE_TOO_SHALLOW=1961`、`INSUFFICIENT_COMPLETED_5M_BARS=319`、`STALE_QUOTE=196`、
++`HANDLE_VOLUME_NOT_CONTRACTING=156`、`RIM_NOT_BROKEN=125`、
++`UNRESOLVED_5M_SOURCE_GAP=50`、`NO_COMPLETED_5M_BARS=32`、
++`STALE_COMPLETED_5M_BAR=1`。
++
++`cup_handle_data_gaps` 保存 15 个唯一缺口：UAN 有 5 个 `NO_TRADE_CONFIRMED` 和 9 个
++`UNRESOLVED_SOURCE_GAP`，AD 有 1 个 `UNRESOLVED_SOURCE_GAP`；
++`PROVIDER_GAP_CONFIRMED=0`。同一缺口后续只更新观察次数，没有重复制造错误，也没有补造 OHLCV。
++
++状态命令与运维适配器此前使用 `previous_xnys_sessions()`，在纽约午夜前会错误排除已经收盘并完成
++日结的当前交易日，因此新加坡上午曾显示 `0/5`。现已统一改用“XNYS 收盘加 5 分钟后即视为完整”
++的 `completed_xnys_sessions()`；SG 定向测试 2 项通过，CLI 与运维快照均已显示 `1/5`。部署前备份：
++
++```text
++/home/projects/quant-backups/cup-shadow-completed-session-20260903T115615CST
++```
++
++同一服务中的 legacy 动量日结在 2026-09-02 因 70 个错误周期判定 FAIL，所以运维任务总卡片仍可能
++显示 DEGRADED；这不改变茶杯柄 v2 的 PASS 和 `1/5`。两条观察不能混合计数。发送继续保持关闭。
++MDB 回放仍为 v1、110 根完整五分钟 bar、0 信号且误报代理为 null，不能解释为 0% 误报。
++
++## 18. 2026-09-04 v2 第二个完整交易日通过
++
++`daily-cup-5m-handle-shadow-v2` 的 2026-09-03 日结为 PASS，独立观察为 `2/5`，还需 3 个通过日。
++日线候选快照绑定 coverage `fc81ee7a559b4509a74576791633c3ba`、PIT
++`1750d58d3160438093f03a0360f692c9`、Security Master
++`5748aeacb53142f4ade15038f0b98ba2` 及 membership、eligibility、manifest 哈希。日线评估 2,848 只，
++合格 1,329 只，冻结 600 只。
++
++盘中记录 71/78 个五分钟周期，共评估 2,840 次：命中 1、拒绝 2,356、等待 476、不可评估 7、
++错误 0。可评估覆盖率为 53/54，即 98.15%；缺口证券比例为 1/54，即 1.85%；P95 为
++0.583 ms，最大序列 77 根。两个唯一缺口都来自 CQP，分类均为
++`UNRESOLVED_SOURCE_GAP`；没有伪造或前向填充 OHLCV。前八拒绝原因为
++`HANDLE_TOO_SHALLOW=2075`、`INSUFFICIENT_COMPLETED_5M_BARS=349`、
++`HANDLE_VOLUME_NOT_CONTRACTING=148`、`RIM_NOT_BROKEN=132`、`STALE_QUOTE=123`、
++`UNRESOLVED_5M_SOURCE_GAP=7`、`NO_COMPLETED_5M_BARS=3`、
++`BREAKOUT_ALREADY_OCCURRED=1`。
++
++CTNM 在 15:10 ET 的完整五分钟 bar 形成首个 v2 shadow 命中，信号和 outbox 均保存为
++`SHADOW`，没有向 Discord 发送。现有 MDB 回放仍是 v1、0 信号、误报代理 null；CTNM 尚未形成
++已完成的后续结果，因此也不能声称误报率为 0%。
++
++18:30 SGT 候选服务本次在 1 小时后超时，峰值 558.1 MiB、CPU 41 分 13 秒、swap 0。它受
++`MemoryHigh=500M` 持续回收影响，未在盘前窗口保存快照；盘中服务随后以更高内存额度重建快照，
++导致只覆盖 71/78 个五分钟周期。虽然本日仍满足所有严格门槛并可计数，但候选准备 SLA 已失败，
++下一个交易日前应优化构建内存或调整受控资源窗口，不能依赖盘中回退。
++
++已把候选服务的持久 `MemoryHigh` 从 500 MiB 提高到经过 2026-09-02 生产验证的 620 MiB；
++`MemoryMax=700M`、单核、禁用 swap 和 1 小时超时保持不变。该调整只减少软高水位回收，不放宽
++算法或数据门槛；2026-09-04 18:30 SGT 的下一次候选运行用于验证 SLA 是否恢复。
++
++## 19. 2026-09-05 上游阻断与 v2 观察进度
++
++`daily-cup-5m-handle-shadow-v2` 当前仍只有 2026-09-02、2026-09-03 两个 PASS，进度为 `2/5`，
++剩余 3 个通过日。2026-09-04 不是“检测后失败”，而是没有形成候选快照、盘中评估或完整日结，
++因此不得计数，也不得把全零指标解释为零信号。直接原因是正式 `US_EQUITY_COVERAGE` 停在
++2026-09-02；候选服务于 18:30 SGT fail closed，盘中服务从 21:20 起重试四次后触发 start limit，
++错误均为“coverage 过期，期望 2026-09-03”。
++
++共享上游停滞的根因位于 Security Master。FMP 在两份独立冻结源中都把 FLZH 从活跃改为不活跃，
++同时继续提供 `UGRO -> FLZH` 换码、完全一致的 CUSIP/ISIN，以及 FLZH 于 2026-08-26 从 OTC
++退市的记录。原纠正规则只允许换码后的活跃基线，因此正确地拒绝了未审阅的生命周期变化。修复没有
++允许任意 `is_active` 漂移，而是要求目标日在 2026-08-26 之后时同时精确匹配 ticker、退市日、
++OTC 和公司名，缺少任一冻结证据仍报错。
++
++同一冻结源两次候选构建均 PASS，五张 Parquet 的 SHA-256 逐表完全一致；第二份独立冻结源也 PASS，
++活跃普通股数量同为 5,350。FLZH 审计明确保存 `inactive_on_or_after=2026-08-26`、
++`delisted_exchange=OTC`、供应商公司名和 `provider_status=INACTIVE`。SG 定向测试 96 项通过，完整
++回归 `655 passed`。部署前备份位于：
++
++```text
++/home/projects/quant-backups/flzh-lifecycle-20260905T004551CST
++```
++
++修复后的日更已于 2026-09-05 11:31 SGT 运行并在 11:40:43 成功完成。正式 Security Master 为
++`3ea8a269a67a4797be8bfcbfb2d7ae78`，coverage 已推进到 2026-09-04 版本
++`2f31ea50b7484e038ca977b252679f43`，PIT 为 `25cec81b68304b3a85e7829b31313567`，全历史日线
++覆盖门禁通过。八因子后续链正在从认证 checkpoint 重建，核查时为 483/648；这证明共享上游已经恢复，
++但不会补造 2026-09-04 的茶杯柄观察。候选和盘中 timer、watchdog、运维 Web 均为 enabled/active，
++发送继续保持 `delivery_enabled=false`。
++
++最近两个有效 v2 日的汇总不变：2026-09-02 为 2,840 次评估、0 命中、2,242 拒绝、548 等待、
++50 不可评估、0 错误；2026-09-03 为 2,840 次评估、1 命中、2,356 拒绝、476 等待、7 不可评估、
++0 错误。唯一缺口分类合计为 `NO_TRADE_CONFIRMED=5`、`UNRESOLVED_SOURCE_GAP=12`、
++`PROVIDER_GAP_CONFIRMED=0`。MDB 回放仍为 v1、0 信号且误报代理为 null；CTNM 后续结果尚未成熟，
++不能表述为 0% 误报。
+--- a/docs/operations_observability.md
++++ b/docs/operations_observability.md
+@@ -662,3 +662,107 @@
+ FAIL；适配器现在持续生成 `CUP_HANDLE_SHADOW_SESSION_FAILED` WARNING，并让任务保持 DEGRADED。
+ 详情页的“证据交易日”明确说明计数来自哪一天，避免把尚未开始的新交易日显示成全零并误解为没有
+ 日志。后续同算法版本完整日 PASS 后，watchdog 才可以按指纹自动解决该事件。
++
++## 30. 2026-09-02 上游阻断与恢复状态语义
++
++茶杯柄候选依赖 Security Master、coverage 和 PIT。任一上游 fail closed 时，运维站必须显示
++`UPSTREAM_DATA_BLOCKED` 或等价的明确原因，不能把“没有候选快照”显示成茶杯柄算法 FAIL，也不能
++生成全零 session 记录。2026-09-01 的 v2 正属于缺少完整运行，因此观察仍为 `0/5`。
++
++FMP 身份漂移修复后，运维证据应公开 Security Master generation/manifest、coverage version、
++PIT version、显式 rebase 审计和完整 child hash 结论。当前恢复链绑定
++`b99fc58963604831b9534af9600e75f2` / `a8c3814e7fd444e9b5f0a12cb047aa7f` /
++`bbe1288de3684cc3ab6849954cbd9507`。普通日更发现同 target 绑定变化仍必须报错；只有人工审阅后的
++显式 rebase 可继续，避免页面“最新”掩盖父版本变化。
++
++资源监控还必须区分进程 RSS、脚本 `ru_maxrss` 与 systemd cgroup `MemoryPeak`。PIT 本次分别记录
++约 732.5 MiB 和 215.7 MiB，两者计量范围不同，不能只挑较小值展示。因子重建与候选准备重叠时，
++运维事件需记录受控停止、checkpoint 进度、恢复时间和候选 SLA；这种主动让路不应记为数据失败，
++但候选若错过截止时间仍必须按 SLA 判为失败。
++
++2026-09-02 的实际交接证明该状态模型生效：八因子在 `287/648` 受控暂停时，未完成 readiness 被
++临时屏蔽；候选卡片随后以 `SUCCESS` 记录 18:30:22 至 18:57:10 的真实运行、600 只候选、source
++2026-09-01 和 coverage `a8c3814e7fd444e9b5f0a12cb047aa7f`。候选峰值 604.5 MiB、swap 0，
++`MemoryHigh` 的临时 620 MiB 调整及恢复必须与硬上限 700 MiB 分开记录。
++
++盘中监控卡片仍为 DEGRADED，因为最近完整茶杯柄证据仍是 v1 的 2026-08-31 FAIL；开放 incident
++`CUP_HANDLE_SHADOW_SESSION_FAILED` 继续存在。今天候选成功没有解决该 incident，也没有新增 v2
++PASS。只有 2026-09-02 完整收盘后产生的 v2 session 结论才可改变观察进度。
++
++## 31. 2026-09-02 因子暖机失败的可观测性口径
++
++八因子进程“完成 648/648 分片”和“正式 publication 成功”是两层不同状态。本次计算层完成，但
++发布层因五个因子最新覆盖率为 0 而 FAIL；运维站必须显示 `PUBLICATION_GATE_REJECTED`、失败因子、
++latest warm-up eligible count、raw/clean coverage 和失败 generation，不能只显示 100% 进度。
++
++根因修复将输入方法从 V2 升为 `BROAD_FACTOR_INPUT_V3_EXACT_WARMUP_XNYS`。运维记录需同时展示
++输入指纹方法和 history start；若 checkpoint 方法不一致，应显示“不可恢复，创建新代次”，而不是
++卡在 648/648 或从旧分片继续。失败代次必须保留，新的 648 分片重算是合同变化的正常成本。
++
++2026-09-03 04:20 SGT 的一次性 timer 已作为独立任务证据注册。其成功标准是：触发器成功、正式
++因子服务新建 V3 generation、八因子全部 latest coverage 通过、publication 完成、readiness 只剩
++既有 PIT 行业历史 blocker。只看到 trigger service 退出 0 不代表重建完成。
++
++SG 完整测试还暴露 AppleDouble 元数据污染：`._*.py` 会让 AST 隔离测试发生 UTF-8 解码错误。
++这应归类为 `DEPLOYMENT_ARTIFACT_CONTAMINATION`，与因子回归失败分开；文件已备份隔离，正式 tests
++目录随后 651 项全部通过。后续从 macOS 部署必须排除 AppleDouble/xattr 伴生文件。
++
++## 32. 2026-09-03 茶杯柄完整交易日计数口径
++
++茶杯柄 v2 的 2026-09-02 日结为 PASS，真实进度是 `1/5`。旧状态命令按纽约“日期”调用
++`previous_xnys_sessions()`，即使当日已经收盘并完成日结，也会一直排除当天直到纽约午夜；这导致
++新加坡 04:05 至 12:00 左右出现最多约 8 小时的进度滞后。修复后 CLI 与 watchdog 共用
++`completed_xnys_sessions()`：只有 XNYS 收盘加 5 分钟后才纳入当天，盘中不提前计数，收盘后也不再
++等待午夜。
++
++当前运维快照公开的茶杯柄证据为：`1/5`、最近完整日 2026-09-02 PASS、命中 0、拒绝 2,242、
++等待 548、不可评估 50、错误 0、可评估覆盖率 96.55%、缺口证券比例 3.45%、P95 0.595 ms、
++最大 77 根。15 个唯一缺口按 `NO_TRADE_CONFIRMED=5`、`UNRESOLVED_SOURCE_GAP=10`、
++`PROVIDER_GAP_CONFIRMED=0` 展示，不将重复观察当作新事件。
++
++同一 systemd 服务仍保留 legacy 动量循环，其 2026-09-02 日结因 70 个错误周期为 FAIL，因而任务
++总卡片目前为 DEGRADED。页面和事故解释必须明确：这是 legacy 子流程失败，茶杯柄 v2 本身已经
++PASS；legacy 记录不得阻止或补充茶杯柄 `1/5` 计数。后续可将两个子流程拆成独立任务状态，但在拆分
++前至少要同时展示两套结论，不能只显示总卡片颜色。
++
++## 33. 2026-09-04 茶杯柄第二日与候选 SLA 告警
++
++2026-09-03 的 v2 茶杯柄日结 PASS，进度为 `2/5`。运维证据包括 71/78 周期、2,840 次评估、
++命中 1、拒绝 2,356、等待 476、不可评估 7、错误 0、可评估覆盖率 98.15%、缺口股票比例
++1.85%、P95 0.583 ms、最大 77 根。两个唯一缺口均来自 CQP，分类为
++`UNRESOLVED_SOURCE_GAP`。CTNM 命中只进入 SHADOW outbox，发送仍关闭。
++
++同一交易日的候选准备服务应单独显示 SLA 失败：服务在 1 小时超时，峰值 558.1 MiB、CPU
++41 分 13 秒、swap 0；快照改由盘中服务重建，造成 7 个五分钟周期未被观察。页面不能因为最终
++茶杯柄 PASS 就隐藏盘前候选超时，也不能把盘中回退当作正常候选生产。建议新增候选生成阶段耗时、
++`memory.events.high` 增量、快照生成时间与开盘时间差、是否由盘中服务回退构建四项指标。
++
++MDB 回放仍为 v1 的零信号样本，`false_positive_rate_proxy=null`；生产 shadow 虽已出现 CTNM
++首个命中，但尚无成熟结果，仍不得显示 0% 误报。
++
++候选 unit 的持久软高水位已从 500 MiB 调整为 620 MiB，硬上限仍为 700 MiB。watchdog 应把下一次
++18:30 SGT 的完成时间、峰值内存与快照生成时间作为修复验收；单纯 timer 触发或盘中回退成功不算
++候选 SLA 恢复。
++
++## 34. 2026-09-05 上游缺跑必须与零信号分离
++
++2026-09-04 没有 v2 `cup_handle_cycles`、`cup_handle_evaluations`、
++`cup_handle_session_observations` 或 `cup_handle_data_gaps`。这四张表的全零不是“执行后没有命中”，
++而是正式 coverage 过期导致候选和盘中任务都 fail closed。页面必须显示上游阻断或任务未运行，
++不得生成全零 PASS/FAIL 日结，也不得把该日计入 `2/5`。
++
++当前运维快照把 `intraday_candidate_prepare` 与 `intraday_momentum` 标为 STALE，并保留三个
++`CRITICAL OPEN` 事故：候选 systemd 失败、盘中 systemd 失败和心跳中断。后续 timer 的 SCHEDULED
++状态不能清除 2026-09-04 的证据；只有修复后的上游发布成功、候选成功且新的完整交易日日结形成后，
++才可按事故指纹解决。运维页面还应把准确依赖链展示为 Security Master -> coverage -> PIT/候选 ->
++盘中评估，而不是把上游身份门禁误报成茶杯柄算法错误。
++
++本次 Security Master 修复的可观测合同新增 `provider_lifecycle` 审计，记录精确退市日、交易所、
++公司名和 INACTIVE 状态。两次同源构建五张 Parquet 哈希一致，第二冻结源也通过；这组证据与
++`655 passed` 回归结果必须和正式发布状态分开显示。2026-09-05 11:31 SGT 日更已经 SUCCESS，
++coverage/PIT 推进到 2026-09-04；后续八因子仍处于 483/648 的 RUNNING，运维站不能把父数据成功
++等同于整个后续链完成，也不能据此补写缺失的 2026-09-04 茶杯柄日结。
++
++茶杯柄最近有效证据仍是 2026-09-03 PASS：54 只候选、2,840 次评估、1 命中、2,356 拒绝、
++476 等待、7 不可评估、0 错误，P95 0.583 ms、最大 77 根。MDB 报告仍是 v1 的 0 信号，
++`false_positive_rate_proxy=null`；零信号与 0% 误报必须继续分开。
+--- a/docs/sg_operations_overview.md
++++ b/docs/sg_operations_overview.md
+@@ -937,3 +937,138 @@
+ DEGRADED，并产生 `CUP_HANDLE_SHADOW_SESSION_FAILED` 事件；只有后续同算法版本的完整日 PASS
+ 才解除。详情页新增证据交易日、最近完整日结论、不可评估数、可评估覆盖率、缺口股票数与比例、唯一
+ 缺口事件和缺口分类。
++
++## 33. 2026-09-02 FMP 身份漂移与宽基上游恢复
++
++2026-09-01 的茶杯柄 v2 没有运行，直接原因不是分钟检测器，而是候选准备所依赖的宽基生产链在
++Security Master 门禁处停止。FMP 当前资料把同一经济身份暴露为 `UGRO`/`FLZH`，但没有给出可供
++程序自动证明的完整换码事件；类似问题此前还出现在 `SVII`/`NUCL`。系统没有用 ticker 相似度或
++listing fallback 猜测历史，而是依据 SEC 8-K 增加精确、带生效日的纠正规则。
++
++修复同时纠正了 PIT 交易所语义：`UGRO` 在 2026-06-15 前按历史 Nasdaq 状态参与资格判断，
++`FLZH` 从 2026-06-16 起保持 OTC 并被主交易所门槛排除。两次使用同一冻结 FMP 源构建的五张
++Parquet 表哈希完全一致，正式 Security Master generation 为
++`b99fc58963604831b9534af9600e75f2`，manifest SHA-256 为
++`545875e2b0e591295103221a11a0b33c34e29db00512937367388c2285aa652a`。
++
++同 target 已有 coverage 绑定旧主表时，生产脚本现在要求显式
++`--force-security-master-rebase`，并把 rebase 事实写入审计；普通日更仍然 fail closed。显式重绑完成
++后正式 coverage 为 `a8c3814e7fd444e9b5f0a12cb047aa7f`，10,447,745 行、7,976 只证券、
++93 个分片，完整 child hash 验证通过；systemd 峰值 687.4 MiB、无 swap。随后全量 PIT 发布为
++`bbe1288de3684cc3ab6849954cbd9507`，当前成员 2,849，membership 226,095 行，历史日线覆盖门禁
++通过；脚本 `ru_maxrss` 为 732.5 MiB，cgroup 峰值为 215.7 MiB，两种统计口径均保留。
++
++八因子 generation `2db3832266ed462cb6d47a49777a6b4c` 正从认证 checkpoint 构建 648 个
++factor-month 分片。由于 SG 只有约 2 GiB 内存且无 swap，18:30 候选准备和因子重建不得无监控地
++并行争抢资源；必要时先停止因子服务，候选完成后从 checkpoint 恢复。茶杯柄 v2 仍为 `0/5`，
++2026-09-01 缺少完整运行不得计数，发送保持关闭。
++
++生产备份位于：
++
++```text
++/home/projects/quant-backups/ugro-flzh-pit-exchange-20260902T1230CST
++```
++
++旧 coverage/PIT/factor generation、原始 staging 和身份审计不得删除或改写。
++
++18:24 SGT 为避免 2 GiB、无 swap 的机器同时运行八因子和候选准备，八因子在认证 checkpoint
++`287/648` 处受控停止；readiness 被临时 runtime mask，因而没有把人工停止误报成正式完成。
++18:30 候选服务准时启动，18:57:10 成功生成 session 2026-09-02 的 600 只候选，绑定 source
++2026-09-01 和 coverage `a8c3814e7fd444e9b5f0a12cb047aa7f`。日线杯体评估 2,848 只，合格
++1,314 只；耗时 1,606.824 秒、峰值 604.5 MiB、swap 0。
++
++候选运行时确认软高水位 500 MiB 触发大量 `memory.events.high` 并进入 cgroup 回收节流。仅将本次
++runtime `MemoryHigh` 临时提高到 620 MiB，保留 700 MiB 硬上限、单核和 swap 禁用；完成后已恢复
++500 MiB。19:00 SGT readiness mask 已解除，八因子从 `287/648` 继续，后续发布、readiness 和
++shadow 仍由原 OnSuccess 链执行。
++
++## 34. 2026-09-02 八因子发布拒绝与凌晨重建
++
++恢复后的八因子任务完成了 648/648 个分片，但 publication gate 正确拒绝发布：9 月月初单交易日
++分片中，四个动量因子和 REVERSAL 的暖机资格为 0，另三个因子正常。根因是 XNYS
++`sessions_window` 包含锚定输出日，旧 `-N` 调用实际只加载 N-1 个历史交易日。这不是 FMP、PIT、
++磁盘或内存故障，也不能通过降低 latest coverage 门槛解决。
++
++修复已把合同升级到 `BROAD_FACTOR_INPUT_V3_EXACT_WARMUP_XNYS`，旧失败 generation
++`2db3832266ed462cb6d47a49777a6b4c` 保留为审计证据。SG 定向回归 53 passed，完整正式测试目录
++651 passed。第一次完整测试失败的原因是 9 个 macOS AppleDouble 元数据文件被隔离测试误当源码；
++文件已移入备份目录而非删除，重新运行后无业务失败。
++
++一次性 `quant-broad-factor-warmup-rebuild-trigger.timer` 已安装、启用并通过
++`systemd-analyze verify`，触发时间为 2026-09-03 04:20 SGT。它只 reset failed 并启动现有
++`quant-broad-factor-data.service`，不会绕过服务原有资源、flock、publication 或 readiness 合同。
++该时间位于茶杯柄收盘日结之后、次日核心行情任务之前。若茶杯柄监控异常延迟，必须优先检查资源并
++停止重建触发，禁止两项重任务并行。
++
++截至 20:33 SGT，2026-09-02 茶杯柄 v2 候选已就绪，盘中服务仍等待 21:20 SGT；观察保持 0/5，
++发送保持关闭。候选成功不能替代完整盘中日结。
++
++## 35. 2026-09-03 茶杯柄 v2 首日生产验收
++
++2026-09-02 茶杯柄 v2 完整日结通过，独立 shadow 为 `1/5`，剩余 4 个通过日。候选服务 exit 0，
++耗时 1,606.824 秒、峰值 604.5 MiB、swap 0；盘中服务 exit 0，运行约 6 小时 45 分，峰值
++143.2 MiB、swap 0。候选绑定 coverage `a8c3814e7fd444e9b5f0a12cb047aa7f` 和 PIT
++`bbe1288de3684cc3ab6849954cbd9507` 的完整哈希合同。
++
++盘中 2,840 次评估包含拒绝 2,242、等待 548、不可评估 50、命中 0、错误 0；71/78 周期、
++96.55% 可评估覆盖率、3.45% 缺口证券比例、0.595 ms P95 和 77 根最大序列均通过门槛。唯一缺口
++事件共 15 个，只涉及 AD 与 UAN：`NO_TRADE_CONFIRMED=5`、
++`UNRESOLVED_SOURCE_GAP=10`、`PROVIDER_GAP_CONFIRMED=0`。
++
++修复了新加坡上午的 shadow 进度少算一天问题：完整交易日现在按 XNYS 收盘加 5 分钟判断，不再等
++纽约午夜。SG 备份为 `/home/projects/quant-backups/cup-shadow-completed-session-20260903T115615CST`，
++两个定向测试通过，CLI 和运维快照均显示 `1/5`。候选、盘中、watchdog 和运维 Web timer/service
++均健康；茶杯柄发送仍为 false。
++
++运维任务总卡片当前仍为 DEGRADED，是 legacy 动量同日 70 个错误周期导致，不是茶杯柄 v2 失败。
++茶杯柄 PASS 台账与 legacy 动量 FAIL 台账必须继续分开解释和计数。MDB 回放仍为 0 信号且误报代理
++为 null。
++
++## 36. 2026-09-04 茶杯柄 v2 第二日与候选 SLA
++
++2026-09-03 茶杯柄 v2 完整日结通过，独立 shadow 为 `2/5`，剩余 3 个通过日。正式候选绑定
++coverage `fc81ee7a559b4509a74576791633c3ba`、PIT
++`1750d58d3160438093f03a0360f692c9`、Security Master
++`5748aeacb53142f4ade15038f0b98ba2` 和完整文件哈希。盘中 71/78 周期、2,840 次评估、1 次命中、
++2,356 次拒绝、476 次等待、7 次不可评估、0 错误；可评估覆盖率 98.15%、缺口股票比例 1.85%、
++P95 0.583 ms、最大 77 根均通过。CQP 的两个唯一缺口均为 `UNRESOLVED_SOURCE_GAP`。
++
++首个 v2 命中为 CTNM，outbox 状态保持 `SHADOW`，发送开关仍为 false。MDB 历史回放仍为 0 信号、
++误报代理 null；CTNM 的后续误报代理尚未成熟。
++
++候选准备服务出现独立运维故障：18:30 SGT 启动后在 19:30 被 `TimeoutStartSec=1h` 终止，峰值
++558.1 MiB、CPU 41 分 13 秒、swap 0。500 MiB 软高水位造成持续内存回收，快照实际由 21:20
++启动的盘中服务重建并于约 21:31 完成，因而茶杯柄只记录到 71/78 周期。盘中服务 exit 0，峰值
++768 MiB、swap 0；watchdog 和运维 Web 健康。该日业务门槛通过不等于候选 SLA 正常，下次运行前
++需消除盘前构建超时，且不能降低茶杯柄数据质量门槛。
++
++持久 unit 已将候选服务 `MemoryHigh` 调整为 620 MiB，保留 700 MiB 硬上限、单核、无 swap 和
++1 小时超时；这是复用 2026-09-02 已成功完成候选构建的资源口径。下一次 18:30 SGT 运行必须
++重新核对完成时间、`memory.events.high` 增量、峰值和候选快照生成时间，失败时不得由盘中回退掩盖。
++
++## 37. 2026-09-05 FLZH 生命周期门禁与茶杯柄缺跑
++
++2026-09-04 宽基日更连续两次在 Security Master 阶段失败，正式 coverage 因而停在
++2026-09-02 版本 `fc81ee7a559b4509a74576791633c3ba`。这不是内存或网络问题：资源预检为 PASS，
++宽基服务失败前峰值 556.6 MiB、无 swap；准确错误是
++`ugro_to_flzh_name_and_symbol_change: FLZH provider is_active drifted`。随后 18:30 候选准备和
++21:20 盘中监控都因 coverage 过期而 fail closed，2026-09-04 没有茶杯柄候选、评估或日结，不能
++计入 v2 shadow。当前通过日仍为 2026-09-02、2026-09-03，即 `2/5`。
++
++两份不可变 FMP 冻结源都证明这是稳定的供应商生命周期变化：FLZH 与 UGRO 继续共享 CUSIP/ISIN，
++换码日仍为 2026-06-16，但 FLZH 当前 profile 为 INACTIVE，退市表精确记录其于 2026-08-26 从
++OTC 退市。配置和构建器现只在 ticker、日期、交易所及公司名四项证据全部匹配时接受 inactive；
++不是把 `is_active` 改成任意布尔值，也没有降低身份覆盖、PIT 或普通股门槛。
++
++部署前备份为 `/home/projects/quant-backups/flzh-lifecycle-20260905T004551CST`。同一失败冻结源重建
++两次均 PASS，五张候选 Parquet 逐表哈希完全一致；第二份独立冻结源也 PASS，活跃普通股均为
++5,350。Security Master 定向测试 14 项、下游宽基与 Web 82 项、SG 完整回归 655 项全部通过。
++修复后的 `quant-us-equity-coverage.timer` 已于 2026-09-05 11:31 SGT 触发并成功完成全链日更。
++Security Master `3ea8a269a67a4797be8bfcbfb2d7ae78`、coverage
++`2f31ea50b7484e038ca977b252679f43` 和 PIT `25cec81b68304b3a85e7829b31313567` 均绑定
++2026-09-04；全链耗时 544.825 秒，systemd 峰值 701.9 MiB、无 swap。八因子 OnSuccess 后续链随后
++从认证 checkpoint 继续，核查时进度为 483/648、cgroup 约 700 MiB、无 swap。
++
++相关 timer 均为 enabled/active，资源检查有约 1,200 MiB 可用内存和 35.9 GiB 可用磁盘。
++watchdog 与运维 Web 正常；2026-09-04 缺跑仍不得补记。茶杯柄发送为 false，下一可计数的完整
++XNYS 交易日必须重新满足 v2 全部质量门槛。
+--- a/docs/us_broad_factor_research_implementation.md
++++ b/docs/us_broad_factor_research_implementation.md
+@@ -979,3 +979,79 @@
+
+ 本地完整回归为 `586 passed`；SG 宽基与运维定向回归为 `28 passed`。宽基数据链保持 target
+ `2026-08-27`、连续 shadow `6/5`，本次消费者性能修复没有改写 publication 或历史观察台账。
++
++## 25. 2026-09-02 身份漂移纠正与同日显式重绑
++
++FMP 冻结源缺少 `UGRO -> FLZH` 与 `SVII -> NUCL` 的可靠换码历史，并把后继证券资料呈现为 OTC。
++生产继续 fail closed，没有按 ticker、名称或上市地猜测身份。SEC 证据确认后，精确纠正规则写入
++`configs/security_master_corrections.yaml`；两次使用相同冻结源构建均为 PASS，五张 Parquet 表
++哈希完全一致。正式 Security Master generation 为
++`b99fc58963604831b9534af9600e75f2`，manifest SHA-256 为
++`545875e2b0e591295103221a11a0b33c34e29db00512937367388c2285aa652a`。
++
++PIT 资格判断不再用当前 ticker 的交易所回填整段历史，而是读取查询日生效 symbol interval 的
++交易所。由此 `UGRO` 的历史 Nasdaq 区间可以参与研究，`FLZH` 的 OTC 区间仍被严格排除；研究范围
++没有扩展到 OTC。
++
++同一个 target session 的 coverage 已绑定旧主表时，新增显式
++`--force-security-master-rebase` 修复入口。该入口只允许真实主表绑定发生变化的同日重建，并把
++rebase、身份差异、父版本和输入哈希写入审计；普通流程仍拒绝静默复用。首次运行还暴露并修复了空
++历史 frame 与新数据 concat 时的日期 dtype 不一致，失败运行没有发布任何版本。
++
++最终 coverage `a8c3814e7fd444e9b5f0a12cb047aa7f` 含 10,447,745 行、7,976 只证券、
++93 个分片，target 覆盖率 99.4951%，完整 child hash 验证通过。全量 PIT
++`bbe1288de3684cc3ab6849954cbd9507` 含 226,095 条 membership、92 个快照、5,558 个历史成员和
++2,849 个当前成员；`historical_pit_daily_bar_coverage` 通过。membership SHA-256 为
++`9fad1f5794f8333a3b10e87399b296c3ff54099b70ac94ac064993074fd6b78c`，eligibility SHA-256 为
++`8e369a667823d9d613fca8a990e177ab7053c4531e7223ae9d671468c3ae9ae0`。
++
++八因子使用 generation `2db3832266ed462cb6d47a49777a6b4c` 从认证 checkpoint 重建 648 个
++factor-month 分片。正式发布前不得把运行中状态写成完成；readiness 仍只允许既有的
++`PIT_CLASSIFICATION_POLICY` 与 `PIT_INDUSTRY_COVERAGE` 预期阻断，任何新增 blocker 都必须停止。
++
++## 26. 2026-09-02 因子暖机窗口 off-by-one 修复
++
++generation `2db3832266ed462cb6d47a49777a6b4c` 实际完成了 648/648 个计算分片，但发布门禁拒绝
++了结果。2026-09 只有一个输出交易日时，MOM_1M、MOM_3M、MOM_6M、MOM_12M 和 REVERSAL
++的最新 raw/clean 覆盖率均为 0%；VOL_20D、VOL_60D 和 TURNOVER 为 100%。失败代次及其
++checkpoint 保留在 `.staging_2db3832266ed462cb6d47a49777a6b4c`，不得删除、改写或标记成功。
++
++根因不是 coverage 缺数，而是 `exchange_calendars.sessions_window()` 会把锚定输出日计入返回
++窗口。旧代码请求 `-N` 时只得到 `N-1` 个输出日前交易日，精确动量和反转公式因此永远少一个价格
++观察；宽松 80% 暖机的波动率及只需要 N 个成交量观察的 TURNOVER 没有暴露该问题。修复后统一加载
++“N 个输出日前交易日 + 输出日”，并把输入指纹合同升级为
++`BROAD_FACTOR_INPUT_V3_EXACT_WARMUP_XNYS`。V2 checkpoint 和 V2 publication 均不能被新任务
++复用，因此 648 个分片必须重新计算。
++
++本地因子测试为 9 passed，SG 定向回归为 53 passed，SG 正式 `tests/` 完整回归为 651 passed。
++完整回归还发现 9 个 macOS AppleDouble `._*.py` 元数据文件污染源码扫描；它们已原样移动到
++`/home/projects/quant-backups/appledouble-quarantine-20260902T203127CST`，没有删除内容。
++代码部署备份为 `/home/projects/quant-backups/factor-exact-warmup-20260902T202847CST`。
++
++为避免与 21:20 SGT 至收盘后的茶杯柄盘中监控争抢 2 GiB 内存，修正后的正式重建没有立即启动。
++一次性 persistent timer 已通过 `systemd-analyze verify`，将在 2026-09-03 04:20 SGT 触发现有
++`quant-broad-factor-data.service`。服务继续使用单线程 BLAS、700 MiB soft high、900 MiB hard max、
++flock 和原 OnSuccess readiness 链；成功前不得手工发布或绕过覆盖率门禁。
++
++## 27. 2026-09-05 FMP 退市状态漂移的严格处理
++
++2026-09-03 目标日的两次宽基日更都在 Security Master 阶段 fail closed。FMP 不再把 FLZH 标记为
++活跃，同时仍返回 `UGRO -> FLZH`、一致的 CUSIP/ISIN，以及 FLZH 在 2026-08-26 从 OTC 退市的
++记录。旧规则只描述换码后的活跃 profile，因此把这次变化识别为未审阅漂移是正确行为；错误不能通过
++删除规则、接受任意 active 状态或复用旧 Security Master 解决。
++
++纠正规则现增加有界 `provider_lifecycle`：仅当目标日不早于 2026-08-26，且同一不可变 provider
++source 中存在 FLZH、精确退市日、OTC、公司名四项完全匹配的退市记录时，才把预期 profile 改为
++INACTIVE。早于该日期仍要求活跃基线，缺字段、多行、名称、交易所或日期漂移均继续失败。SEC 换码
++证据、供应商 CUSIP/ISIN 和原始冻结源都被保留，未猜测历史或降低 100% 身份门槛。
++
++生产前验证使用 2026-09-03 的真实失败冻结源。同源两次构建均为 PASS，五张 Parquet 的 SHA-256
++逐表一致；第二份独立冻结源也 PASS，两组活跃普通股数量均为 5,350。部署备份为
++`/home/projects/quant-backups/flzh-lifecycle-20260905T004551CST`，SG 完整回归为 `655 passed`。
++2026-09-05 11:31 SGT 正常日更已完成正式恢复验收。目标 2026-09-04 的 Security Master 为
++`3ea8a269a67a4797be8bfcbfb2d7ae78`，manifest SHA-256 为
++`1d9b99dfab9ed398f8e67ddb3ff25cf43f4d3c107f182e0b95ff4d4226744e36`；coverage
++`2f31ea50b7484e038ca977b252679f43` 含 10,467,468 行、7,986 只证券，PIT
++`25cec81b68304b3a85e7829b31313567` 含 225,982 条 membership、当前成员 2,848，并通过全历史日线
++覆盖门禁。全链耗时 544.825 秒、systemd 峰值 701.9 MiB、无 swap。八因子随后从认证 checkpoint
++重建，核查时为 483/648；八因子发布完成前仍不能把整个后续链标为 SUCCESS。
+--- a/scripts/build_security_master.py
++++ b/scripts/build_security_master.py
+@@ -193,6 +193,39 @@
+             ):
+                 raise ValueError(
+                     f"{correction_id}: {side}.name_contains is required"
++                )
++        lifecycle = item.get("provider_lifecycle")
++        if lifecycle is not None:
++            required = {
++                "inactive_on_or_after",
++                "delisted_exchange",
++                "delisted_name_contains",
++            }
++            if not isinstance(lifecycle, dict) or required - set(lifecycle):
++                raise ValueError(
++                    f"{correction_id}: provider_lifecycle must bind an exact "
++                    "provider delisting record"
++                )
++            inactive_on_or_after = pd.to_datetime(
++                lifecycle["inactive_on_or_after"], errors="coerce"
++            )
++            if pd.isna(inactive_on_or_after) or inactive_on_or_after <= effective:
++                raise ValueError(
++                    f"{correction_id}: provider_lifecycle date must be after "
++                    "the symbol transition"
++                )
++            if item["new_profile"].get("is_active") is not True:
++                raise ValueError(
++                    f"{correction_id}: provider_lifecycle requires an active "
++                    "new_profile baseline"
++                )
++            if not all(
++                str(lifecycle[field]).strip()
++                for field in ("delisted_exchange", "delisted_name_contains")
++            ):
++                raise ValueError(
++                    f"{correction_id}: provider_lifecycle evidence fields "
++                    "cannot be empty"
+                 )
+         identifiers.add(correction_id)
+         pairs.add((old_ticker, new_ticker))
+@@ -461,8 +494,10 @@
+     registry: dict[str, Any],
+     *,
+     target_session: pd.Timestamp,
++    delisted: pd.DataFrame | None = None,
+ ) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
+     """Add only exact, reviewed symbol transitions omitted by the provider."""
++    target_session = pd.Timestamp(target_session).normalize()
+     corrected = changes.copy()
+     audit: list[dict[str, Any]] = []
+     for item in registry.get("reviewed_symbol_transitions") or []:
+@@ -485,10 +520,67 @@
+             expectation=dict(item["old_profile"]),
+             correction_id=correction_id,
+         )
++        new_expectation = dict(item["new_profile"])
++        lifecycle_audit: dict[str, Any] | None = None
++        lifecycle = item.get("provider_lifecycle")
++        if lifecycle is not None:
++            inactive_on_or_after = pd.Timestamp(
++                lifecycle["inactive_on_or_after"]
++            ).normalize()
++            if target_session >= inactive_on_or_after:
++                if delisted is None or delisted.empty:
++                    raise ValueError(
++                        f"{correction_id}: provider delisting evidence is required"
++                    )
++                required_columns = {
++                    "ticker", "name", "exchange", "delisted_date",
++                }
++                if missing := required_columns - set(delisted.columns):
++                    raise ValueError(
++                        f"{correction_id}: provider delisting evidence is "
++                        f"missing columns {sorted(missing)}"
++                    )
++                ticker_rows = delisted.loc[
++                    delisted["ticker"].fillna("").astype(str).str.upper().eq(
++                        new_ticker
++                    )
++                ].copy()
++                dates = pd.to_datetime(
++                    ticker_rows["delisted_date"], errors="coerce"
++                ).dt.normalize()
++                exact = ticker_rows.loc[dates.eq(inactive_on_or_after)].copy()
++                expected_exchange = _profile_value(
++                    lifecycle["delisted_exchange"]
++                ).upper()
++                expected_name = _profile_value(
++                    lifecycle["delisted_name_contains"]
++                ).upper()
++                exact = exact.loc[
++                    exact["exchange"].fillna("").astype(str).str.upper().eq(
++                        expected_exchange
++                    )
++                    & exact["name"].fillna("").astype(str).str.upper().str.contains(
++                        expected_name,
++                        regex=False,
++                    )
++                ]
++                if len(exact) != 1:
++                    raise ValueError(
++                        f"{correction_id}: exact provider delisting record drifted"
++                    )
++                new_expectation["is_active"] = False
++                lifecycle_audit = {
++                    "inactive_on_or_after": (
++                        inactive_on_or_after.date().isoformat()
++                    ),
++                    "delisted_exchange": expected_exchange,
++                    "delisted_name": _profile_value(exact.iloc[0].get("name")),
++                    "provider_status": "INACTIVE",
++                }
+         new_row = _verify_reviewed_profile(
+             profiles,
+             ticker=new_ticker,
+-            expectation=dict(item["new_profile"]),
++            expectation=new_expectation,
+             correction_id=correction_id,
+         )
+         shared_keys = [
+@@ -535,6 +627,7 @@
+             "old_ticker": old_ticker,
+             "new_ticker": new_ticker,
+             "shared_keys": shared_keys,
++            "provider_lifecycle": lifecycle_audit,
+             "reason": str(item["reason"]),
+             "sources": [str(source) for source in item["sources"]],
+         })
+@@ -654,6 +747,7 @@
+     *,
+     history_start: pd.Timestamp,
+     target_session: pd.Timestamp,
++    reviewed_transition_tickers: set[str] | None = None,
+ ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
+     """Limit global FMP directories to the approved US-equity V1 scope."""
+     profiles = profiles.copy()
+@@ -672,7 +766,14 @@
+             history_start, target_session
+         )
+     ].copy()
++    reviewed_tickers = {
++        str(value).strip().upper()
++        for value in (reviewed_transition_tickers or set())
++    }
+     main_exchange = profiles["exchange"].isin({"NASDAQ", "NYSE", "AMEX"})
++    admitted_exchange = main_exchange | profiles["ticker"].isin(
++        reviewed_tickers
++    )
+     event_tickers = set(scoped_changes["old_ticker"].astype(str)) | set(
+         scoped_changes["new_ticker"].astype(str)
+     )
+@@ -687,7 +788,8 @@
+         | profiles["ticker"].isin(delisted_tickers)
+     )
+     scoped_profiles = profiles.loc[
+-        main_exchange & ((asset_allowed & (active | historical)) | benchmark)
++        admitted_exchange
++        & ((asset_allowed & (active | historical)) | benchmark)
+     ].copy()
+
+     # Keep only symbol-change ancestry that can be reached from a retained
+@@ -973,7 +1075,16 @@
+         changes,
+         correction_registry,
+         target_session=target_session,
+-    )
++        delisted=delisted,
++    )
++    reviewed_symbol_continuity = {
++        (
++            str(item["old_ticker"]).upper(),
++            str(item["new_ticker"]).upper(),
++            pd.Timestamp(item["effective_date"]).normalize(),
++        )
++        for item in correction_audit
++    }
+     (
+         reviewed_identity_continuity,
+         identifier_conflict_audit,
+@@ -989,6 +1100,11 @@
+         delisted,
+         history_start=history_start,
+         target_session=target_session,
++        reviewed_transition_tickers={
++            ticker
++            for old_ticker, new_ticker, _event_date in reviewed_symbol_continuity
++            for ticker in (old_ticker, new_ticker)
++        },
+     )
+     gc.collect()
+     source_duration = time.perf_counter() - source_started
+@@ -1009,7 +1125,9 @@
+             settings.minimum_classification_coverage
+         ),
+         research_history_policy=history_policy_registry,
+-        reviewed_identity_continuity=reviewed_identity_continuity,
++        reviewed_identity_continuity=(
++            reviewed_identity_continuity | reviewed_symbol_continuity
++        ),
+     )
+     build_duration = time.perf_counter() - build_started
+     if source_failures:
+--- a/scripts/run_intraday_momentum_monitor.py
++++ b/scripts/run_intraday_momentum_monitor.py
+@@ -18,7 +18,7 @@
+ from src.alerts.discord import DiscordNotifier  # noqa: E402
+ from src.breakouts.live.service import IntradayMomentumMonitor  # noqa: E402
+ from src.breakouts.live.cup_handle import CUP_HANDLE_ALGORITHM_VERSION  # noqa: E402
+-from src.breakouts.live.session import previous_xnys_sessions  # noqa: E402
++from src.breakouts.live.session import completed_xnys_sessions  # noqa: E402
+ from src.breakouts.live.settings import IntradayMonitorSettings  # noqa: E402
+ from src.breakouts.live.state import IntradayMonitorState  # noqa: E402
+ from src.utils.env import load_local_env  # noqa: E402
+@@ -60,14 +60,14 @@
+         load_local_env()
+     settings = IntradayMonitorSettings.load()
+     state = IntradayMonitorState(settings.state_path)
+-    reference_date = datetime.now(ZoneInfo(settings.timezone)).strftime("%Y-%m-%d")
+-    expected_sessions = previous_xnys_sessions(
+-        reference_date,
++    now = datetime.now(ZoneInfo(settings.timezone))
++    expected_sessions = completed_xnys_sessions(
++        now,
+         settings.required_shadow_sessions,
+     )
+     promotion = state.promotion_status(expected_sessions)
+-    cup_expected_sessions = previous_xnys_sessions(
+-        reference_date,
++    cup_expected_sessions = completed_xnys_sessions(
++        now,
+         settings.cup_required_shadow_sessions,
+     )
+     cup_promotion = state.cup_handle_promotion_status(
+--- a/scripts/update_us_equity_coverage.py
++++ b/scripts/update_us_equity_coverage.py
+@@ -83,6 +83,15 @@
+     parser.add_argument(
+         "--output-dir", default="data/lake/staging/us_equity_coverage_incremental"
+     )
++    parser.add_argument(
++        "--force-security-master-rebase",
++        action="store_true",
++        help=(
++            "explicitly rebuild a same-session coverage publication after a "
++            "reviewed Security Master replacement; normal validation remains "
++            "mandatory"
++        ),
++    )
+     parser.add_argument("--publish", action="store_true")
+     parser.add_argument("--json", action="store_true")
+     return parser.parse_args(argv)
+@@ -417,6 +426,51 @@
+     return _sessions(parent + pd.Timedelta(days=1), requested)
+
+
++def _refresh_sessions_for_binding(
++    *,
++    parent_target: str | pd.Timestamp,
++    target: str | pd.Timestamp,
++    binding_changed: bool,
++    force_security_master_rebase: bool,
++) -> pd.DatetimeIndex:
++    """Resolve refresh sessions, including a reviewed same-session repair."""
++    parent = pd.Timestamp(parent_target).normalize()
++    requested = pd.Timestamp(target).normalize()
++    if parent > requested:
++        raise DataFoundationError(
++            "target session predates the published coverage version"
++        )
++    if parent < requested:
++        return _sessions_after_parent(parent, requested)
++    if not binding_changed:
++        return pd.DatetimeIndex([])
++    if not force_security_master_rebase:
++        raise DataFoundationError(
++            "same-session coverage is bound to a different Security Master; "
++            "run with --force-security-master-rebase after reviewed repair "
++            "validation"
++        )
++    return _sessions(requested, requested)
++
++
++def _combine_normalized_sources(
++    history_source: pd.DataFrame,
++    recent_source: pd.DataFrame,
++) -> pd.DataFrame:
++    """Combine optional history with EOD rows without degrading date dtype."""
++    combined = pd.concat(
++        [history_source, recent_source],
++        ignore_index=True,
++    )
++    dates = pd.to_datetime(combined["date"], errors="coerce")
++    if dates.isna().any():
++        raise DataFoundationError(
++            "coverage source contains missing or invalid dates"
++        )
++    combined["date"] = dates.dt.normalize()
++    return combined
++
++
+ def _parent_partition_paths(
+     parent: object,
+     *,
+@@ -546,8 +600,6 @@
+         require_price_semantics=True,
+     )
+     parent_target = pd.Timestamp(parent.target_session).normalize()
+-    if parent_target > target:
+-        raise DataFoundationError("target session predates the published coverage version")
+     if int(args.overlap_calendar_days) < 1:
+         raise ValueError("overlap-calendar-days must be positive")
+     target_sessions = _sessions(target, target)
+@@ -564,25 +616,29 @@
+         raise DataFoundationError(
+             "target session exceeds the published Security Master generation"
+         )
+-    if parent_target == target:
+-        if (
+-            parent_manifest.get("security_master_generation_id")
+-            != security_generation.generation_id
+-            or parent_manifest.get("security_master_manifest_sha256")
+-            != security_generation.manifest_sha256
+-        ):
+-            raise DataFoundationError(
+-                "same-session coverage is bound to a different Security Master; "
+-                "run an explicit repair instead of silently reusing it"
+-            )
++    security_master_rebase = (
++        parent_manifest.get("security_master_generation_id")
++        != security_generation.generation_id
++        or parent_manifest.get("security_master_manifest_sha256")
++        != security_generation.manifest_sha256
++    )
++    refresh_sessions = _refresh_sessions_for_binding(
++        parent_target=parent_target,
++        target=target,
++        binding_changed=security_master_rebase,
++        force_security_master_rebase=bool(
++            getattr(args, "force_security_master_rebase", False)
++        ),
++    )
++    same_session_rebase = parent_target == target and security_master_rebase
++    if refresh_sessions.empty:
+         return {
+             "status": "NOOP",
+             "target_session": target.date().isoformat(),
+             "parent_dataset_version_id": parent.version_id,
+             "message": "coverage is already published for the target session",
+         }, 0
+-    new_sessions = _sessions_after_parent(parent_target, target)
+-    if new_sessions.empty or new_sessions[-1] != target:
++    if refresh_sessions.empty or refresh_sessions[-1] != target:
+         raise DataFoundationError(
+             "no complete XNYS sessions exist after the parent coverage version"
+         )
+@@ -656,12 +712,6 @@
+         history_start=str(settings.history_start),
+         history_end=history_delta_end,
+     )
+-    security_master_rebase = (
+-        parent_manifest.get("security_master_generation_id")
+-        != security_generation.generation_id
+-        or parent_manifest.get("security_master_manifest_sha256")
+-        != security_generation.manifest_sha256
+-    )
+     identity_delta_audit = {
+         "schema_version": 1,
+         "parent_dataset_version_id": parent.version_id,
+@@ -670,6 +720,7 @@
+         ),
+         "security_master_generation_id": security_generation.generation_id,
+         "security_master_rebase": security_master_rebase,
++        "explicit_same_session_rebase": same_session_rebase,
+         "identity_delta_security_ids": identity_delta_ids,
+         "identity_delta_security_count": len(identity_delta_ids),
+         "history_delta_end": history_delta_end.date().isoformat(),
+@@ -751,8 +802,9 @@
+         if not history_delta.empty
+         else pd.DataFrame(columns=recent_source.columns)
+     )
+-    mapped_source = pd.concat(
+-        [history_source, recent_source], ignore_index=True
++    mapped_source = _combine_normalized_sources(
++        history_source,
++        recent_source,
+     )
+     duplicate_source = mapped_source.loc[
+         mapped_source.duplicated(["date", "security_id"], keep=False)
+@@ -838,6 +890,7 @@
+         ),
+         "security_master_rebase": security_master_rebase,
+         "price_scale_reconciliation": adjustment_audit,
++        "explicit_same_session_rebase": same_session_rebase,
+         "identity_delta_security_count": len(identity_delta_ids),
+         "identity_delta_security_ids": identity_delta_ids,
+         "identity_delta_history_rows": len(history_delta),
+@@ -1006,6 +1059,8 @@
+                     "changed_security_count": len(changed_scales),
+                     "audit": adjustment_audit,
+                 },
++                "security_master_rebase": security_master_rebase,
++                "explicit_same_session_rebase": same_session_rebase,
+                 "source_row_count": len(mapped_source),
+                 "accepted_row_count": len(mapped),
+                 "quarantined_row_count": len(quarantine),
+--- a/src/breakouts/live/session.py
++++ b/src/breakouts/live/session.py
+@@ -2,7 +2,7 @@
+ from __future__ import annotations
+
+ from dataclasses import dataclass
+-from datetime import datetime
++from datetime import datetime, timedelta
+ from typing import Any
+ from zoneinfo import ZoneInfo
+
+@@ -97,8 +97,57 @@
+     return normalized
+
+
++def completed_xnys_sessions(
++    as_of: datetime,
++    count: int,
++    *,
++    finalization_delay_minutes: int = 5,
++    timezone: str = "America/New_York",
++    calendar: Any | None = None,
++) -> list[str]:
++    """Return the latest fully closed XNYS sessions, including today when final."""
++    if count < 1:
++        return []
++    if as_of.tzinfo is None:
++        raise ValueError("as_of must be timezone-aware")
++
++    local = as_of.astimezone(ZoneInfo(timezone))
++    session_date = local.date().isoformat()
++    label = pd.Timestamp(session_date).normalize()
++    exchange = _exchange_calendar(calendar)
++    if bool(exchange.is_session(label)):
++        schedule = xnys_session_schedule(
++            session_date,
++            timezone=timezone,
++            calendar=exchange,
++        )
++        finalized_at = schedule.closes_at + timedelta(
++            minutes=max(0, int(finalization_delay_minutes))
++        )
++        latest = (
++            label
++            if local >= finalized_at
++            else pd.Timestamp(exchange.previous_session(label))
++        )
++    else:
++        latest = pd.Timestamp(
++            exchange.date_to_session(label, direction="previous")
++        )
++
++    sessions = [latest]
++    while len(sessions) < count:
++        sessions.append(pd.Timestamp(exchange.previous_session(sessions[-1])))
++    normalized = []
++    for value in reversed(sessions):
++        if value.tzinfo is not None:
++            value = value.tz_localize(None)
++        normalized.append(value.normalize().strftime("%Y-%m-%d"))
++    return normalized
++
++
+ __all__ = [
+     "XnysSessionSchedule",
++    "completed_xnys_sessions",
+     "expected_source_session",
+     "previous_xnys_sessions",
+     "xnys_session_schedule",
+--- a/src/data/derived_universe.py
++++ b/src/data/derived_universe.py
+@@ -193,6 +193,9 @@
+     out["ticker"] = (
+         out["ticker"].astype(str).str.upper().str.replace(".", "-", regex=False)
+     )
++    if "exchange" not in out.columns:
++        out["exchange"] = ""
++    out["exchange"] = out["exchange"].fillna("").astype(str).str.upper()
+     out["security_id"] = out["security_id"].astype(object)
+     out["ticker"] = out["ticker"].astype(object)
+     out["effective_from"] = pd.to_datetime(
+@@ -232,6 +235,31 @@
+             .astype(str)
+             .to_dict()
+         )
++    return mapping
++
++
++def _exchange_map(
++    *,
++    date: pd.Timestamp,
++    master: pd.DataFrame,
++    symbols: pd.DataFrame,
++) -> dict[str, str]:
++    mapping = dict(
++        zip(master["security_id"], master["primary_exchange"], strict=True)
++    )
++    if symbols.empty:
++        return mapping
++    active = symbols.loc[
++        (symbols["effective_from"].isna() | symbols["effective_from"].le(date))
++        & (symbols["effective_to"].isna() | symbols["effective_to"].ge(date))
++        & symbols["exchange"].ne("")
++    ].sort_values(["security_id", "effective_from"], na_position="first")
++    mapping.update(
++        active.drop_duplicates("security_id", keep="last")
++        .set_index("security_id")["exchange"]
++        .astype(str)
++        .to_dict()
++    )
+     return mapping
+
+
+@@ -288,6 +316,32 @@
+     snapshot_dictionary = pd.Index(
+         np.asarray(_SNAPSHOT_CATEGORIES, dtype=object), dtype=object
+     )
++    dictionaries = {
++        "security_id": security_dictionary,
++        "ticker": ticker_dictionary,
++        "reason_codes": reason_dictionary,
++        "snapshot_type": snapshot_dictionary,
++        "source_data_version_id": pd.Index(
++            [str(parent_version_id)], dtype=object
++        ),
++    }
++    violations: list[str] = []
++    for column, dictionary in dictionaries.items():
++        raw = frame[column].astype(object)
++        missing_count = int(raw.isna().sum())
++        if missing_count:
++            violations.append(f"{column}=<NULL> ({missing_count} rows)")
++        unknown = raw.loc[raw.notna() & ~raw.isin(dictionary)]
++        if not unknown.empty:
++            samples = sorted({str(value) for value in unknown})[:8]
++            violations.append(
++                f"{column}={samples!r} ({len(unknown)} rows)"
++            )
++    if violations:
++        raise DataFoundationError(
++            "eligibility dictionary encoding encountered unknown or missing "
++            "values: " + "; ".join(violations)
++        )
+     frame["security_id"] = pd.Categorical(
+         frame["security_id"].astype(object), categories=security_dictionary
+     )
+@@ -302,16 +356,14 @@
+     )
+     frame["source_data_version_id"] = pd.Categorical(
+         frame["source_data_version_id"].astype(object),
+-        categories=pd.Index([str(parent_version_id)], dtype=object),
++        categories=dictionaries["source_data_version_id"],
+     )
+     encoded = [
+         "security_id", "ticker", "reason_codes", "snapshot_type",
+         "source_data_version_id",
+     ]
+     if frame[encoded].isna().any().any():
+-        raise DataFoundationError(
+-            "eligibility dictionary encoding encountered an unknown value"
+-        )
++        raise AssertionError("validated eligibility dictionary encoding lost values")
+     return frame
+
+
+@@ -472,6 +524,7 @@
+         symbols=symbols,
+         session_bars=session_bars,
+     )
++    exchanges = _exchange_map(date=date, master=master, symbols=symbols)
+     audit = master.copy()
+     audit["date"] = date
+     audit["ticker"] = audit["security_id"].map(tickers).fillna(
+@@ -498,7 +551,10 @@
+     )
+     accepted_types = {"STOCK"} | ({"ADR"} if include_adr else set())
+     audit["asset_type_pass"] = audit["asset_type"].isin(accepted_types)
+-    audit["exchange_pass"] = audit["primary_exchange"].isin(
++    selection_exchange = audit["security_id"].map(exchanges).fillna(
++        audit["primary_exchange"]
++    )
++    audit["exchange_pass"] = selection_exchange.isin(
+         {"NYSE", "NASDAQ", "AMEX"}
+     )
+     audit["price_pass"] = audit["selection_price"].ge(float(min_price))
+--- a/src/data/security_master_store.py
++++ b/src/data/security_master_store.py
+@@ -440,7 +440,12 @@
+     return "LISTING_LINEAGE", f"{exchange}:{lineage_root}:{listing_key}:{name}"
+
+
+-def _normalize_profiles(frame: pd.DataFrame, target: pd.Timestamp) -> pd.DataFrame:
++def _normalize_profiles(
++    frame: pd.DataFrame,
++    target: pd.Timestamp,
++    *,
++    allowed_non_main_tickers: set[str] | None = None,
++) -> pd.DataFrame:
+     if frame.empty:
+         raise ValueError("profile bulk is empty")
+     required = {
+@@ -454,8 +459,15 @@
+     work = frame.copy()
+     work["ticker"] = work["ticker"].map(_ticker)
+     work["exchange"] = work["exchange"].map(lambda value: _text(value).upper())
++    reviewed_tickers = {
++        _ticker(value) for value in (allowed_non_main_tickers or set())
++    }
+     work = work.loc[
+-        work["ticker"].ne("") & work["exchange"].isin(MAIN_EXCHANGES)
++        work["ticker"].ne("")
++        & (
++            work["exchange"].isin(MAIN_EXCHANGES)
++            | work["ticker"].isin(reviewed_tickers)
++        )
+     ].copy()
+     for column in ("name", "sector", "sub_industry"):
+         work[column] = work[column].map(_text)
+@@ -794,7 +806,18 @@
+     # Immutable business rows must be a pure function of their frozen inputs.
+     # The audit manifest records the actual build time separately.
+     row_updated_at = target.tz_localize("UTC")
+-    profile = _normalize_profiles(profiles, target)
++    reviewed_profile_tickers = {
++        ticker
++        for old_ticker, new_ticker, _event_date in (
++            reviewed_identity_continuity or set()
++        )
++        for ticker in (_ticker(old_ticker), _ticker(new_ticker))
++    }
++    profile = _normalize_profiles(
++        profiles,
++        target,
++        allowed_non_main_tickers=reviewed_profile_tickers,
++    )
+     changes = _normalize_changes(symbol_changes, target)
+     delisted = _normalize_delisted(delisted_companies, target)
+     backward, lineage_conflicts, lineage_diagnostics = _lineage_maps(
+@@ -953,6 +976,10 @@
+         represented_tickers = {
+             str(symbol["ticker"]) for symbol in symbol_chain
+         }
++        exchange_by_ticker = {
++            str(alias.ticker): _text(alias.exchange).upper()
++            for alias in rows.itertuples(index=False)
++        }
+         for alias in rows.itertuples(index=False):
+             alias_ticker = str(alias.ticker)
+             if alias_ticker in represented_tickers:
+@@ -983,15 +1010,19 @@
+             })
+             represented_tickers.add(alias_ticker)
+         for symbol in symbol_chain:
++            symbol_ticker = str(symbol["ticker"])
+             symbol_rows.append({
+                 "security_id": str(security_id),
+                 **symbol,
+-                "exchange": _text(selected.get("exchange")).upper(),
++                "exchange": exchange_by_ticker.get(
++                    symbol_ticker,
++                    _text(selected.get("exchange")).upper(),
++                ),
+                 "is_primary": True,
+                 "source": "FMP_PROFILE_BULK+SYMBOL_CHANGE",
+                 "source_asof": target,
+             })
+-            alias_delisting = delisted_lookup.get(str(symbol["ticker"]))
++            alias_delisting = delisted_lookup.get(symbol_ticker)
+             if alias_delisting is not None:
+                 alias_date = pd.Timestamp(
+                     alias_delisting["delisted_date"]
+--- a/src/factors/broad_pipeline.py
++++ b/src/factors/broad_pipeline.py
+@@ -39,7 +39,7 @@
+     diagnostics: dict[str, Any]
+
+
+-INPUT_FINGERPRINT_METHOD = "BROAD_FACTOR_INPUT_V2_XNYS_ONLY"
++INPUT_FINGERPRINT_METHOD = "BROAD_FACTOR_INPUT_V3_EXACT_WARMUP_XNYS"
+
+
+ def _calendar() -> Any:
+@@ -99,9 +99,15 @@
+
+
+ def _lookback_start(first_output: pd.Timestamp, prior_sessions: int) -> pd.Timestamp:
++    """Return the first session after loading exactly ``prior_sessions`` before t.
++
++    ``exchange_calendars.sessions_window`` includes the anchor session.  Asking
++    it for ``-N`` therefore returns only ``N - 1`` sessions before the output
++    date, which is one observation short for exact momentum and return windows.
++    """
+     calendar = _calendar()
+     first = calendar.date_to_session(first_output, direction="none")
+-    values = calendar.sessions_window(first, -int(prior_sessions))
++    values = calendar.sessions_window(first, -(int(prior_sessions) + 1))
+     start = values[0]
+     if getattr(start, "tzinfo", None) is not None:
+         start = start.tz_localize(None)
+--- a/src/operations/adapters/delivery.py
++++ b/src/operations/adapters/delivery.py
+@@ -34,7 +34,7 @@
+     RunStage,
+ )
+ from src.utils.market_calendar import is_xnys_session
+-from src.breakouts.live.session import previous_xnys_sessions
++from src.breakouts.live.session import completed_xnys_sessions
+
+
+ PREMARKET_DB = PROJECT_ROOT / "outputs" / "premarket_digest" / "state.sqlite3"
+@@ -900,7 +900,7 @@
+     cup_latency_p95 = _p95(
+         float(row.get("latency_ms") or 0.0) for row in cup_evaluations
+     )
+-    cup_expected_shadow = previous_xnys_sessions(expected, 5)
++    cup_expected_shadow = completed_xnys_sessions(now, 5)
+     cup_by_session = {
+         str(row.get("session_date") or ""): row
+         for row in cup_observations_for_version
+--- a/tests/test_broad_factor_data.py
++++ b/tests/test_broad_factor_data.py
+@@ -22,6 +22,7 @@
+ from src.factors import get_factor
+ from src.factors.broad_pipeline import (
+     INPUT_FINGERPRINT_METHOD,
++    _lookback_start,
+     compute_factor_block,
+     factor_input_fingerprint,
+     factor_history_sessions,
+@@ -134,6 +135,71 @@
+     ]
+
+
++def test_lookback_start_loads_the_requested_prior_sessions_plus_output_day():
++    first_output = pd.Timestamp("2026-09-01")
++    start = _lookback_start(first_output, 5)
++    sessions = _sessions(start.date().isoformat(), first_output.date().isoformat())
++
++    assert start == pd.Timestamp("2026-08-25")
++    assert len(sessions) == 6
++    assert sessions[-1] == first_output
++
++
++@pytest.mark.parametrize("factor_id,prior_sessions", [
++    ("MOM_1M", 21),
++    ("REVERSAL", 5),
++])
++def test_exact_warmup_makes_single_output_session_eligible(
++    factor_id: str,
++    prior_sessions: int,
++):
++    output_date = pd.Timestamp("2026-09-01")
++    start = _lookback_start(output_date, prior_sessions)
++    sessions = _sessions(start.date().isoformat(), output_date.date().isoformat())
++    identities = [("sec_aaa", "AAA"), ("sec_bbb", "BBB"), ("sec_ccc", "CCC")]
++    bars = pd.concat([
++        pd.DataFrame({
++            "date": sessions,
++            "security_id": security_id,
++            "ticker": ticker,
++            "adj_close": np.linspace(10.0, 11.0 + position, len(sessions)),
++            "volume": 1_000_000.0,
++        })
++        for position, (security_id, ticker) in enumerate(identities)
++    ], ignore_index=True)
++    membership = pd.DataFrame([
++        {
++            "date": output_date,
++            "security_id": security_id,
++            "ticker": ticker,
++            "active": True,
++            "snapshot_type": "MONTH_END",
++        }
++        for security_id, ticker in identities
++    ])
++    master = pd.DataFrame([
++        {"security_id": security_id, "current_ticker": ticker}
++        for security_id, ticker in identities
++    ])
++    classifications = pd.DataFrame([
++        {"security_id": security_id, "sector": "Technology"}
++        for security_id, _ in identities
++    ])
++
++    result = compute_factor_block(
++        factor_id=factor_id,
++        bars=bars,
++        membership=membership,
++        master=master,
++        classifications=classifications,
++        output_dates=[output_date],
++    )
++
++    assert result.diagnostics["latest_warmup_eligible_count"] == 3
++    assert result.diagnostics["latest_raw_coverage"] == 1.0
++    assert set(result.observations["status"]) == {"VALID"}
++
++
+ def test_turnover_zero_volume_window_stays_numeric_and_missing():
+     bars, membership, master, classifications, output = _broad_factor_fixture()
+     bars.loc[bars["security_id"].eq("sec_000"), "volume"] = 0.0
+@@ -254,7 +320,7 @@
+     )
+     assert first == second
+     assert changed != first
+-    assert INPUT_FINGERPRINT_METHOD == "BROAD_FACTOR_INPUT_V2_XNYS_ONLY"
++    assert INPUT_FINGERPRINT_METHOD == "BROAD_FACTOR_INPUT_V3_EXACT_WARMUP_XNYS"
+
+
+ def _standard_bars(ticker: str, dates: list[str]) -> pd.DataFrame:
+--- a/tests/test_broad_operations.py
++++ b/tests/test_broad_operations.py
+@@ -23,10 +23,12 @@
+     run as run_initial_rollout,
+ )
+ from scripts.update_us_equity_coverage import (
++    _combine_normalized_sources,
+     _load_or_fetch_eod_bulk_session,
+     _load_or_fetch_history_delta,
+     _parent_partition_paths,
+     _prepare_provider_cache,
++    _refresh_sessions_for_binding,
+     _sessions_after_parent,
+ )
+ from src.data.foundation import DataFoundationError
+@@ -289,6 +291,48 @@
+         "2026-08-19",
+     ]
+     assert _sessions_after_parent("2026-08-19", "2026-08-19").empty
++
++
++def test_same_session_coverage_rebase_requires_explicit_repair():
++    with pytest.raises(
++        DataFoundationError,
++        match="--force-security-master-rebase",
++    ):
++        _refresh_sessions_for_binding(
++            parent_target="2026-09-01",
++            target="2026-09-01",
++            binding_changed=True,
++            force_security_master_rebase=False,
++        )
++
++    sessions = _refresh_sessions_for_binding(
++        parent_target="2026-09-01",
++        target="2026-09-01",
++        binding_changed=True,
++        force_security_master_rebase=True,
++    )
++    assert sessions.tolist() == [pd.Timestamp("2026-09-01")]
++    assert _refresh_sessions_for_binding(
++        parent_target="2026-09-01",
++        target="2026-09-01",
++        binding_changed=False,
++        force_security_master_rebase=True,
++    ).empty
++
++
++def test_same_session_rebase_keeps_recent_eod_dates_datetimelike():
++    recent = pd.DataFrame({
++        "date": pd.DatetimeIndex(["2026-09-01"]),
++        "security_id": ["sec_aaa"],
++    })
++    empty_history = pd.DataFrame(columns=recent.columns)
++
++    combined = _combine_normalized_sources(empty_history, recent)
++
++    assert pd.api.types.is_datetime64_any_dtype(combined["date"])
++    assert combined["date"].dt.to_period("M").astype(str).tolist() == [
++        "2026-09"
++    ]
+
+
+ def test_eod_bulk_cache_is_exactly_bound_and_hash_verified(tmp_path):
+--- a/tests/test_broad_pit_universe.py
++++ b/tests/test_broad_pit_universe.py
+@@ -11,6 +11,7 @@
+ from scripts.build_us_liquid_pit import _incremental_inputs_match
+
+ from src.data.derived_universe import (
++    _compact_eligibility_strings,
+     build_liquid_5m_candidate,
+     historical_pit_bar_coverage_check,
+     roll_forward_liquid_5m_candidate,
+@@ -24,6 +25,87 @@
+ from src.data.membership_state import resolve_membership_asof
+ from src.data.security_master_store import SecurityMasterGeneration
+ from src.data.universe_publication import DerivedUniverseStore
++
++
++def test_eligibility_dictionary_error_identifies_column_and_values():
++    frame = pd.DataFrame([{
++        "security_id": "sec_aaa",
++        "ticker": "AAA",
++        "reason_codes": "UNREVIEWED_REASON",
++        "snapshot_type": "MONTH_END",
++        "source_data_version_id": "version-a",
++    }])
++
++    with pytest.raises(
++        DataFoundationError,
++        match=r"reason_codes=.*UNREVIEWED_REASON.*\(1 rows\)",
++    ):
++        _compact_eligibility_strings(
++            frame,
++            security_categories=["sec_aaa"],
++            ticker_categories=["AAA"],
++            parent_version_id="version-a",
++        )
++
++
++def test_month_end_exchange_gate_uses_point_in_time_symbol_exchange():
++    master = pd.DataFrame([{
++        "security_id": "sec_rename",
++        "current_ticker": "FLZH",
++        "asset_type": "STOCK",
++        "primary_exchange": "OTC",
++        "listing_date": "2019-11-14",
++        "delisting_date": None,
++        "trading_status": "ACTIVE",
++    }])
++    symbols = pd.DataFrame([
++        {
++            "security_id": "sec_rename",
++            "ticker": "UGRO",
++            "exchange": "NASDAQ",
++            "effective_from": "2019-11-14",
++            "effective_to": "2026-06-15",
++        },
++        {
++            "security_id": "sec_rename",
++            "ticker": "FLZH",
++            "exchange": "OTC",
++            "effective_from": "2026-06-16",
++            "effective_to": None,
++        },
++    ])
++    sessions = _sessions("2026-03-01", "2026-06-30")
++    bars = pd.DataFrame({
++        "date": sessions,
++        "security_id": "sec_rename",
++        "ticker": ["UGRO" if value < pd.Timestamp("2026-06-16") else "FLZH"
++                   for value in sessions],
++        "open": 10.0,
++        "high": 10.5,
++        "low": 9.5,
++        "close": 10.0,
++        "unadjusted_close": 10.0,
++        "volume": 1_000_000.0,
++    })
++
++    candidate = build_liquid_5m_candidate(
++        bars,
++        master,
++        parent_version_id="coverage-v1",
++        target_session="2026-06-30",
++        history_start="2026-03-01",
++        research_start="2026-03-01",
++        symbol_history=symbols,
++        adv_sessions=2,
++        min_valid_sessions=2,
++        min_price=1.0,
++        min_adv20_usd=1.0,
++    )
++    rows = candidate.eligibility.loc[
++        candidate.eligibility["security_id"].astype(str).eq("sec_rename")
++    ].set_index("date")
++    assert bool(rows.loc[pd.Timestamp("2026-05-29"), "exchange_pass"])
++    assert not bool(rows.loc[pd.Timestamp("2026-06-30"), "exchange_pass"])
+
+
+ def _sessions(start: str, end: str) -> pd.DatetimeIndex:
+--- a/tests/test_intraday_monitor.py
++++ b/tests/test_intraday_monitor.py
+@@ -33,6 +33,7 @@
+ from src.breakouts.live.selector import select_active_pool
+ from src.breakouts.live.session import (
+     expected_source_session,
++    completed_xnys_sessions,
+     previous_xnys_sessions,
+     xnys_session_schedule,
+ )
+@@ -265,6 +266,19 @@
+             ["2026-07-23", "2026-07-24", "2026-07-27"],
+         )
+
++    def test_completed_sessions_include_current_only_after_finalization(self):
++        before_close = datetime.fromisoformat("2026-07-28T19:00:00+00:00")
++        after_finalization = datetime.fromisoformat("2026-07-28T20:06:00+00:00")
++
++        self.assertEqual(
++            completed_xnys_sessions(before_close, 3),
++            ["2026-07-23", "2026-07-24", "2026-07-27"],
++        )
++        self.assertEqual(
++            completed_xnys_sessions(after_finalization, 3),
++            ["2026-07-24", "2026-07-27", "2026-07-28"],
++        )
++
+     def test_stale_daily_coverage_fails_before_scanning(self):
+         universe = pd.DataFrame({
+             "ticker": ["AEVA", "OKTA"],
+--- a/tests/test_operations_watchdog.py
++++ b/tests/test_operations_watchdog.py
+@@ -409,13 +409,17 @@
+                 ("2026-08-12", "REJECTED", "RIM_NOT_BROKEN", 3.0, 20),
+             ],
+         )
++        connection.execute(
++            "INSERT INTO cup_handle_session_observations VALUES (?, ?, ?)",
++            ("2026-08-12", "daily-cup-5m-handle-shadow-v1", "PASS"),
++        )
+     monkeypatch.setattr("src.operations.adapters.delivery.INTRADAY_DB", database)
+     registry = OperationsRegistry("configs/operations.yaml")
+
+     result = collect_delivery_evidence(
+         [registry.get("intraday_momentum")],
+-        now=datetime(2026, 8, 12, 16, 0, tzinfo=timezone.utc),
+-        observed_at="2026-08-12T16:00:00+00:00",
++        now=datetime(2026, 8, 12, 21, 30, tzinfo=timezone.utc),
++        observed_at="2026-08-12T21:30:00+00:00",
+     )
+
+     metrics = result.snapshots[0].metrics
+@@ -424,6 +428,8 @@
+     assert metrics["茶杯柄主要拒绝原因"] == {"RIM_NOT_BROKEN": 2}
+     assert metrics["茶杯柄检测延迟P95毫秒"] == 2.9
+     assert metrics["茶杯柄最大序列长度"] == 20
++    assert metrics["茶杯柄影子验收进度"] == "1/5"
++    assert "2026-08-12" not in metrics["茶杯柄影子缺失交易日"]
+
+
+ def test_intraday_keeps_latest_failed_cup_session_visible(monkeypatch, tmp_path: Path):
+--- a/tests/test_security_master_build.py
++++ b/tests/test_security_master_build.py
+@@ -260,6 +260,70 @@
+ def _reviewed_spac_profiles() -> pd.DataFrame:
+     return pd.DataFrame([
+         {
++            "ticker": "UGRO",
++            "name": "urban-gro, Inc.",
++            "asset_type": "STOCK",
++            "exchange": "NASDAQ",
++            "country": "US",
++            "currency": "USD",
++            "cik": "0001706524",
++            "isin": "US91704K3014",
++            "cusip": "91704K301",
++            "listing_date": "2019-11-14",
++            "sector": "Industrials",
++            "sub_industry": "Specialty Industrial Machinery",
++            "trading_status": "INACTIVE",
++            "is_active": False,
++        },
++        {
++            "ticker": "FLZH",
++            "name": "Flash Sports & Media, Inc.",
++            "asset_type": "STOCK",
++            "exchange": "OTC",
++            "country": "US",
++            "currency": "USD",
++            "cik": "0001706524",
++            "isin": "US91704K3014",
++            "cusip": "91704K301",
++            "listing_date": "2021-02-11",
++            "sector": "Communication Services",
++            "sub_industry": "Broadcasting",
++            "trading_status": "ACTIVE",
++            "is_active": True,
++        },
++        {
++            "ticker": "SVII",
++            "name": "Spring Valley Acquisition Corp. II",
++            "asset_type": "STOCK",
++            "exchange": "NASDAQ",
++            "country": "US",
++            "currency": "USD",
++            "cik": "0002089283",
++            "isin": "US2697101093",
++            "cusip": "269710109",
++            "listing_date": "2022-10-28",
++            "sector": "Financial Services",
++            "sub_industry": "Shell Companies",
++            "trading_status": "INACTIVE",
++            "is_active": False,
++        },
++        {
++            "ticker": "NUCL",
++            "name": "Eagle Nuclear Energy Corp.",
++            "asset_type": "STOCK",
++            "exchange": "NASDAQ",
++            "country": "US",
++            "currency": "USD",
++            "cik": "0002089283",
++            "isin": "US2697101093",
++            "cusip": "269710109",
++            "listing_date": "2026-02-25",
++            "sector": "Energy",
++            "sub_industry": "Uranium",
++            "trading_status": "ACTIVE",
++            "is_active": True,
++        },
++        {
+             "ticker": "VIACA",
+             "name": "Paramount Global",
+             "asset_type": "STOCK",
+@@ -406,13 +470,16 @@
+     assert path.name == "security_master_corrections.yaml"
+     assert len(digest) == 64
+     assert set(zip(corrected["old_ticker"], corrected["new_ticker"])) == {
++        ("UGRO", "FLZH"),
++        ("SVII", "NUCL"),
+         ("VIACA", "PARAA"),
+         ("UCBI", "UCB"),
+         ("HSPT", "SLBT"),
+         ("VACH", "VRXA"),
+     }
+     assert set(corrected["date"].dt.date.astype(str)) == {
+-        "2022-02-17", "2024-08-06", "2026-06-11", "2026-06-15",
++        "2022-02-17", "2024-08-06", "2026-02-25", "2026-06-11",
++        "2026-06-15", "2026-06-16",
+     }
+     assert {item["action"] for item in audit} == {"REVIEWED_EVENT_ADDED"}
+     assert all(item["sources"] for item in audit)
+@@ -423,10 +490,20 @@
+         delisted_companies=pd.DataFrame(),
+         target_session="2026-08-12",
+         minimum_active_stocks=2,
++        reviewed_identity_continuity={
++            (
++                str(row.old_ticker),
++                str(row.new_ticker),
++                pd.Timestamp(row.date).normalize(),
++            )
++            for row in corrected.itertuples(index=False)
++        },
+     )
+     assert candidate.quality["status"] == "PASS"
+     assert candidate.quality["identity_security_coverage"] == 1.0
+     for old_ticker, new_ticker in (
++        ("UGRO", "FLZH"),
++        ("SVII", "NUCL"),
+         ("VIACA", "PARAA"),
+         ("UCBI", "UCB"),
+         ("HSPT", "SLBT"),
+@@ -436,6 +513,27 @@
+             candidate.symbols["ticker"].isin([old_ticker, new_ticker])
+         ]
+         assert aliases["security_id"].nunique() == 1
++    svii_aliases = candidate.symbols.loc[
++        candidate.symbols["ticker"].isin(["SVII", "NUCL"])
++    ].set_index("ticker")
++    assert svii_aliases.loc["SVII", "effective_to"] == pd.Timestamp(
++        "2026-02-24"
++    )
++    assert svii_aliases.loc["NUCL", "effective_from"] == pd.Timestamp(
++        "2026-02-25"
++    )
++    ugro_aliases = candidate.symbols.loc[
++        candidate.symbols["ticker"].isin(["UGRO", "FLZH"])
++    ].set_index("ticker")
++    assert set(ugro_aliases.index) == {"UGRO", "FLZH"}
++    assert ugro_aliases.loc["UGRO", "effective_to"] == pd.Timestamp(
++        "2026-06-15"
++    )
++    assert ugro_aliases.loc["UGRO", "exchange"] == "NASDAQ"
++    assert ugro_aliases.loc["FLZH", "effective_from"] == pd.Timestamp(
++        "2026-06-16"
++    )
++    assert ugro_aliases.loc["FLZH", "exchange"] == "OTC"
+
+
+ def test_reviewed_security_master_transition_fails_on_provider_drift():
+@@ -452,6 +550,89 @@
+             ]),
+             registry,
+             target_session=pd.Timestamp("2026-08-12"),
++        )
++
++
++def test_reviewed_transition_accepts_exact_later_provider_delisting():
++    registry, _path, _digest = load_security_master_corrections(
++        "configs/security_master_corrections.yaml"
++    )
++    profiles = _reviewed_spac_profiles()
++    profiles.loc[profiles["ticker"].eq("FLZH"), [
++        "is_active", "trading_status",
++    ]] = [False, "INACTIVE"]
++    delisted = pd.DataFrame([{
++        "ticker": "FLZH",
++        "name": "Flash Sports & Media, Inc.",
++        "exchange": "OTC",
++        "ipo_date": "2021-02-11",
++        "delisted_date": "2026-08-26",
++    }])
++
++    _corrected, audit = apply_reviewed_symbol_transitions(
++        profiles,
++        pd.DataFrame(columns=[
++            "date", "old_ticker", "new_ticker", "company_name",
++        ]),
++        registry,
++        target_session=pd.Timestamp("2026-09-03"),
++        delisted=delisted,
++    )
++
++    flzh = next(item for item in audit if item["new_ticker"] == "FLZH")
++    assert flzh["provider_lifecycle"] == {
++        "inactive_on_or_after": "2026-08-26",
++        "delisted_exchange": "OTC",
++        "delisted_name": "Flash Sports & Media, Inc.",
++        "provider_status": "INACTIVE",
++    }
++
++
++def test_reviewed_transition_rejects_unproven_later_inactive_status():
++    registry, _path, _digest = load_security_master_corrections(
++        "configs/security_master_corrections.yaml"
++    )
++    profiles = _reviewed_spac_profiles()
++    profiles.loc[profiles["ticker"].eq("FLZH"), [
++        "is_active", "trading_status",
++    ]] = [False, "INACTIVE"]
++
++    with pytest.raises(ValueError, match="provider delisting evidence is required"):
++        apply_reviewed_symbol_transitions(
++            profiles,
++            pd.DataFrame(columns=[
++                "date", "old_ticker", "new_ticker", "company_name",
++            ]),
++            registry,
++            target_session=pd.Timestamp("2026-09-03"),
++            delisted=pd.DataFrame(),
++        )
++
++
++def test_reviewed_transition_rejects_mismatched_delisting_evidence():
++    registry, _path, _digest = load_security_master_corrections(
++        "configs/security_master_corrections.yaml"
++    )
++    profiles = _reviewed_spac_profiles()
++    profiles.loc[profiles["ticker"].eq("FLZH"), [
++        "is_active", "trading_status",
++    ]] = [False, "INACTIVE"]
++    delisted = pd.DataFrame([{
++        "ticker": "FLZH",
++        "name": "Flash Sports & Media, Inc.",
++        "exchange": "NASDAQ",
++        "delisted_date": "2026-08-26",
++    }])
++
++    with pytest.raises(ValueError, match="exact provider delisting record drifted"):
++        apply_reviewed_symbol_transitions(
++            profiles,
++            pd.DataFrame(columns=[
++                "date", "old_ticker", "new_ticker", "company_name",
++            ]),
++            registry,
++            target_session=pd.Timestamp("2026-09-03"),
++            delisted=delisted,
+         )
+
+
+--- a/tests/test_systemd_units.py
++++ b/tests/test_systemd_units.py
+@@ -80,7 +80,7 @@
+         self.assertIn("--auto", intraday)
+         self.assertIn("--component intraday", intraday)
+         self.assertIn("--prepare-candidates", prepare)
+-        self.assertIn("MemoryHigh=500M", prepare)
++        self.assertIn("MemoryHigh=620M", prepare)
+         self.assertIn("MemoryMax=700M", prepare)
+         self.assertIn("MemorySwapMax=0", prepare)
+         self.assertNotIn("--skip-precompute", refresh)

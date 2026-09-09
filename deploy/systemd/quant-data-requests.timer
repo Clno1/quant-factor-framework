@@ -1,0 +1,12 @@
+[Unit]
+Description=Poll the custom-universe market-data request queue
+
+[Timer]
+OnBootSec=3min
+OnUnitInactiveSec=5min
+AccuracySec=30s
+RandomizedDelaySec=15s
+Unit=quant-data-requests.service
+
+[Install]
+WantedBy=timers.target

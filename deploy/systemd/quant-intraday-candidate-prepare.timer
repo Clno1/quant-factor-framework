@@ -1,0 +1,12 @@
+[Unit]
+Description=Prepare intraday momentum candidates well before the US open
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 06:30:00 America/New_York
+Persistent=true
+AccuracySec=1min
+RandomizedDelaySec=30s
+Unit=quant-intraday-candidate-prepare.service
+
+[Install]
+WantedBy=timers.target

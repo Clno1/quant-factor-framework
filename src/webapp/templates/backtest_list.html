@@ -6,7 +6,7 @@
     <span class="badge">{{ items|length }} 个任务</span>
 </h1>
 <div class="page-sub">
-    每个任务 = 策略 × 股票池 × 日期范围。异步执行，通常 2~5 秒完成。
+    每个任务冻结策略、目标股票池、数据版本、日期范围和执行配置。
 </div>
 
 <div class="toolbar-row">
@@ -21,7 +21,7 @@
                 <tr>
                     <th style="width: 22%;">任务名</th>
                     <th>策略</th>
-                    <th>股票池</th>
+                    <th>目标股票池</th>
                     <th>日期范围</th>
                     <th style="width:90px;">状态</th>
                     <th style="text-align:right;">年化收益</th>
@@ -43,6 +43,7 @@
                     <td>
                         <span class="status-pill status-{{ t.status }}">
                             {% if t.status == 'pending' %}待执行
+                            {% elif t.status == 'waiting_for_data' %}等待行情
                             {% elif t.status == 'running' %}运行中
                             {% elif t.status == 'success' %}成功
                             {% elif t.status == 'failed' %}失败
@@ -58,7 +59,7 @@
                     <td class="mono" style="color: var(--text-2);">{{ t.created_at }}</td>
                     <td>
                         <a class="btn small" href="/backtests/{{ t.id }}">查看</a>
-                        <button class="btn small danger" onclick="deleteBacktest('{{ t.id }}', '{{ t.name or t.id[:8] }}')">删除</button>
+                        <button class="btn small danger" data-id="{{ t.id }}" data-name="{{ t.name or t.id[:8] }}" onclick="deleteBacktest(this.dataset.id, this.dataset.name)">删除</button>
                     </td>
                 </tr>
                 {% endfor %}
@@ -69,7 +70,7 @@
 {% else %}
 <div class="empty">
     <p>还没有回测任务。</p>
-    <p><a href="/backtests/new">点击新建回测</a>，选一个策略 + 股票池即可开始。</p>
+    <p><a href="/backtests/new">点击新建回测</a>，选择策略和目标股票池即可开始。</p>
 </div>
 {% endif %}
 

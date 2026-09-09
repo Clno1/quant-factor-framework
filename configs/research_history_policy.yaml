@@ -1,0 +1,551 @@
+schema_version: 1
+universe: US_SECURITY_MASTER
+activation_session: '2026-08-14'
+decision:
+  approved_at: '2026-08-16'
+  approved_by: project_owner
+  basis: FMP cannot prove complete pre-activation history for these securities; unresolved history must
+    not enter broad research.
+revisions:
+- revised_at: '2026-08-20'
+  approved_by: project_owner
+  basis: NUR first appeared in dated FMP bulk data on 2026-08-10 while both canonical historical endpoints
+    returned no pre-overlap history; admit it prospectively from the existing policy activation session.
+entries:
+- security_id: sec_080b09b0774a56ce85e2ba0154eb3887
+  current_ticker: CTRA
+  name: Coterra Energy Inc.
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_0d103a6dc4a455b19e80c57c467aaebe
+  current_ticker: THCB
+  name: Tuscan Holdings Corp.
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_10f9cb249fd35c5786fa4bcb77b7afb6
+  current_ticker: ENOB
+  name: Enochian Biosciences, Inc.
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - UNVERIFIABLE_TICKER_INTERVAL
+- security_id: sec_1256fe16a3ed5ce0a0480a94bbbdf135
+  current_ticker: ZNB
+  name: Zeta Network Group
+  trading_status: ACTIVE
+  policy: PROSPECTIVE_ONLY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - UNVERIFIABLE_TICKER_INTERVAL
+- security_id: sec_12ec0cd4ece7556b9f5fa7d895eae1fa
+  current_ticker: PARAA
+  name: Paramount Global
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_1317bf4ecd9651128bbce315de156ade
+  current_ticker: GECCL
+  name: Great Elm Capital Group, Inc.
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_144b99a7fc0758e1ab6e2a9fffd9cbb8
+  current_ticker: GPGI
+  name: GPGI, Inc.
+  trading_status: ACTIVE
+  policy: PROSPECTIVE_ONLY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - UNVERIFIABLE_TICKER_INTERVAL
+- security_id: sec_1dd5f26227905516a615cc9020a3a511
+  current_ticker: NTRP
+  name: NextTrip, Inc.
+  trading_status: ACTIVE
+  policy: PROSPECTIVE_ONLY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - UNVERIFIABLE_TICKER_INTERVAL
+- security_id: sec_1e521670d85453548eb0233a81225116
+  current_ticker: CVG
+  name: Convergys Corporation
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_1e552bbcfa0d5b23b8bfb0b213730820
+  current_ticker: ORBS
+  name: Eightco Holdings Inc.
+  trading_status: ACTIVE
+  policy: PROSPECTIVE_ONLY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - UNVERIFIABLE_TICKER_INTERVAL
+- security_id: sec_2067f345d2d65d08b5c5720f17afab21
+  current_ticker: HVBT
+  name: HIVE Blockchain Technologies Ltd.
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_221744e6961d5e30809f5488f527ecbc
+  current_ticker: PGAC
+  name: Pantages Capital Acquisition Corp
+  trading_status: ACTIVE
+  policy: PROSPECTIVE_ONLY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_25256eda05df54b9a0a12a5c80b54425
+  current_ticker: IVF
+  name: INVO Fertility, Inc.
+  trading_status: ACTIVE
+  policy: PROSPECTIVE_ONLY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - UNVERIFIABLE_TICKER_INTERVAL
+- security_id: sec_36df61386da3559b95328ba1c5562b28
+  current_ticker: GAINM
+  name: Gladstone Investment Corporation
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_3f0a756eafa35338a4f137303fe88a22
+  current_ticker: AIW
+  name: Arlington Asset Investment Corp.
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_424894b63ea2524884ad76f833fe2d77
+  current_ticker: AMTBB
+  name: Amerant Bancorp Inc.
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_4830e1c4cc1854cb93e42674392c946c
+  current_ticker: ROT
+  name: Rotor Acquisition Corp.
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_4b3b5bea9598505e8e38d2febbf07c77
+  current_ticker: WHWK
+  name: Whitehawk Therapeutics Inc
+  trading_status: ACTIVE
+  policy: PROSPECTIVE_ONLY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - UNVERIFIABLE_TICKER_INTERVAL
+- security_id: sec_4fb600b2779e5e208b7ee876030f0ca7
+  current_ticker: RTPY
+  name: Reinvent Technology Partners Y
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_5117a2f4e0ea5a089a23134f08dd76bc
+  current_ticker: QADB
+  name: QAD Inc.
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_53aa4da9a46a55f5a2a2c024035f8967
+  current_ticker: OIBR-C
+  name: Oi S.A.
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_566c212a32a950009693412a71b2386e
+  current_ticker: MSPRZ
+  name: MSP Recovery, Inc.
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_57c11bbbd9a05f508fead8b004aaef93
+  current_ticker: WLYB
+  name: John Wiley & Sons, Inc.
+  trading_status: ACTIVE
+  policy: PROSPECTIVE_ONLY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_5908b632e4915a39b8e971c04fed2b32
+  current_ticker: TDA
+  name: Telephone and Data Systems, Inc.
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_5cba73738dbb59188a27c25dbaedf178
+  current_ticker: GRML
+  name: Greenland Mines Ltd.
+  trading_status: ACTIVE
+  policy: PROSPECTIVE_ONLY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - UNVERIFIABLE_TICKER_INTERVAL
+- security_id: sec_6022ff229ef653f0bdfbf752a481ea4a
+  current_ticker: RDS-A
+  name: Shell plc
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_65e4c0f0d9de5d9c9dbe37722b41aef1
+  current_ticker: CBCO
+  name: Coastal Banking Co Inc.
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_66a9716b3fca5a4d8e0cca391aa2a4a3
+  current_ticker: ABX
+  name: Abacus Global Management, Inc.
+  trading_status: ACTIVE
+  policy: PROSPECTIVE_ONLY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - UNVERIFIABLE_TICKER_INTERVAL
+- security_id: sec_68ac64a16a1050418808f9cda7d2b41d
+  current_ticker: FRMM
+  name: Forum Markets, Incorporated
+  trading_status: ACTIVE
+  policy: PROSPECTIVE_ONLY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - UNVERIFIABLE_TICKER_INTERVAL
+- security_id: sec_6dcc247f99d55b4eacc5f40f88a498f2
+  current_ticker: SWBK
+  name: Switchback II Corporation
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_6f2061baec4650889b64cc8e05e68029
+  current_ticker: DMYI
+  name: dMY Technology Group, Inc. III
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_6fc074febcb75bf7a997ce55f86deae2
+  current_ticker: NXDR
+  name: Nextdoor Holdings, Inc.
+  trading_status: ACTIVE
+  policy: PROSPECTIVE_ONLY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - UNVERIFIABLE_TICKER_INTERVAL
+- security_id: sec_787f8ce895f1504f9a292bdf3956b478
+  current_ticker: CHGA
+  name: Change Agents Corp.
+  trading_status: ACTIVE
+  policy: PROSPECTIVE_ONLY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - UNVERIFIABLE_TICKER_INTERVAL
+- security_id: sec_7c6eef12289b5292ac67cc072d5c4975
+  current_ticker: QTWW
+  name: Quantum Fuel Systems Technologies Worldwide, Inc.
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_8090e80dcde35790afb7eddb4a3f7adf
+  current_ticker: HIND
+  name: Vyome Holdings, Inc.
+  trading_status: ACTIVE
+  policy: PROSPECTIVE_ONLY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - UNVERIFIABLE_TICKER_INTERVAL
+- security_id: sec_87e8b4cd563f5d14a7f594f29b40692a
+  current_ticker: RBC
+  name: RBC Bearings Incorporated
+  trading_status: ACTIVE
+  policy: PROSPECTIVE_ONLY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_887b88c600a65c83b6961255c0352344
+  current_ticker: VSA
+  name: VisionSys AI Inc.
+  trading_status: ACTIVE
+  policy: PROSPECTIVE_ONLY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - UNVERIFIABLE_TICKER_INTERVAL
+- security_id: sec_89a9d00e07225ff58ebf47ca8a1db524
+  current_ticker: HBANN
+  name: Huntington Bancshares Incorporated
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_8a4e5fdc7ba75f96a6ece19e062a80b1
+  current_ticker: AXON
+  name: Axon Enterprise, Inc.
+  trading_status: ACTIVE
+  policy: PROSPECTIVE_ONLY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - UNVERIFIABLE_TICKER_INTERVAL
+- security_id: sec_92d7635a37465801b532e4cac3183a27
+  current_ticker: ZSQR
+  name: Z Squared Inc.
+  trading_status: ACTIVE
+  policy: PROSPECTIVE_ONLY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - UNVERIFIABLE_TICKER_INTERVAL
+- security_id: sec_961a7608b1595b02a7f8d411d0eaf1c2
+  current_ticker: DPU
+  name: Top KingWin Ltd. Class A
+  trading_status: ACTIVE
+  policy: PROSPECTIVE_ONLY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - UNVERIFIABLE_TICKER_INTERVAL
+- security_id: sec_99a1e58f839e59f28210c005fb8b9f7d
+  current_ticker: RTB
+  name: RTB Digital Inc
+  trading_status: ACTIVE
+  policy: PROSPECTIVE_ONLY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - UNVERIFIABLE_TICKER_INTERVAL
+- security_id: sec_9b28328bfba359149ba6173500fbe767
+  current_ticker: TSRA
+  name: Xperi Corp.
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_a2ebd0c2c3dd55f085af873b657f6d61
+  current_ticker: GOODM
+  name: Gladstone Commercial Corporation
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_a49767b3bd8c5e6793cee70444c8beb8
+  current_ticker: GRDX
+  name: GridAI Technologies Corp.
+  trading_status: ACTIVE
+  policy: PROSPECTIVE_ONLY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - UNVERIFIABLE_TICKER_INTERVAL
+- security_id: sec_aa27eea4cc665986b27dd175ddaa4163
+  current_ticker: ALP
+  name: Alpha Compute Corp
+  trading_status: ACTIVE
+  policy: PROSPECTIVE_ONLY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - UNVERIFIABLE_TICKER_INTERVAL
+- security_id: sec_ac949fc96e915bb0a12c7208a62d07ec
+  current_ticker: FXHO
+  name: UTime Limited
+  trading_status: ACTIVE
+  policy: PROSPECTIVE_ONLY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - UNVERIFIABLE_TICKER_INTERVAL
+- security_id: sec_aedc6a66d0a6556185a1f515ba59fe66
+  current_ticker: RAI
+  name: Reynolds American Inc.
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_abb1e5efe57652a09b7d7ea824428cb1
+  current_ticker: NUR
+  name: Nuran Wireless Inc
+  trading_status: ACTIVE
+  policy: PROSPECTIVE_ONLY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+  - FIRST_DATED_BULK_OBSERVATION_2026_08_10
+- security_id: sec_b6e42615f14e5e7e94f026e04c8e6aa6
+  current_ticker: HBANO
+  name: Huntington Bancshares Incorporated
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_b8f55fcc3f7258aea67959608152c9c0
+  current_ticker: GET
+  name: Getnet AdquirÃªncia e ServiÃ§os para Meios de Pagamento S.A.
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_bd971211561d5302a73888a76a3121ae
+  current_ticker: APYX
+  name: Apyx Medical Corporation
+  trading_status: ACTIVE
+  policy: PROSPECTIVE_ONLY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_c6e0dfd70ce55a29842c69c7c684a705
+  current_ticker: CCC
+  name: CCC Intelligent Solutions Holdings Inc.
+  trading_status: ACTIVE
+  policy: PROSPECTIVE_ONLY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - UNVERIFIABLE_TICKER_INTERVAL
+- security_id: sec_c979b4df4e64565b9b3f01c045d4575c
+  current_ticker: UCB
+  name: United Community Banks, Inc.
+  trading_status: ACTIVE
+  policy: PROSPECTIVE_ONLY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_cecee901a25a55c5b70ac666ad224e71
+  current_ticker: CNTN
+  name: Canton Strategic Holdings Inc
+  trading_status: ACTIVE
+  policy: PROSPECTIVE_ONLY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - UNVERIFIABLE_TICKER_INTERVAL
+- security_id: sec_d875d74125fe542285b0ec74bdf373dc
+  current_ticker: BODI
+  name: The Beachbody Company, Inc.
+  trading_status: ACTIVE
+  policy: PROSPECTIVE_ONLY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - UNVERIFIABLE_TICKER_INTERVAL
+- security_id: sec_dd761533ff9f5ddaa982ac505975717a
+  current_ticker: VAPE
+  name: CEA Industries Inc.
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - UNVERIFIABLE_TICKER_INTERVAL
+- security_id: sec_df2504fc063f5948b48dd04956e3bdac
+  current_ticker: AIFA
+  name: All In FutureTech Alliance Inc.
+  trading_status: ACTIVE
+  policy: PROSPECTIVE_ONLY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - UNVERIFIABLE_TICKER_INTERVAL
+- security_id: sec_e43c5880715650309f187ee62d475a55
+  current_ticker: UB
+  name: MUFG Americas Holdings Corp
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_e59548c583b55d1da9661f53a183b8e3
+  current_ticker: AUC
+  name: ATIF Holdings Limited Ordinary Shares
+  trading_status: ACTIVE
+  policy: PROSPECTIVE_ONLY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - UNVERIFIABLE_TICKER_INTERVAL
+- security_id: sec_f21777f42a685ab89dc4203e61576d56
+  current_ticker: TIO
+  name: Tingo Group, Inc.
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_f47b37120f8a57308fec3d8ff407a272
+  current_ticker: DDMX
+  name: DD3 Acquisition Corp. II
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_f63b648df6615aedb8c367f4b8e52bb3
+  current_ticker: RMRM
+  name: Seven Hills Realty Trust
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_fa08e2d299c55741a06177228da5f17c
+  current_ticker: LGF
+  name: Lions Gate Entertainment Corp.
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_fac9e98c090d577cb3f26751aaea062f
+  current_ticker: LMRKO
+  name: Landmark Infrastructure Partners LP
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_fc216b56ac56554db8029845ca50949c
+  current_ticker: HOL
+  name: Holicity Inc.
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE
+- security_id: sec_fd50b152e5b65166a64d280ec7ac0af8
+  current_ticker: NUTR
+  name: NUSATRIP Inc
+  trading_status: INACTIVE
+  policy: EXCLUDED_UNVERIFIABLE_HISTORY
+  effective_from: '2026-08-14'
+  reason_codes:
+  - FMP_HISTORY_UNVERIFIABLE

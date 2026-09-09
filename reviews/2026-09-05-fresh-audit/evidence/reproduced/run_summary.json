@@ -1,0 +1,26 @@
+[
+  {
+    "experiment": "repro_data_factors_native.py",
+    "exit_code": 0
+  },
+  {
+    "experiment": "repro_signals_groups.py",
+    "exit_code": 0
+  },
+  {
+    "experiment": "repro_trading_web_numpy.py",
+    "exit_code": 0
+  },
+  {
+    "experiment": "repro_root.py",
+    "exit_code": 0
+  },
+  {
+    "experiment": "repro_template_names.py",
+    "exit_code": 0
+  },
+  {
+    "experiment": "repro_template_names.js",
+    "exit_code": 0
+  }
+]

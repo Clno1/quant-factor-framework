@@ -1,0 +1,234 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% set mr = market_regime %}
+{% set candidate = mr.candidate %}
+{% set gate_labels = {
+    'COMPLETE': '已完成',
+    'BLOCKED': '已阻断',
+    'PENDING': '待执行',
+    'READY_TO_SCREEN': '待筛选',
+    'NOT_STARTED': '未开始'
+} %}
+<header class="market-research-header">
+    <div>
+        <p class="factor-kicker">Market Regime Research</p>
+        <h1 class="page-title">市场研究状态</h1>
+        <p class="page-meta">市场核心特征、底部候选证据与研究发布门禁</p>
+    </div>
+    <span class="market-research-state is-research">研究观察 · 未获生产批准</span>
+</header>
+
+<nav class="research-workspace-tabs" aria-label="研究总览视图">
+    <a href="/research">因子研究</a>
+    <a href="/research?view=universes">股票池与数据</a>
+    <a href="/research/market-regime" class="is-active">大盘状态</a>
+</nav>
+
+<section class="market-research-notice" aria-labelledby="market-research-notice-title">
+    <div>
+        <span class="market-notice-label">{{ '当前结论' if mr.research_status == 'STAGE_1_CANDIDATE' else '证据状态' }}</span>
+        <h2 id="market-research-notice-title">
+            {{ '已有阶段性底部候选，还不能判断“今日见底”' if mr.research_status == 'STAGE_1_CANDIDATE' else '当前没有可验证的底部候选' }}
+        </h2>
+    </div>
+    <p>{{ mr.current_signal.note if mr.research_status == 'STAGE_1_CANDIDATE' else mr.message }}</p>
+</section>
+
+{% if mr.data_status != 'CURRENT' %}
+<div class="market-data-warning" role="status">
+    行情观察截止 {{ mr.observed_session or '—' }}，应发布到 {{ mr.expected_session or '—' }}，
+    当前延迟 {{ mr.data_delay_sessions if mr.data_delay_sessions is not none else '—' }} 个交易日。
+</div>
+{% endif %}
+
+<section class="market-status-grid" aria-label="市场研究摘要">
+    <div class="market-status-metric">
+        <span>行情截止</span>
+        <strong class="mono">{{ mr.observed_session or '—' }}</strong>
+        <small class="status-{{ mr.data_status|lower }}">{{ '已同步' if mr.data_status == 'CURRENT' else '存在延迟' }}</small>
+    </div>
+    <div class="market-status-metric">
+        <span>底部检验</span>
+        <strong class="mono">{{ mr.bottom_counts.stage_1_pass }} / {{ mr.bottom_counts.total }}</strong>
+        <small>Stage 1 通过 / 事前登记</small>
+    </div>
+    <div class="market-status-metric">
+        <span>生产批准</span>
+        <strong class="mono market-zero">{{ mr.stage_b.production_approved_count or 0 }}</strong>
+        <small>禁止作为实时买入信号</small>
+    </div>
+    <div class="market-status-metric">
+        <span>封存集</span>
+        <strong>{{ '保持封存' if mr.stage_b.holdout_status == 'SEALED_NOT_EVALUATED' else '状态异常' }}</strong>
+        <small class="mono">{{ mr.stage_b.holdout_start or '2022-01-01' }}+</small>
+    </div>
+    <div class="market-status-metric">
+        <span>PIT 市场宽度</span>
+        <strong class="status-{{ mr.pit.status|lower }}">{{ '已通过' if mr.pit.status == 'PASS' else '门禁阻断' }}</strong>
+        <small>{{ mr.pit.inconsistency_count if mr.pit.inconsistency_count is not none else '—' }} 个不一致</small>
+    </div>
+</section>
+
+<section class="market-observation-band" aria-labelledby="market-observation-title">
+    <div class="market-section-heading">
+        <div>
+            <span class="market-section-kicker">Latest verified source</span>
+            <h2 id="market-observation-title">最近市场观察</h2>
+        </div>
+        <span class="market-inline-status status-{{ mr.source_integrity|lower }}">来源校验 {{ mr.source_integrity }}</span>
+    </div>
+    <div class="market-observation-grid">
+        {% for key, label in [('spx', '标普 500'), ('ndx', '纳斯达克 100')] %}
+        {% set item = mr.market.get(key) %}
+        <div class="market-observation-item">
+            <span>{{ label }}</span>
+            <strong class="mono">{{ '{:,.2f}'.format(item.close) if item else '—' }}</strong>
+            <dl>
+                <div><dt>5日</dt><dd class="{{ 'is-positive' if item and item.return_5d is not none and item.return_5d > 0 else 'is-negative' if item and item.return_5d is not none and item.return_5d < 0 else '' }}">{{ '%.2f'|format(item.return_5d * 100) ~ '%' if item and item.return_5d is not none else '—' }}</dd></div>
+                <div><dt>20日</dt><dd class="{{ 'is-positive' if item and item.return_20d is not none and item.return_20d > 0 else 'is-negative' if item and item.return_20d is not none and item.return_20d < 0 else '' }}">{{ '%.2f'|format(item.return_20d * 100) ~ '%' if item and item.return_20d is not none else '—' }}</dd></div>
+                <div><dt>252日回撤</dt><dd class="{{ 'is-negative' if item and item.drawdown_252d is not none and item.drawdown_252d < 0 else '' }}">{{ '%.2f'|format(item.drawdown_252d * 100) ~ '%' if item and item.drawdown_252d is not none else '—' }}</dd></div>
+            </dl>
+        </div>
+        {% endfor %}
+        {% for key, label in [('vix', 'VIX'), ('cor1m', 'COR1M')] %}
+        {% set item = mr.risk.get(key) %}
+        <div class="market-observation-item compact">
+            <span>{{ label }}</span>
+            <strong class="mono">{{ '%.2f'|format(item.value) if item else '—' }}</strong>
+            <small class="mono">{{ item.date if item else '—' }}</small>
+        </div>
+        {% endfor %}
+        <div class="market-observation-item current-signal-empty">
+            <span>今日底部概率</span>
+            <strong>未运行</strong>
+            <small>等待 G7-G9 与影子评分</small>
+        </div>
+    </div>
+</section>
+
+<section class="market-chart-section" aria-labelledby="market-chart-title">
+    <div class="market-section-heading market-chart-heading">
+        <div>
+            <span class="market-section-kicker">Out-of-sample replay</span>
+            <h2 id="market-chart-title">样本外候选回放</h2>
+        </div>
+        <div class="market-chart-controls">
+            <div class="market-segmented" role="group" aria-label="市场指数">
+                {% for item in mr.instruments %}
+                <button type="button" data-market-instrument="{{ item.id }}" class="{% if item.id == 'spx' %}is-active{% endif %}">{{ item.label }}</button>
+                {% endfor %}
+            </div>
+            <label class="market-period-select">
+                <span>观察窗口</span>
+                <select id="market-period">
+                    {% for item in mr.periods %}
+                    <option value="{{ item.id }}" {% if item.id == 'wf_2020_2021' %}selected{% endif %}>{{ item.label }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+        </div>
+    </div>
+    <div class="market-chart-options">
+        <label><input id="show-market-signals" type="checkbox" checked> 候选报警</label>
+        <label><input id="show-market-outcomes" type="checkbox"> 事后评估标签</label>
+        <span><i class="market-legend-signal"></i> 当日可知候选</span>
+        <span><i class="market-legend-outcome"></i> 使用未来路径，仅供评估</span>
+    </div>
+    <div id="market-regime-chart" class="market-regime-chart" aria-label="大盘 K 线与底部候选标记"></div>
+    <div id="market-chart-message" class="market-chart-message" role="status">正在读取研究产物…</div>
+
+    <div class="market-episode-header">
+        <h3>所选窗口的候选报警 episode</h3>
+        <span id="market-episode-count" class="mono">—</span>
+    </div>
+    <div class="market-episode-table-wrap">
+        <table class="data market-episode-table">
+            <thead>
+                <tr>
+                    <th>区间</th>
+                    <th>峰值日</th>
+                    <th class="num">SPX 5日收益</th>
+                    <th class="num">模型概率</th>
+                    <th class="num">训练基准</th>
+                    <th>事后结果</th>
+                    <th class="num">触及日</th>
+                </tr>
+            </thead>
+            <tbody id="market-episode-body">
+                <tr><td colspan="7" class="empty-table-cell">正在读取…</td></tr>
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<section class="market-evidence-section" aria-labelledby="market-evidence-title">
+    <div class="market-section-heading">
+        <div>
+            <span class="market-section-kicker">Stage 1 evidence</span>
+            <h2 id="market-evidence-title">5日超跌反转候选</h2>
+        </div>
+        <span class="market-research-state is-candidate">{{ 'Stage 1 候选' if candidate else '无候选' }}</span>
+    </div>
+    {% if candidate %}
+    <p class="market-evidence-summary">
+        标普处于深度回撤候选状态时，过去 5 日收益越低，未来 5 日先反弹而不是继续下跌的概率越高。
+        这是短期反转候选，不是对绝对最低点的识别。
+    </p>
+    <div class="market-evidence-grid">
+        <div><span>报警 episode</span><strong class="mono">{{ candidate.signal_episodes }}</strong></div>
+        <div><span>事件精确率</span><strong class="mono">{{ '%.1f%%'|format(candidate.event_precision * 100) if candidate.event_precision is not none else '—' }}</strong></div>
+        <div><span>事件召回率</span><strong class="mono">{{ '%.1f%%'|format(candidate.event_recall * 100) if candidate.event_recall is not none else '—' }}</strong></div>
+        <div><span>ROC-AUC</span><strong class="mono">{{ '%.3f'|format(candidate.roc_auc) if candidate.roc_auc is not none else '—' }}</strong></div>
+        <div><span>PR-AUC</span><strong class="mono">{{ '%.1f%%'|format(candidate.average_precision * 100) if candidate.average_precision is not none else '—' }}</strong></div>
+        <div><span>基准正例率</span><strong class="mono">{{ '%.1f%%'|format(candidate.prevalence * 100) if candidate.prevalence is not none else '—' }}</strong></div>
+        <div><span>Brier Skill</span><strong class="mono">{{ '%.2f%%'|format(candidate.brier_skill * 100) if candidate.brier_skill is not none else '—' }}</strong></div>
+        <div><span>错误报警 / 年</span><strong class="mono">{{ '%.2f'|format(candidate.false_alarm_episodes_per_year) if candidate.false_alarm_episodes_per_year is not none else '—' }}</strong></div>
+    </div>
+    <div class="market-evidence-note">
+        25 个报警 episode 中约 15 个命中，但只覆盖 28.3% 的底部事件；2020 验证窗口的概率改善略为负。
+        图表预测仅覆盖 {{ mr.stage_b.prediction_start or '—' }} 至 {{ mr.stage_b.prediction_end or '—' }}，
+        研究源截止 {{ mr.stage_b.source_date_end or '—' }}。G7 参数扰动、G8 增量信息、G9 交易价值和 G10 影子运行仍未通过。
+    </div>
+    {% else %}
+    <p class="market-empty-state">当前不可读取阶段性通过候选。</p>
+    {% endif %}
+</section>
+
+<section class="market-pipeline-section" aria-labelledby="market-pipeline-title">
+    <div class="market-section-heading">
+        <div>
+            <span class="market-section-kicker">Research gates</span>
+            <h2 id="market-pipeline-title">研究门禁进度</h2>
+        </div>
+        <span class="mono market-run-id">{{ mr.stage_b.screening_id or '—' }}</span>
+    </div>
+    <div class="market-pipeline-list">
+        {% for item in mr.pipeline %}
+        <div class="market-pipeline-row">
+            <span class="market-pipeline-dot status-{{ item.status|lower }}" aria-hidden="true"></span>
+            <div>
+                <strong>{{ item.name }}</strong>
+                <p>{{ item.note }}</p>
+            </div>
+            <span class="market-pipeline-status status-{{ item.status|lower }}" title="系统状态：{{ item.status }}">{{ gate_labels.get(item.status, item.status) }}</span>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+
+{% if mr.errors %}
+<details class="market-integrity-errors">
+    <summary>数据校验详情</summary>
+    <ul>
+        {% for error in mr.errors %}<li>{{ error }}</li>{% endfor %}
+    </ul>
+</details>
+{% endif %}
+
+<script id="market-regime-initial" type="application/json">{{ mr|tojson }}</script>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/market_regime_status.js?v={{ asset_ver }}"></script>
+{% endblock %}

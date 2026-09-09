@@ -1,0 +1,31 @@
+[Unit]
+Description=Process queued custom-universe market-data requests
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=1h
+# The timer starts this oneshot about 12 times per hour.  Successful starts
+# also count toward systemd's rate limit, so keep headroom for retries.
+StartLimitBurst=24
+
+[Service]
+Type=oneshot
+User=quant
+Group=quant
+WorkingDirectory=/opt/quant
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONPATH=/opt/quant
+EnvironmentFile=/etc/quant/market-data.env
+ExecStartPre=/opt/quant/.venv/bin/python -c "import duckdb, exchange_calendars, sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
+ExecStart=/opt/quant/.venv/bin/python /opt/quant/scripts/run_data_requests.py --limit 10 --env-file /etc/quant/market-data.env
+TimeoutStartSec=2h
+Restart=on-failure
+RestartSec=5min
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

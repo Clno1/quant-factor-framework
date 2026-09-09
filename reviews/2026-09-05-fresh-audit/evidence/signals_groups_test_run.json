@@ -1,0 +1,26 @@
+{
+  "runtime": "/private/tmp/quant_fresh_audit_20260905/light-venv/bin/python",
+  "cwd": "/private/tmp/quant_fresh_audit_20260905/repo",
+  "files": [
+    "tests/test_cup_handle.py",
+    "tests/test_intraday_monitor.py",
+    "tests/test_momentum_alerts.py",
+    "tests/test_premarket_digest.py",
+    "tests/test_group_analytics_aggregation.py",
+    "tests/test_group_analytics_market_provider.py",
+    "tests/test_group_analytics_returns.py",
+    "tests/test_group_analytics_service.py",
+    "tests/test_group_analytics_classification_artifacts.py",
+    "tests/test_discord_transport.py",
+    "tests/test_broad_breakout_adapter.py",
+    "tests/test_group_analytics_golden_replay.py",
+    "tests/test_momentum_discord_routing.py"
+  ],
+  "exit_code": 0,
+  "passed": 184,
+  "subtests_passed": 56,
+  "warnings": 1,
+  "elapsed_seconds": 2.59,
+  "log_path": "/private/tmp/quant_fresh_audit_20260905/signals_groups_pytest.log",
+  "collection_limitation": "Initially also requested test_fmp_websocket_probe.py; collection failed for missing websockets. Removed that file and executed the listed 13 files. No implementation test failures."
+}

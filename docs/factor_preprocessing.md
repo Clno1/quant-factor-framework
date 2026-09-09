@@ -96,19 +96,15 @@ preprocessing:
 
 ## 为什么市值中性化暂未开启
 
-市值中性化需要真实历史市值宽表：
-
-```text
-data/processed/<UNIVERSE>/market_cap.parquet
-```
-
-当前项目已有的日线缓存只有 OHLCV：
+市值中性化需要一套版本化、point-in-time 的历史市值矩阵，并且必须和行情版本按日期、ticker
+严格绑定。当前正式行情版本只有 OHLCV：
 
 ```text
 open / high / low / close / adj_close / volume
 ```
 
-没有历史市值矩阵。如果现在把 `neutralize_mcap` 直接设为 `true`，系统最多只能记录 warning 并跳过市值中性化。这会造成误解：配置看起来打开了，但实际上没有完成真实市值中性化。
+没有历史市值矩阵。如果现在把 `neutralize_mcap` 直接设为 `true`，系统会因为缺少输入而拒绝或
+跳过，造成“配置看似开启但研究并未真正完成”的误解。不能用今天的市值回填历史。
 
 因此当前只打开有可靠数据支撑的行业中性化。等后续补齐 point-in-time 历史市值数据后，再打开市值中性化。
 

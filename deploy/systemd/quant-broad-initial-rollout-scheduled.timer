@@ -1,0 +1,11 @@
+[Unit]
+Description=Launch the one-time broad US initial rollout on the approved SG window
+
+[Timer]
+OnCalendar=2026-08-15 11:35:00 Asia/Singapore
+Persistent=true
+AccuracySec=1min
+Unit=quant-broad-initial-rollout.service
+
+[Install]
+WantedBy=timers.target

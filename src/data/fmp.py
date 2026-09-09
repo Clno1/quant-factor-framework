@@ -5,6 +5,8 @@ Financial Modeling Prep (FMP) API 客户端。
 
 支持的 endpoint：
   - /stable/sp500-constituent              成分股 + sector + subSector
+  - /stable/nasdaq-constituent             NASDAQ-100 当前成分
+  - /stable/historical-nasdaq-constituent  NASDAQ-100 历史变更事件
   - /stable/company-screener               美股活跃股票 / ETF 筛选
   - /stable/historical-price-eod/dividend-adjusted   日线 OHLCV（含分红/拆股复权 close）
   - /stable/historical-price-eod/full      日线 OHLCV（仅拆股复权）
@@ -18,9 +20,12 @@ API Key 加载优先级（高 → 低）：
 from __future__ import annotations
 
 import os
+from io import StringIO
+import re
 import time
 from typing import Any, Iterable
 
+import numpy as np
 import pandas as pd
 import requests
 
@@ -30,6 +35,87 @@ from src.utils.logger import get_logger
 log = get_logger(__name__)
 
 _BASE_URL = "https://financialmodelingprep.com/stable"
+
+
+def _normalize_us_ticker(value: Any) -> str:
+    """Normalize provider punctuation without changing the security class."""
+    return (
+        str(value or "")
+        .strip()
+        .upper()
+        .replace(".", "-")
+        .replace("/", "-")
+    )
+
+
+def infer_us_security_asset_type(
+    *,
+    ticker: Any,
+    name: Any,
+    is_adr: bool = False,
+    is_etf: bool = False,
+    is_fund: bool = False,
+) -> str:
+    """Classify FMP profile rows conservatively for broad-equity research.
+
+    FMP marks many exchange-listed instruments as non-ETF/non-fund, which is
+    not equivalent to ordinary common stock.  Names catch most special
+    instruments; normalized US suffixes cover terse descriptions such as
+    ``AAIC-PB`` and ``AAC-UN``.
+    """
+    if bool(is_etf):
+        return "ETF"
+    if bool(is_fund):
+        return "FUND"
+    if bool(is_adr):
+        return "ADR"
+
+    symbol = _normalize_us_ticker(ticker)
+    label = str(name or "").strip().upper()
+    if re.search(r"\bUNITS?\b", label):
+        return "UNIT"
+    if (
+        symbol.endswith(("-UN", "-U"))
+        or re.fullmatch(r"[A-Z0-9]{4,}U", symbol)
+        or (
+            re.search(r"\bACQUISITION (?:CORP|CORPORATION|CO)\b", label)
+            and re.fullmatch(r"[A-Z0-9]{2,}U", symbol)
+        )
+    ):
+        return "UNIT"
+    if (
+        re.search(r"\bWARRANTS?\b|\bWTS?\.?$", label)
+        or symbol.endswith(("-WT", "-WTS"))
+        or re.fullmatch(r"[A-Z0-9]{4,}W", symbol)
+    ):
+        return "WARRANT"
+    if re.search(r"\bRIGHTS?\b", label) or re.fullmatch(
+        r"[A-Z0-9]{4,}R", symbol
+    ):
+        return "RIGHT"
+    if re.search(r"\bWHEN[- ]ISSUED\b|\bTEMPORARY\b", label):
+        return "TEMPORARY"
+    if (
+        re.search(
+            r"\bPFD\b|PREFERRED (?:STOCK|SHARES)|PREFERENCE SHARES|"
+            r"DEPOSITARY SHARES.*(?:PREFERRED|PFD)",
+            label,
+        )
+        or re.search(r"-P(?:R)?[A-Z0-9]{0,2}$", symbol)
+        # Nasdaq uses a fifth-character ``P`` suffix for first-class
+        # preferred issues.  FMP may expose only the issuer name, so OCCIP-
+        # style records cannot be identified from the profile text alone.
+        or re.fullmatch(r"[A-Z0-9]{4}P", symbol)
+    ):
+        return "PREFERRED"
+    if re.search(
+        r"\b(?:SENIOR |SUBORDINATED )?NOTES?\b|\bDEBENTURES?\b|"
+        r"\b(?:SR|JR|JUNIOR|SUB|SB)(?:\s+(?:SUB|FXD|FLG|MA))*\s+"
+        r"(?:NT|NTS|DB|DEB)\b",
+        label,
+    ):
+        return "NOTE"
+    return "STOCK"
 
 
 # ============================================================
@@ -66,21 +152,35 @@ def _request_retry() -> int:
 # 通用 HTTP
 # ============================================================
 
-def _get(path: str, params: dict[str, Any] | None = None) -> Any:
-    """带超时与指数退避重试的 GET。返回解析后的 JSON。"""
+def _request(
+    path: str,
+    params: dict[str, Any] | None = None,
+    *,
+    timeout: float | None = None,
+    retry: int | None = None,
+    rate_limit_passthrough: bool = False,
+) -> requests.Response:
+    """Execute one authenticated GET with bounded retries."""
     params = dict(params or {})
     url = f"{_BASE_URL}{path}"
     headers = {"apikey": get_api_key()}
 
-    timeout = _request_timeout()
-    retry = _request_retry()
+    request_timeout = _request_timeout() if timeout is None else float(timeout)
+    request_retry = _request_retry() if retry is None else int(retry)
     last_exc: Exception | None = None
 
-    for attempt in range(retry + 1):
+    for attempt in range(request_retry + 1):
         try:
-            r = requests.get(url, params=params, headers=headers, timeout=timeout)
+            r = requests.get(
+                url,
+                params=params,
+                headers=headers,
+                timeout=request_timeout,
+            )
             # 限流
             if r.status_code == 429:
+                if rate_limit_passthrough:
+                    r.raise_for_status()
                 wait = 2.0 * (2 ** attempt)
                 log.warning("FMP rate limited (429). Sleeping %.0fs ...", wait)
                 time.sleep(wait)
@@ -92,34 +192,131 @@ def _get(path: str, params: dict[str, Any] | None = None) -> Any:
                     response=r,
                 )
             r.raise_for_status()
-            data = r.json()
-            # FMP 偶发返回 {"Error Message": "..."} 而不是 list/dict
-            if isinstance(data, dict) and "Error Message" in data:
-                raise RuntimeError(f"FMP error: {data['Error Message']}")
-            return data
+            return r
         except requests.HTTPError as e:
+            if rate_limit_passthrough and e.response is not None and e.response.status_code == 429:
+                raise
             # 4xx 直接透传，不重试
             if e.response is not None and 400 <= e.response.status_code < 500 \
                     and e.response.status_code != 429:
                 raise
             last_exc = e
-            if attempt < retry:
+            if attempt < request_retry:
                 wait = 1.5 * (2 ** attempt)
                 log.warning(
                     "FMP %s attempt %d/%d failed: %s. Sleep %.1fs ...",
-                    path, attempt + 1, retry + 1, e, wait,
+                    path, attempt + 1, request_retry + 1, e, wait,
                 )
                 time.sleep(wait)
         except Exception as e:  # noqa: BLE001
             last_exc = e
-            if attempt < retry:
+            if attempt < request_retry:
                 wait = 1.5 * (2 ** attempt)
                 log.warning(
                     "FMP %s attempt %d/%d failed: %s. Sleep %.1fs ...",
-                    path, attempt + 1, retry + 1, e, wait,
+                    path, attempt + 1, request_retry + 1, e, wait,
                 )
                 time.sleep(wait)
-    raise RuntimeError(f"FMP request to {path} failed after {retry + 1} attempts: {last_exc}")
+    raise RuntimeError(
+        f"FMP request to {path} failed after {request_retry + 1} attempts: "
+        f"{last_exc}"
+    )
+
+
+def _get(path: str, params: dict[str, Any] | None = None) -> Any:
+    """带超时与指数退避重试的 GET。返回解析后的 JSON。"""
+    data = _request(path, params=params).json()
+    # FMP 偶发返回 {"Error Message": "..."} 而不是 list/dict
+    if isinstance(data, dict) and "Error Message" in data:
+        raise RuntimeError(f"FMP error: {data['Error Message']}")
+    return data
+
+
+def _ep_records(path: str, params: dict[str, Any], *, timeout: float) -> list[dict[str, Any]]:
+    """Strict, single-attempt EP reads; orchestration owns the collection budget."""
+    if not np.isfinite(timeout) or timeout <= 0:
+        raise ValueError("timeout must be positive and finite")
+    payload = _request(path, params, timeout=timeout, retry=0, rate_limit_passthrough=True).json()
+    if not isinstance(payload, list) or any(not isinstance(row, dict) for row in payload):
+        raise ValueError(f"FMP {path} returned an invalid records payload")
+    return payload
+
+
+def get_ep_earnings_calendar_day(day: str, *, timeout: float = 10) -> list[dict[str, Any]]:
+    from datetime import date
+    if date.fromisoformat(day).isoformat() != day:
+        raise ValueError("day must be YYYY-MM-DD")
+    return _ep_records("/earnings-calendar", {"from": day, "to": day}, timeout=timeout)
+
+
+def get_ep_news_page(feed: str, *, page: int = 0, limit: int = 100,
+                     timeout: float = 10) -> list[dict[str, Any]]:
+    paths = {"stock": "/news/stock-latest", "press": "/news/press-releases-latest"}
+    if feed not in paths or type(page) is not int or page < 0 or type(limit) is not int or not 1 <= limit <= 250:
+        raise ValueError("Invalid EP feed or pagination")
+    return _ep_records(paths[feed], {"page": page, "limit": limit}, timeout=timeout)
+
+
+def get_ep_security_profile(symbol: str, *, timeout: float = 10) -> dict[str, Any] | None:
+    symbol = _normalize_us_ticker(symbol)
+    if not re.fullmatch(r"[A-Z0-9][A-Z0-9-]{0,19}", symbol):
+        raise ValueError("Invalid EP ticker")
+    rows = _ep_records("/profile", {"symbol": symbol}, timeout=timeout)
+    if not rows:
+        return None
+    if len(rows) != 1 or _normalize_us_ticker(rows[0].get("symbol")) != symbol:
+        raise ValueError("EP profile identity mismatch")
+    row = rows[0]
+    flags = {}
+    for field in ("isEtf", "isFund", "isAdr", "isActivelyTrading"):
+        value = str(row.get(field, "")).lower().strip()
+        if value not in {"true", "false", "1", "0"}:
+            raise ValueError("EP profile identity flags incomplete")
+        flags[field] = value in {"true", "1"}
+    return {"ticker": symbol, "name": str(row.get("companyName") or ""),
+            "exchange": str(row.get("exchangeShortName") or row.get("exchange") or "").upper(),
+            "is_actively_trading": flags["isActivelyTrading"],
+            "asset_type": infer_us_security_asset_type(ticker=symbol, name=row.get("companyName"),
+                is_etf=flags["isEtf"], is_fund=flags["isFund"], is_adr=flags["isAdr"])}
+
+
+def _records_frame(payload: Any, *, endpoint: str) -> pd.DataFrame:
+    """Normalize an FMP records payload while rejecting opaque responses."""
+    if isinstance(payload, list):
+        rows = payload
+    elif isinstance(payload, dict):
+        if "Error Message" in payload:
+            raise RuntimeError(f"FMP error: {payload['Error Message']}")
+        rows = payload.get("data") or payload.get("historical") or []
+    else:
+        raise RuntimeError(f"FMP {endpoint} returned unexpected payload")
+    if not isinstance(rows, list):
+        raise RuntimeError(f"FMP {endpoint} returned non-record data")
+    return pd.DataFrame(rows)
+
+
+def _response_records_frame(
+    response: requests.Response,
+    *,
+    endpoint: str,
+    csv_dtype: Any = None,
+) -> pd.DataFrame:
+    """Decode FMP bulk endpoints that may return either JSON or CSV."""
+    content_type = str(response.headers.get("content-type", "")).lower()
+    if "json" in content_type:
+        return _records_frame(response.json(), endpoint=endpoint)
+    text = str(response.text or "").lstrip("\ufeff").strip()
+    if not text:
+        raise RuntimeError(f"FMP {endpoint} returned an empty response")
+    if text.startswith("[") or text.startswith("{"):
+        try:
+            return _records_frame(response.json(), endpoint=endpoint)
+        except Exception:  # Some bulk responses have an incorrect media type.
+            pass
+    try:
+        return pd.read_csv(StringIO(text), dtype=csv_dtype)
+    except Exception as exc:  # noqa: BLE001 - preserve endpoint context.
+        raise RuntimeError(f"FMP {endpoint} returned invalid CSV") from exc
 
 
 # ============================================================
@@ -146,10 +343,295 @@ def get_sp500_constituents() -> pd.DataFrame:
     df = df.rename(columns=rename)
     cols = [c for c in ["ticker", "name", "sector", "sub_industry"] if c in df.columns]
     df = df[cols].dropna(subset=["ticker"])
-    df["ticker"] = df["ticker"].astype(str).str.strip().str.replace(".", "-", regex=False)
+    df["ticker"] = (
+        df["ticker"].astype(str).str.strip()
+        .str.replace(".", "-", regex=False)
+        .str.replace("/", "-", regex=False)
+    )
     df = df.drop_duplicates(subset=["ticker"]).reset_index(drop=True)
     log.info("FMP returned %d S&P 500 tickers.", len(df))
     return df
+
+
+def get_historical_sp500_constituent_changes() -> pd.DataFrame:
+    """
+    Return FMP's S&P 500 addition/removal event history.
+
+    This endpoint does *not* return complete membership snapshots.  A row may
+    represent a paired replacement, an addition-only event, or a removal-only
+    event.  Snapshot reconstruction therefore lives in the market-regime
+    research domain, where the current constituent set and event consistency
+    can be validated together.
+    """
+    log.info("Fetching historical S&P 500 constituent changes from FMP ...")
+    data = _get("/historical-sp500-constituent")
+    if not isinstance(data, list) or not data:
+        raise RuntimeError(
+            "FMP historical-sp500-constituent returned empty / unexpected payload"
+        )
+
+    frame = pd.DataFrame(data)
+    required = {
+        "date",
+        "symbol",
+        "addedSecurity",
+        "removedTicker",
+        "removedSecurity",
+    }
+    missing = required - set(frame.columns)
+    if missing:
+        raise RuntimeError(
+            "FMP historical-sp500-constituent missing fields: "
+            f"{sorted(missing)}"
+        )
+    frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
+    if frame["date"].isna().any():
+        raise RuntimeError(
+            "FMP historical-sp500-constituent contains invalid effective dates"
+        )
+    return frame.sort_values(
+        ["date", "symbol", "removedTicker"],
+        ascending=[False, True, True],
+    ).reset_index(drop=True)
+
+
+def get_nasdaq100_constituents() -> pd.DataFrame:
+    """Return FMP's current NASDAQ-100 constituents with classifications."""
+    log.info("Fetching NASDAQ-100 constituents from FMP ...")
+    data = _get("/nasdaq-constituent")
+    if not isinstance(data, list) or not data:
+        raise RuntimeError(
+            "FMP nasdaq-constituent returned empty / unexpected payload"
+        )
+
+    frame = pd.DataFrame(data).rename(
+        columns={
+            "symbol": "ticker",
+            "subSector": "sub_industry",
+        }
+    )
+    required = {"ticker", "name", "sector", "sub_industry"}
+    missing = required - set(frame.columns)
+    if missing:
+        raise RuntimeError(
+            f"FMP nasdaq-constituent missing fields: {sorted(missing)}"
+        )
+    optional = [
+        column
+        for column in ("cik", "dateFirstAdded", "founded", "headQuarter")
+        if column in frame.columns
+    ]
+    frame = frame[["ticker", "name", "sector", "sub_industry", *optional]].copy()
+    frame["ticker"] = (
+        frame["ticker"]
+        .astype(str)
+        .str.strip()
+        .str.upper()
+        .str.replace(".", "-", regex=False)
+        .str.replace("/", "-", regex=False)
+    )
+    frame = frame[frame["ticker"].ne("")].drop_duplicates("ticker")
+    if not 90 <= len(frame) <= 110:
+        raise RuntimeError(
+            f"FMP nasdaq-constituent returned implausible row count: {len(frame)}"
+        )
+    log.info("FMP returned %d NASDAQ-100 securities.", len(frame))
+    return frame.sort_values("ticker").reset_index(drop=True)
+
+
+def get_historical_nasdaq100_constituent_changes() -> pd.DataFrame:
+    """
+    Return the raw FMP NASDAQ-100 constituent event history.
+
+    FMP's ``date`` is often the announcement date or the preceding Sunday.
+    ``dateAdded`` is the provider's explicit effective date and is therefore
+    retained separately for the PIT adapter to validate and normalize.
+    """
+    log.info("Fetching historical NASDAQ-100 constituent changes from FMP ...")
+    data = _get("/historical-nasdaq-constituent")
+    if not isinstance(data, list) or not data:
+        raise RuntimeError(
+            "FMP historical-nasdaq-constituent returned empty / unexpected payload"
+        )
+
+    frame = pd.DataFrame(data)
+    required = {
+        "date",
+        "dateAdded",
+        "symbol",
+        "addedSecurity",
+        "removedTicker",
+        "removedSecurity",
+    }
+    missing = required - set(frame.columns)
+    if missing:
+        raise RuntimeError(
+            "FMP historical-nasdaq-constituent missing fields: "
+            f"{sorted(missing)}"
+        )
+    provider_dates = pd.to_datetime(frame["date"], errors="coerce")
+    effective_dates = pd.to_datetime(frame["dateAdded"], errors="coerce")
+    if provider_dates.isna().any() or effective_dates.isna().any():
+        raise RuntimeError(
+            "FMP historical-nasdaq-constituent contains invalid dates"
+        )
+    order = pd.DataFrame(
+        {
+            "effective_date": effective_dates,
+            "symbol": frame["symbol"].fillna("").astype(str),
+            "removed": frame["removedTicker"].fillna("").astype(str),
+        }
+    ).sort_values(
+        ["effective_date", "symbol", "removed"],
+        ascending=[False, True, True],
+    )
+    return frame.loc[order.index].reset_index(drop=True)
+
+
+def get_stock_list() -> pd.DataFrame:
+    """Return FMP's broad symbol directory without treating it as a PIT pool."""
+    frame = _records_frame(_get("/stock-list"), endpoint="stock-list")
+    if frame.empty or not {"symbol", "companyName"}.issubset(frame.columns):
+        raise RuntimeError("FMP stock-list returned empty or missing required fields")
+    frame = frame.rename(columns={"symbol": "ticker", "companyName": "name"})
+    frame["ticker"] = (
+        frame["ticker"].fillna("").astype(str).str.strip().str.upper().str.replace(
+            ".", "-", regex=False
+        )
+        .str.replace("/", "-", regex=False)
+    )
+    frame["name"] = frame["name"].fillna("").astype(str).str.strip()
+    return (
+        frame.loc[frame["ticker"].ne(""), ["ticker", "name"]]
+        .drop_duplicates("ticker", keep="last")
+        .sort_values("ticker")
+        .reset_index(drop=True)
+    )
+
+
+def get_delisted_companies(*, page: int = 0, limit: int = 100) -> pd.DataFrame:
+    """Return one normalized page of FMP's US delisted-company directory."""
+    if int(page) < 0:
+        raise ValueError("page must be non-negative")
+    if not 1 <= int(limit) <= 100:
+        raise ValueError("limit must be between 1 and 100")
+    frame = _records_frame(
+        _get("/delisted-companies", {"page": int(page), "limit": int(limit)}),
+        endpoint="delisted-companies",
+    )
+    columns = [
+        "ticker", "name", "exchange", "ipo_date", "delisted_date",
+    ]
+    if frame.empty:
+        return pd.DataFrame(columns=columns)
+    required = {"symbol", "companyName", "exchange", "ipoDate", "delistedDate"}
+    missing = required - set(frame.columns)
+    if missing:
+        raise RuntimeError(
+            f"FMP delisted-companies missing fields: {sorted(missing)}"
+        )
+    frame = frame.rename(columns={
+        "symbol": "ticker",
+        "companyName": "name",
+        "ipoDate": "ipo_date",
+        "delistedDate": "delisted_date",
+    })
+    frame["ticker"] = (
+        frame["ticker"].astype(str).str.strip().str.upper().str.replace(
+            ".", "-", regex=False
+        )
+        .str.replace("/", "-", regex=False)
+    )
+    frame["exchange"] = frame["exchange"].fillna("").astype(str).str.upper()
+    frame["name"] = frame["name"].fillna("").astype(str).str.strip()
+    for column in ("ipo_date", "delisted_date"):
+        frame[column] = pd.to_datetime(frame[column], errors="coerce").dt.normalize()
+    return (
+        frame.loc[frame["ticker"].ne(""), columns]
+        .drop_duplicates(["ticker", "delisted_date"], keep="last")
+        .sort_values(["delisted_date", "ticker"], ascending=[False, True])
+        .reset_index(drop=True)
+    )
+
+
+def get_symbol_changes(*, limit: int = 10_000) -> pd.DataFrame:
+    """Return normalized provider symbol-change events."""
+    if not 1 <= int(limit) <= 100_000:
+        raise ValueError("limit must be between 1 and 100000")
+    frame = _records_frame(
+        _get("/symbol-change", {"limit": int(limit)}),
+        endpoint="symbol-change",
+    )
+    columns = ["date", "old_ticker", "new_ticker", "company_name"]
+    if frame.empty:
+        return pd.DataFrame(columns=columns)
+    required = {"date", "oldSymbol", "newSymbol", "companyName"}
+    missing = required - set(frame.columns)
+    if missing:
+        raise RuntimeError(f"FMP symbol-change missing fields: {sorted(missing)}")
+    frame = frame.rename(columns={
+        "oldSymbol": "old_ticker",
+        "newSymbol": "new_ticker",
+        "companyName": "company_name",
+    })
+    frame["date"] = pd.to_datetime(frame["date"], errors="coerce").dt.normalize()
+    for column in ("old_ticker", "new_ticker"):
+        frame[column] = (
+            frame[column].fillna("").astype(str).str.strip().str.upper()
+            .str.replace(".", "-", regex=False)
+            .str.replace("/", "-", regex=False)
+        )
+    frame["company_name"] = frame["company_name"].fillna("").astype(str).str.strip()
+    return (
+        frame.dropna(subset=["date"])
+        .loc[lambda value: value["old_ticker"].ne("") & value["new_ticker"].ne("")]
+        .loc[:, columns]
+        .drop_duplicates(["date", "old_ticker", "new_ticker"], keep="last")
+        .sort_values(["date", "old_ticker"], ascending=[False, True])
+        .reset_index(drop=True)
+    )
+
+
+def get_ipo_calendar(*, start: str, end: str) -> pd.DataFrame:
+    """Return normalized IPO calendar rows for an inclusive date range."""
+    start_ts = pd.Timestamp(start).normalize()
+    end_ts = pd.Timestamp(end).normalize()
+    if pd.isna(start_ts) or pd.isna(end_ts) or start_ts > end_ts:
+        raise ValueError("start/end must define a valid inclusive date range")
+    frame = _records_frame(
+        _get("/ipos-calendar", {
+            "from": start_ts.date().isoformat(),
+            "to": end_ts.date().isoformat(),
+        }),
+        endpoint="ipos-calendar",
+    )
+    columns = ["date", "ticker", "company_name", "exchange"]
+    if frame.empty:
+        return pd.DataFrame(columns=columns)
+    required = {"date", "symbol", "company", "exchange"}
+    missing = required - set(frame.columns)
+    if missing:
+        raise RuntimeError(f"FMP ipos-calendar missing fields: {sorted(missing)}")
+    frame = frame.rename(columns={
+        "symbol": "ticker",
+        "company": "company_name",
+    })
+    frame["date"] = pd.to_datetime(frame["date"], errors="coerce").dt.normalize()
+    frame["ticker"] = (
+        frame["ticker"].fillna("").astype(str).str.strip().str.upper().str.replace(
+            ".", "-", regex=False
+        )
+        .str.replace("/", "-", regex=False)
+    )
+    frame["company_name"] = frame["company_name"].fillna("").astype(str).str.strip()
+    frame["exchange"] = frame["exchange"].fillna("").astype(str).str.upper()
+    return (
+        frame.dropna(subset=["date"])
+        .loc[lambda value: value["ticker"].ne(""), columns]
+        .drop_duplicates(["date", "ticker"], keep="last")
+        .sort_values(["date", "ticker"])
+        .reset_index(drop=True)
+    )
 
 
 def get_us_active_equities(
@@ -193,7 +675,9 @@ def get_us_active_equities(
         raise RuntimeError(f"FMP company-screener missing fields: {sorted(required - set(df.columns))}")
 
     df["ticker"] = (
-        df["ticker"].astype(str).str.strip().str.upper().str.replace(".", "-", regex=False)
+        df["ticker"].astype(str).str.strip().str.upper()
+        .str.replace(".", "-", regex=False)
+        .str.replace("/", "-", regex=False)
     )
     exchange = df.get("exchange_short", pd.Series(index=df.index, dtype="object"))
     exchange = exchange.fillna(df.get("exchange", pd.Series(index=df.index, dtype="object")))
@@ -245,7 +729,7 @@ def get_us_active_equities(
 
 def get_security_profile(ticker: str) -> dict[str, Any] | None:
     """Return normalized profile metadata, including an explicit asset type."""
-    symbol = str(ticker or "").strip().upper().replace(".", "-")
+    symbol = _normalize_us_ticker(ticker)
     if not symbol:
         return None
     payload = _get("/profile", {"symbol": symbol})
@@ -259,12 +743,13 @@ def get_security_profile(ticker: str) -> dict[str, Any] | None:
     def _flag(name: str, default: bool = False) -> bool:
         return str(row.get(name, default)).strip().lower() in {"true", "1"}
 
-    if _flag("isEtf"):
-        asset_type = "ETF"
-    elif _flag("isFund"):
-        asset_type = "FUND"
-    else:
-        asset_type = "STOCK"
+    asset_type = infer_us_security_asset_type(
+        ticker=row.get("symbol") or symbol,
+        name=row.get("companyName") or row.get("name") or "",
+        is_adr=_flag("isAdr"),
+        is_etf=_flag("isEtf"),
+        is_fund=_flag("isFund"),
+    )
     return {
         "ticker": str(row.get("symbol") or symbol).strip().upper(),
         "name": str(row.get("companyName") or row.get("name") or "").strip(),
@@ -275,8 +760,121 @@ def get_security_profile(ticker: str) -> dict[str, Any] | None:
             row.get("exchangeShortName") or row.get("exchange") or ""
         ).strip().upper(),
         "currency": str(row.get("currency") or "USD").strip().upper(),
+        "country": str(row.get("country") or "").strip().upper(),
+        "cik": str(row.get("cik") or "").strip(),
+        "isin": str(row.get("isin") or "").strip().upper(),
+        "cusip": str(row.get("cusip") or "").strip().upper(),
+        "listing_date": (
+            parsed_listing.normalize()
+            if not pd.isna(
+                parsed_listing := pd.to_datetime(
+                    row.get("ipoDate"), errors="coerce"
+                )
+            )
+            else None
+        ),
+        "is_adr": _flag("isAdr"),
         "is_actively_trading": _flag("isActivelyTrading", default=True),
     }
+
+
+def get_company_profiles_bulk(
+    *,
+    parts: Iterable[int] = (0, 1, 2, 3),
+) -> pd.DataFrame:
+    """Return identity-relevant fields from FMP's four profile bulk parts."""
+    normalized_parts = list(dict.fromkeys(int(part) for part in parts))
+    if not normalized_parts or any(part < 0 for part in normalized_parts):
+        raise ValueError("parts must contain non-negative integers")
+    frames: list[pd.DataFrame] = []
+    for part in normalized_parts:
+        raw = _response_records_frame(
+            _request("/profile-bulk", {"part": part}),
+            endpoint=f"profile-bulk part={part}",
+            csv_dtype=str,
+        )
+        if raw.empty:
+            continue
+        required = {"symbol", "companyName", "exchange"}
+        missing = required - set(raw.columns)
+        if missing:
+            raise RuntimeError(
+                f"FMP profile-bulk part={part} missing fields: {sorted(missing)}"
+            )
+        keep = [
+            "symbol", "companyName", "exchange", "country", "currency",
+            "cik", "isin", "cusip", "ipoDate", "sector", "industry",
+            "isActivelyTrading", "isAdr", "isEtf", "isFund",
+        ]
+        frame = raw.reindex(columns=keep).copy()
+        frame["source_part"] = part
+        frames.append(frame)
+    if not frames:
+        raise RuntimeError("FMP profile-bulk returned no rows")
+    frame = pd.concat(frames, ignore_index=True).rename(columns={
+        "symbol": "ticker",
+        "companyName": "name",
+        "industry": "sub_industry",
+        "ipoDate": "listing_date",
+    })
+
+    def _flag(column: str, default: bool = False) -> pd.Series:
+        values = frame[column] if column in frame.columns else default
+        if not isinstance(values, pd.Series):
+            values = pd.Series(values, index=frame.index)
+        return values.fillna(default).astype(str).str.lower().isin({"true", "1"})
+
+    frame["ticker"] = (
+        frame["ticker"].fillna("").astype(str).str.strip().str.upper().str.replace(
+            ".", "-", regex=False
+        )
+        .str.replace("/", "-", regex=False)
+    )
+    for column in ("name", "sector", "sub_industry"):
+        frame[column] = frame[column].fillna("").astype(str).str.strip()
+    for column in ("country", "currency", "cik", "isin", "cusip"):
+        frame[column] = frame[column].fillna("").astype(str).str.strip().str.upper()
+    exchange = frame["exchange"].fillna("").astype(str).str.strip().str.upper()
+    frame["exchange"] = exchange.map(
+        lambda value: (
+            "NASDAQ" if "NASDAQ" in value
+            else "AMEX" if "AMEX" in value
+            else "NYSE" if "NYSE" in value
+            else value
+        )
+    )
+    frame["listing_date"] = pd.to_datetime(
+        frame["listing_date"], errors="coerce"
+    ).dt.normalize()
+    frame["is_active"] = _flag("isActivelyTrading", default=False)
+    frame["is_adr"] = _flag("isAdr")
+    frame["is_etf"] = _flag("isEtf")
+    frame["is_fund"] = _flag("isFund")
+    frame["asset_type"] = [
+        infer_us_security_asset_type(
+            ticker=row.ticker,
+            name=row.name,
+            is_adr=bool(row.is_adr),
+            is_etf=bool(row.is_etf),
+            is_fund=bool(row.is_fund),
+        )
+        for row in frame.itertuples(index=False)
+    ]
+    frame["trading_status"] = frame["is_active"].map(
+        {True: "ACTIVE", False: "INACTIVE"}
+    )
+    columns = [
+        "ticker", "name", "asset_type", "exchange", "country", "currency",
+        "cik", "isin", "cusip", "listing_date", "sector", "sub_industry",
+        "trading_status", "is_active", "is_adr", "is_etf", "is_fund",
+        "source_part",
+    ]
+    return (
+        frame.loc[frame["ticker"].ne(""), columns]
+        .drop_duplicates(["ticker", "cusip", "isin"], keep="last")
+        .sort_values(["ticker", "source_part"])
+        .reset_index(drop=True)
+    )
 
 
 # ============================================================
@@ -284,6 +882,82 @@ def get_security_profile(ticker: str) -> dict[str, Any] | None:
 # ============================================================
 
 _REQUIRED_COLS = ["open", "high", "low", "close", "adj_close", "volume"]
+
+
+def get_eod_bulk(session: str | pd.Timestamp) -> pd.DataFrame:
+    """Return one market date of bulk EOD data, accepting FMP JSON or CSV."""
+    session_ts = pd.Timestamp(session).normalize()
+    if pd.isna(session_ts):
+        raise ValueError("session must be a valid date")
+    response = _request(
+        "/eod-bulk",
+        {"date": session_ts.date().isoformat()},
+        timeout=max(60.0, _request_timeout()),
+        retry=max(5, _request_retry()),
+    )
+    frame = _response_records_frame(response, endpoint="eod-bulk")
+    if frame.empty:
+        raise RuntimeError("FMP eod-bulk returned no rows")
+
+    adjusted_close_aliases = {
+        "adj_close",
+        "adjClose",
+        "adjustedClose",
+        "adjusted_close",
+    }
+    has_adjusted_close = bool(adjusted_close_aliases.intersection(frame.columns))
+    frame = frame.rename(columns={
+        "symbol": "ticker",
+        "adjClose": "adj_close",
+        "adjustedClose": "adj_close",
+        "adjusted_close": "adj_close",
+    })
+    required = {"ticker", "open", "high", "low", "close", "volume"}
+    missing = required - set(frame.columns)
+    if missing:
+        raise RuntimeError(f"FMP eod-bulk missing fields: {sorted(missing)}")
+    raw_ticker = frame["ticker"]
+    invalid_ticker_rows = int(
+        (raw_ticker.isna() | raw_ticker.fillna("").astype(str).str.strip().eq(""))
+        .sum()
+    )
+    frame["ticker"] = (
+        raw_ticker.fillna("").astype(str).str.strip().str.upper().str.replace(
+            ".", "-", regex=False
+        )
+        .str.replace("/", "-", regex=False)
+    )
+    if "date" not in frame.columns:
+        frame["date"] = session_ts
+    else:
+        frame["date"] = pd.to_datetime(frame["date"], errors="coerce").dt.normalize()
+        frame["date"] = frame["date"].fillna(session_ts)
+    if not has_adjusted_close or "adj_close" not in frame.columns:
+        raise RuntimeError(
+            "FMP eod-bulk did not provide a dividend-adjusted close. Refusing "
+            "to copy executable close into adj_close; use a canonical total-return "
+            "source before publishing this session."
+        )
+    for column in _REQUIRED_COLS:
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    result = (
+        frame.loc[
+            frame["ticker"].ne(""),
+            ["date", "ticker", *_REQUIRED_COLS],
+        ]
+        .drop_duplicates(["date", "ticker"], keep="last")
+        .sort_values("ticker")
+        .reset_index(drop=True)
+    )
+    result.attrs["invalid_ticker_rows"] = invalid_ticker_rows
+    result.attrs["price_semantics_source"] = "FMP_EOD_BULK_WITH_ADJUSTED_CLOSE"
+    if invalid_ticker_rows:
+        log.warning(
+            "FMP eod-bulk %s dropped %d rows without a symbol",
+            session_ts.date().isoformat(),
+            invalid_ticker_rows,
+        )
+    return result
 
 
 def get_historical_ohlcv(
@@ -369,6 +1043,157 @@ def get_historical_ohlcv(
     df.index.name = "date"
     df = df.dropna(how="all")
     return df if not df.empty else None
+
+
+def get_canonical_historical_ohlcv(
+    symbol: str,
+    start: str,
+    end: str,
+) -> pd.DataFrame | None:
+    """Combine executable OHLCV with a dividend-adjusted return series.
+
+    FMP's ``full`` endpoint is split-adjusted and keeps price/volume
+    economically consistent for execution and dollar-volume calculations.
+    The dividend-adjusted endpoint is a separate total-return series.  A
+    canonical bar therefore uses OHLCV from ``full`` and only ``adj_close``
+    from the dividend-adjusted close.
+    """
+    executable = get_historical_ohlcv(
+        symbol,
+        start,
+        end,
+        dividend_adjusted=False,
+    )
+    total_return = get_historical_ohlcv(
+        symbol,
+        start,
+        end,
+        dividend_adjusted=True,
+    )
+    if executable is None or executable.empty:
+        return None
+    if total_return is None or total_return.empty:
+        return None
+    executable = executable.sort_index()
+    total_return = total_return.sort_index()
+    if not executable.index.equals(total_return.index):
+        executable_only = executable.index.difference(total_return.index)
+        adjusted_only = total_return.index.difference(executable.index)
+        log.warning(
+            "FMP canonical %s date mismatch: executable_only=%d adjusted_only=%d",
+            symbol,
+            len(executable_only),
+            len(adjusted_only),
+        )
+        return None
+    canonical = executable.copy()
+    canonical["adj_close"] = total_return["close"]
+    if canonical[_REQUIRED_COLS].isna().any(axis=None):
+        return None
+    canonical.index.name = "date"
+    canonical = canonical[_REQUIRED_COLS]
+    canonical.attrs["price_semantics_source"] = (
+        "FMP_FULL_PLUS_DIVIDEND_ADJUSTED"
+    )
+    return canonical
+
+
+def get_unadjusted_historical_close(symbol: str, start: str, end: str) -> pd.Series:
+    """Observed nominal prices for PIT dollar thresholds, never return prices.
+
+    Source: FMP stable historical-price-eod/non-split-adjusted. Missing or
+    malformed data is an error; split-adjusted close is not a substitute.
+    """
+    data = _get("/historical-price-eod/non-split-adjusted",
+                params={"symbol": symbol, "from": start, "to": end})
+    rows = data if isinstance(data, list) else (data.get("historical") or data.get("data") or []) if isinstance(data, dict) else []
+    frame = pd.DataFrame(rows)
+    if "close" not in frame and "adjClose" in frame:
+        # Some stable chart responses retain the chart-family field names;
+        # units here are defined by the non-split-adjusted endpoint itself.
+        frame = frame.rename(columns={"adjClose": "close"})
+    if frame.empty or not {"date", "close"}.issubset(frame.columns):
+        raise ValueError(f"{symbol}: missing unadjusted historical close")
+    dates = pd.to_datetime(frame["date"], errors="coerce").dt.normalize()
+    values = pd.to_numeric(frame["close"], errors="coerce")
+    if dates.isna().any() or dates.duplicated().any() or values.isna().any() or not np.isfinite(values).all() or values.le(0).any():
+        raise ValueError(f"{symbol}: invalid unadjusted historical close")
+    series = pd.Series(values.to_numpy(), index=pd.DatetimeIndex(dates), name="unadjusted_close").sort_index()
+    series.index.name = "date"
+    return series.loc[pd.Timestamp(start):pd.Timestamp(end)]
+
+
+def get_coverage_historical_ohlcv(symbol: str, start: str, end: str) -> pd.DataFrame | None:
+    """Canonical return/execution bars plus independently sourced nominal close."""
+    canonical = get_canonical_historical_ohlcv(symbol, start, end)
+    if canonical is None or canonical.empty:
+        return None
+    nominal = get_unadjusted_historical_close(symbol, start, end)
+    canonical = canonical.copy()
+    canonical["unadjusted_close"] = nominal.reindex(canonical.index)
+    if canonical["unadjusted_close"].isna().any():
+        raise ValueError(f"{symbol}: unadjusted prices do not cover canonical history")
+    return canonical
+
+
+def get_historical_ohlcv_complete(
+    symbol: str,
+    start: str,
+    end: str,
+    *,
+    dividend_adjusted: bool = True,
+    chunk_years: int = 10,
+) -> pd.DataFrame:
+    """
+    Strictly download a complete date range in bounded chunks.
+
+    FMP's stable EOD endpoint currently caps one response at 5,000 rows.  A
+    seemingly valid request for 1990-present can therefore begin around 2006
+    without an error.  This wrapper keeps each request comfortably below that
+    cap, merges the chunks, and fails when any requested chunk returns no data.
+
+    Callers should choose a start date on or after the instrument's inception.
+    A short gap for weekends/holidays is expected; an entirely empty chunk is
+    treated as a data-contract failure rather than silently skipped.
+    """
+    start_ts = pd.Timestamp(start).normalize()
+    end_ts = pd.Timestamp(end).normalize()
+    if pd.isna(start_ts) or pd.isna(end_ts) or start_ts > end_ts:
+        raise ValueError("start/end must define a valid inclusive date range")
+    if int(chunk_years) < 1:
+        raise ValueError("chunk_years must be positive")
+
+    frames: list[pd.DataFrame] = []
+    cursor = start_ts
+    while cursor <= end_ts:
+        chunk_end = min(
+            cursor + pd.DateOffset(years=int(chunk_years)) - pd.Timedelta(days=1),
+            end_ts,
+        )
+        frame = get_historical_ohlcv(
+            symbol,
+            cursor.strftime("%Y-%m-%d"),
+            chunk_end.strftime("%Y-%m-%d"),
+            dividend_adjusted=dividend_adjusted,
+        )
+        if frame is None or frame.empty:
+            raise RuntimeError(
+                f"FMP returned no {symbol} EOD data for requested chunk "
+                f"{cursor.date()}..{chunk_end.date()}"
+            )
+        if len(frame) >= 5_000:
+            raise RuntimeError(
+                f"FMP returned {len(frame)} rows for {symbol} in one chunk; "
+                "the response may be truncated. Reduce chunk_years."
+            )
+        frames.append(frame)
+        cursor = chunk_end + pd.Timedelta(days=1)
+
+    combined = pd.concat(frames).sort_index()
+    combined = combined.loc[~combined.index.duplicated(keep="last")]
+    if combined.empty or combined.index.has_duplicates:
+        raise RuntimeError(f"Unable to build a unique complete EOD series for {symbol}")
+    return combined
 
 
 def batch_historical_ohlcv(
@@ -551,7 +1376,7 @@ def verify_ticker(ticker: str) -> dict[str, str] | None:
     - 存在返回 {ticker, name, exchange, currency}
     - 不存在返回 None
     """
-    t = (ticker or "").strip().upper().replace(".", "-")
+    t = _normalize_us_ticker(ticker)
     if not t:
         return None
 
@@ -596,9 +1421,20 @@ def verify_ticker(ticker: str) -> dict[str, str] | None:
 __all__ = [
     "get_api_key",
     "get_sp500_constituents",
+    "get_historical_sp500_constituent_changes",
+    "get_nasdaq100_constituents",
+    "get_historical_nasdaq100_constituent_changes",
+    "get_stock_list",
+    "get_delisted_companies",
+    "get_symbol_changes",
+    "get_ipo_calendar",
     "get_us_active_equities",
     "get_security_profile",
+    "get_company_profiles_bulk",
+    "get_eod_bulk",
     "get_historical_ohlcv",
+    "get_canonical_historical_ohlcv",
+    "get_historical_ohlcv_complete",
     "batch_historical_ohlcv",
     "get_batch_quotes",
     "get_exchange_market_hours",

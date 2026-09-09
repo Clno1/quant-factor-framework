@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 from src.factors.base import FactorBase, register
@@ -36,7 +37,7 @@ class TurnoverRelative(FactorBase):
             return pd.DataFrame()
         # 防 0：均量为 0 的位置返回 NaN，避免除零
         avg = vol.rolling(window=self.window, min_periods=self.window).mean()
-        avg = avg.replace(0, pd.NA)
+        avg = avg.mask(avg.eq(0), np.nan)
         return vol / avg
 
 

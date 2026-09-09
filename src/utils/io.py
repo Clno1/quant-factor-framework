@@ -57,7 +57,7 @@ def atomic_save_json(obj: Any, path: PathLike, indent: int = 2) -> Path:
     """
     原子写入 JSON：先写临时文件再 rename，避免读端读到半成品。
 
-    场景：回测任务状态 task.json 可能被 runner 线程写、HTTP 轮询线程同时读。
+    场景：发布指针和研究 manifest 可能被 writer 写、Web 同时读取。
     Windows 下 os.replace 是原子的；POSIX 下也是 rename 语义。
     """
     p = Path(path)

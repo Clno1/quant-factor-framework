@@ -1,0 +1,30 @@
+{
+  "baseline_commit": "1149764d13539da6159ab0e927594d49d1f181f0",
+  "python": "3.12.14",
+  "dependency_install": "fresh isolated venv, requirements-dev.txt, no cache",
+  "dependency_check": "73 packages compatible",
+  "compileall": {
+    "exit_code": 0,
+    "targets": [
+      "src",
+      "scripts",
+      "tests"
+    ]
+  },
+  "pytest": {
+    "command": "python -m pytest -p no:cacheprovider --basetemp=<isolated temporary directory> -q",
+    "cwd": "isolated copy of tracked root repository",
+    "exit_code": 0,
+    "passed": 661,
+    "warnings": 2,
+    "seconds": 46.46
+  },
+  "reproduction_bundle": {
+    "exit_code": 0,
+    "script_processes": 6,
+    "review_items": 28,
+    "semantics": "Assertions confirm reproducible defects/limits, not fixes."
+  },
+  "network_business_actions": false,
+  "business_source_modified": false
+}

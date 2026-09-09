@@ -14,7 +14,7 @@ import sqlite3
 from types import SimpleNamespace
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pandas as pd
 
@@ -44,8 +44,10 @@ from scripts.configure_premarket_discord import (
 from scripts.run_premarket_digest import main as run_premarket_digest_main
 from scripts.refresh_us_active import (
     _latest_completed_xnys_session,
+    _load_authenticated_universe_cache,
     _publish_universe_manifest,
     _select_refresh_tickers,
+    _versioned_membership,
 )
 
 
@@ -250,6 +252,19 @@ class SettingsTests(unittest.TestCase):
                 {"premarket_digest": {"enabled": "truthy"}}, load_env=False
             )
 
+    def test_environment_can_disable_sector_rotation(self):
+        with patch.dict(
+            os.environ,
+            {"PREMARKET_SECTOR_ROTATION_ENABLED": "false"},
+            clear=True,
+        ):
+            settings = load_premarket_digest_settings(
+                {"premarket_digest": {"sector_rotation": {"enabled": True}}},
+                load_env=False,
+            )
+
+        self.assertFalse(settings.sector_rotation_enabled)
+
     def test_schedule_times_must_be_zero_padded(self):
         with self.assertRaisesRegex(ValueError, "zero-padded"):
             load_premarket_digest_settings(
@@ -427,6 +442,60 @@ class ScheduleTests(unittest.TestCase):
 
 
 class MomentumSourceTests(unittest.TestCase):
+    def test_production_source_loads_one_version_bound_daily_dataset(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            universe = pd.DataFrame(
+                {
+                    "ticker": ["GOOD"],
+                    "name": ["Good"],
+                    "sector": ["Tech"],
+                    "asset_type": ["STOCK"],
+                    "current_dollar_volume": [50e6],
+                }
+            )
+            contract_payload = {
+                "dataset_version_id": "version-test",
+                "data_universe": "US_LIQUID_5M",
+            }
+            contract = Mock()
+            contract.target_session = SOURCE
+            contract.to_dict.return_value = contract_payload
+            version = Mock()
+            version.created_at = NOW
+            daily = Mock()
+            daily.universe = universe
+            daily.data_universe = "US_LIQUID_5M"
+            daily.dataset_version_id = "version-test"
+            daily.contract = contract
+            daily.version = version
+            daily.frame.side_effect = lambda ticker: (
+                _daily_frame() if ticker == "GOOD" else pd.DataFrame()
+            )
+            calls: list[dict] = []
+
+            def dataset_loader(**kwargs):
+                calls.append(kwargs)
+                return daily
+
+            source = CompletedSessionMomentumSource(
+                _settings(
+                    Path(temporary),
+                    momentum_min_exact_asof_coverage=1.0,
+                    momentum_min_evaluable_coverage=1.0,
+                ),
+                alert_settings=AlertSettings(),
+                dataset_loader=dataset_loader,
+                regime_loader=lambda **_: {"status": "PASS", "asof": SOURCE},
+            )
+
+            result = source.load(SOURCE)
+
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0]["end"], SOURCE)
+            self.assertEqual(calls[0]["ticker_selector"](universe), ["GOOD", "QQQ"])
+            self.assertEqual(result["dataset_version_id"], "version-test")
+            self.assertEqual(result["data_contract"], contract_payload)
+
     def test_default_universe_loader_is_cache_only(self):
         with tempfile.TemporaryDirectory() as temporary, patch(
             "src.premarket_digest.momentum.PROJECT_ROOT", Path(temporary)
@@ -495,6 +564,27 @@ class MomentumSourceTests(unittest.TestCase):
                     previous_signature=signature,
                 )
 
+    def test_frozen_universe_cache_requires_exact_target_and_hash(self):
+        with tempfile.TemporaryDirectory() as temporary, patch(
+            "scripts.refresh_us_active.ROOT", Path(temporary)
+        ):
+            cache = Path(temporary) / "data/raw/universe/us_active.parquet"
+            cache.parent.mkdir(parents=True)
+            frame = pd.DataFrame(
+                {
+                    "ticker": ["AAA", "BBB"],
+                    "asset_type": ["STOCK", "STOCK"],
+                }
+            )
+            frame.to_parquet(cache)
+            _write_universe_manifest(cache, len(frame))
+
+            loaded = _load_authenticated_universe_cache(pd.Timestamp(SOURCE))
+            pd.testing.assert_frame_equal(loaded, frame)
+
+            with self.assertRaisesRegex(RuntimeError, "source_session"):
+                _load_authenticated_universe_cache(pd.Timestamp(TARGET))
+
     def test_refresh_limit_keeps_low_liquidity_always_stock_but_not_etf(self):
         universe = pd.DataFrame(
             {
@@ -523,6 +613,31 @@ class MomentumSourceTests(unittest.TestCase):
                 always_tickers=set(),
                 limit=None,
             )
+
+    def test_full_rebuild_does_not_inherit_legacy_membership(self):
+        reader = Mock()
+        reader.load_membership.return_value = pd.DataFrame(
+            {
+                "date": [pd.Timestamp("2025-01-01")],
+                "ticker": ["LEGACY"],
+                "active": [True],
+            }
+        )
+
+        membership = _versioned_membership(
+            reader,
+            tickers=["AAA", "BBB"],
+            start=pd.Timestamp("2026-01-01"),
+            target=pd.Timestamp("2026-08-21"),
+            full_rebuild=True,
+        )
+
+        reader.load_membership.assert_not_called()
+        self.assertEqual(set(membership["ticker"]), {"AAA", "BBB"})
+        self.assertEqual(
+            set(membership["date"]),
+            {pd.Timestamp("2026-01-01"), pd.Timestamp("2026-08-21")},
+        )
 
     def test_stock_only_exact_asof_gate_and_completed_bar(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1214,6 +1329,59 @@ class ServiceTests(unittest.TestCase):
                 momentum["metadata"]["universe_manifest_source_session"], SOURCE
             )
 
+    def test_prepare_freezes_payloads_without_delivery_or_preview(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            momentum_source = _Source(_momentum_report())
+            group_source = _Source(_group_report())
+            service, calls = self._service(
+                temporary,
+                {"momentum": [], "sector": []},
+                momentum=momentum_source,
+                groups=group_source,
+            )
+
+            first = service.run(prepare=True, requested_session=TARGET)
+            second = service.run(prepare=True, requested_session=TARGET)
+
+            self.assertEqual(first["mode"], "prepare")
+            self.assertEqual(first["exit_code"], 0)
+            self.assertEqual(
+                {result["status"] for result in first["results"]}, {"PREPARED"}
+            )
+            self.assertNotIn("preview_files", first)
+            self.assertEqual(
+                {result["status"] for result in second["results"]},
+                {"PREPARED_ALREADY_EXISTS"},
+            )
+            self.assertEqual(momentum_source.calls, 1)
+            self.assertEqual(group_source.calls, 1)
+            self.assertEqual(calls, {"momentum": [], "sector": []})
+            store = DigestStateStore(Path(temporary) / "state.sqlite3")
+            for channel in DigestChannel:
+                self.assertEqual(store.get(TARGET, channel)["status"], "PENDING")
+
+    def test_scheduled_send_requires_a_prepared_payload(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            momentum_source = _Source(_momentum_report())
+            service, calls = self._service(
+                temporary,
+                {"momentum": [], "sector": []},
+                momentum=momentum_source,
+            )
+
+            summary = service.run(
+                send=True,
+                scheduled=True,
+                channels=[DigestChannel.MOMENTUM],
+            )
+
+            self.assertEqual(summary["exit_code"], 1)
+            self.assertEqual(
+                summary["results"][0]["error_code"], "PREPARED_PAYLOAD_MISSING"
+            )
+            self.assertEqual(momentum_source.calls, 0)
+            self.assertEqual(calls["momentum"], [])
+
     def test_partial_failure_retries_only_failed_channel(self):
         with tempfile.TemporaryDirectory() as temporary:
             failure = DiscordDeliveryError(
@@ -1496,6 +1664,12 @@ class ServiceTests(unittest.TestCase):
             late = datetime(2026, 7, 16, 13, 29, 50, tzinfo=timezone.utc)
             calls = []
             store = DigestStateStore(Path(temporary) / "state.sqlite3")
+            store.stage(
+                TARGET,
+                DigestChannel.MOMENTUM,
+                SOURCE,
+                {"content": "prepared", "allowed_mentions": {"parse": []}},
+            )
             service = PremarketDigestService(
                 _settings(Path(temporary)),
                 state_store=store,

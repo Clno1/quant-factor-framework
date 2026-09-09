@@ -17,6 +17,7 @@
 """
 from __future__ import annotations
 
+from dataclasses import asdict, dataclass
 import pandas as pd
 
 from src.config import CONFIG
@@ -28,11 +29,30 @@ from src.utils.logger import get_logger
 log = get_logger(__name__)
 
 
+@dataclass(frozen=True)
+class PreprocessingAudit:
+    """Evidence that raw securities survived the configured cleaning pipeline."""
+
+    winsorize_method: str
+    standardize_enabled: bool
+    neutralization: dict | None
+    raw_non_null: int
+    clean_non_null: int
+    raw_non_null_clean_all_null_tickers: tuple[str, ...]
+    daily: tuple[dict, ...]
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
 def preprocess_factor(
     factor_df: pd.DataFrame,
     sector_map: pd.Series | pd.DataFrame | None = None,
     mcap_df: pd.DataFrame | None = None,
-) -> pd.DataFrame:
+    *,
+    membership_mask: pd.DataFrame | None = None,
+    return_audit: bool = False,
+) -> pd.DataFrame | tuple[pd.DataFrame, PreprocessingAudit]:
     """
     按配置执行完整预处理，返回同 shape 的 clean factor。
 
@@ -51,7 +71,9 @@ def preprocess_factor(
     这个顺序比“先 zscore 再 neutralize”更稳，因为最终进入下游的是标准化后的残差。
     """
     if factor_df.empty:
-        return factor_df.copy()
+        empty = factor_df.copy()
+        audit = PreprocessingAudit("none", False, None, 0, 0, (), ())
+        return (empty, audit) if return_audit else empty
 
     cfg = CONFIG.preprocessing
     method = str(cfg.winsorize_method).lower()
@@ -68,18 +90,57 @@ def preprocess_factor(
 
     # 2) 中性化：如果配置开启，就通过截面回归剥离行业/市值暴露。
     #    注意：如果没有 sector_map 或 mcap_df，neutralize 模块会明确记录 warning。
+    neutralization_audit = None
     if bool(cfg.neutralize_industry) or bool(getattr(cfg, "neutralize_mcap", False)):
         log.debug("Neutralize factor (industry=%s, mcap=%s)",
                   bool(cfg.neutralize_industry),
                   bool(getattr(cfg, "neutralize_mcap", False)))
-        out = neutralize_industry(out, sector_map=sector_map, mcap_df=mcap_df)
+        out, neutralization_audit = neutralize_industry(
+            out,
+            sector_map=sector_map,
+            mcap_df=mcap_df,
+            return_audit=True,
+        )
 
     # 3) 最终标准化：让所有因子在每个交易日拥有可比较的尺度。
     if bool(cfg.standardize):
         log.debug("Z-score standardize after winsorization/neutralization")
         out = zscore_cs(out)
 
-    return out
+    active_raw = factor_df
+    if membership_mask is not None:
+        aligned_mask = membership_mask.reindex(
+            index=factor_df.index,
+            columns=factor_df.columns,
+        ).fillna(False)
+        active_raw = factor_df.where(aligned_mask)
+    disappeared = tuple(
+        str(ticker)
+        for ticker in factor_df.columns
+        if active_raw[ticker].notna().any() and not out[ticker].notna().any()
+    )
+    daily = tuple(
+        {
+            "date": pd.Timestamp(dt).date().isoformat(),
+            "raw_non_null": int(active_raw.loc[dt].notna().sum()),
+            "clean_non_null": int(out.loc[dt].notna().sum()),
+        }
+        for dt in factor_df.index
+    )
+    audit = PreprocessingAudit(
+        winsorize_method=method,
+        standardize_enabled=bool(cfg.standardize),
+        neutralization=(
+            neutralization_audit.to_dict()
+            if neutralization_audit is not None
+            else None
+        ),
+        raw_non_null=int(active_raw.notna().sum().sum()),
+        clean_non_null=int(out.notna().sum().sum()),
+        raw_non_null_clean_all_null_tickers=disappeared,
+        daily=daily,
+    )
+    return (out, audit) if return_audit else out
 
 
-__all__ = ["preprocess_factor"]
+__all__ = ["PreprocessingAudit", "preprocess_factor"]

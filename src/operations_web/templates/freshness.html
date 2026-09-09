@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="section-block first-section">
+    <div class="section-heading"><div><h2>正式数据与服务器资源</h2><p>比较“今天应该是什么版本”与“当前正式指针实际指向什么版本”。</p></div></div>
+    <div class="table-wrap">
+        <table class="ops-table">
+            <thead><tr><th>数据对象</th><th>类别</th><th>状态</th><th>应到交易日</th><th>实际交易日</th><th>落后</th><th>版本</th><th>规模</th></tr></thead>
+            <tbody>
+            {% for row in rows %}
+                <tr>
+                    <td><strong>{{ row.display_name }}</strong><small class="row-note mono">{{ row.source or '-' }}</small></td>
+                    <td>{{ category_label(row.category) }}</td>
+                    <td><span class="status status-{{ row.status | lower }}">{{ status_label(row.status) }}</span></td>
+                    <td class="mono">{{ row.expected_session or '-' }}</td>
+                    <td class="mono">{{ row.actual_session or '-' }}</td>
+                    <td>{% if row.delay_sessions is not none %}{{ row.delay_sessions }} 个交易日{% else %}-{% endif %}</td>
+                    <td class="mono compact-hash" title="{{ row.version_id or '' }}">{{ (row.version_id or '-')[:14] }}</td>
+                    <td>{% if row.item_count is not none %}{{ row.item_count }} 个标的{% elif row.row_count is not none %}{{ row.row_count }} 行{% else %}-{% endif %}</td>
+                </tr>
+            {% else %}<tr><td colspan="8" class="table-empty">尚无数据新鲜度快照。</td></tr>{% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endblock %}

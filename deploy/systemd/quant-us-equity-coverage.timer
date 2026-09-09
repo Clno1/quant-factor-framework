@@ -1,0 +1,12 @@
+[Unit]
+Description=Run broad US coverage chain after the existing daily production tasks
+
+[Timer]
+OnCalendar=Tue..Sat *-*-* 11:30:00 Asia/Singapore
+Persistent=true
+AccuracySec=2min
+RandomizedDelaySec=2min
+Unit=quant-us-equity-coverage.service
+
+[Install]
+WantedBy=timers.target

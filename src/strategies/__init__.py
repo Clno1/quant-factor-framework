@@ -2,7 +2,7 @@
 策略库：因子加权配方的纯定义模块（不含回测结果、不绑定股票池）。
 
 - `StrategyDefinition` / `StrategyComponent`：数据类
-- `StrategyStore`：CRUD（create / list / load / delete），_index.json 维护
+- `StrategyStore`：SQLite CRUD（create / list / load / delete）
 """
 from src.strategies.definition import (  # noqa: F401
     StrategyComponent,

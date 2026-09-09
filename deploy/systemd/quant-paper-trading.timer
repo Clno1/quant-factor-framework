@@ -1,0 +1,12 @@
+[Unit]
+Description=Run paper accounts after each completed US trading session
+
+[Timer]
+OnCalendar=Tue..Sat *-*-* 10:30:00 Asia/Singapore
+Persistent=true
+AccuracySec=2min
+RandomizedDelaySec=30s
+Unit=quant-paper-trading.service
+
+[Install]
+WantedBy=timers.target

@@ -21,6 +21,20 @@ def _imports(path: Path) -> set[str]:
     return found
 
 
+def _registered_paths(app) -> set[str]:
+    pending = list(app.routes)
+    paths: set[str] = set()
+    while pending:
+        route = pending.pop()
+        path = getattr(route, "path", None)
+        if path is not None:
+            paths.add(path)
+        original_router = getattr(route, "original_router", None)
+        if original_router is not None:
+            pending.extend(original_router.routes)
+    return paths
+
+
 class GroupAnalyticsIsolationTests(unittest.TestCase):
     def test_default_config_exposes_read_only_rotation(self):
         self.assertTrue(bool(CONFIG.group_analytics.enabled))

@@ -8,22 +8,46 @@ from uuid import uuid4
 import numpy as np
 import pandas as pd
 
+from src.backtest.rebalance import get_rebalance_dates
+from src.config import CONFIG
+from src.data.access import (
+    MarketDataNotReadyError,
+    enqueue_market_data_request,
+    watchlist_universe_frame,
+)
+from src.data.universe_ids import watchlist_snapshot_data_universe
+from src.decision_replay import build_paper_snapshot, upsert_snapshot
 from src.papertrading.definition import (
     ORDER_FILLED,
     ORDER_PENDING,
     ORDER_REJECTED,
+    PAPER_ACCOUNTING_METHODOLOGY,
+    PAPER_ACCOUNT_SCHEMA_VERSION,
     STATUS_ACTIVE,
     account_strategy,
     now_iso,
 )
-from src.papertrading.store import load_account, load_table, save_table, update_account
+from src.papertrading.store import (
+    account_dir,
+    account_run_lock,
+    load_account,
+    load_table,
+    save_table,
+    update_account,
+)
 from src.papertrading.target import TargetResult, generate_target_weights
 from src.execution import (
     calculate_execution,
+    max_volume_fill_quantity,
     max_buy_quantity_for_cash,
     resolve_execution_config,
 )
 from src.utils.logger import get_logger
+from src.utils.market_calendar import (
+    latest_completed_xnys_session,
+    xnys_session_on_or_before,
+)
+from src.utils.date_utils import resolve_date_range
 
 log = get_logger(__name__)
 
@@ -49,6 +73,107 @@ def _positions_to_map(positions: pd.DataFrame) -> dict[str, dict[str, float]]:
     return out
 
 
+def _state_from_fill_ledger(
+    account: dict[str, Any],
+    fills: pd.DataFrame,
+    cash_events: pd.DataFrame | None = None,
+    *,
+    asof: str | pd.Timestamp | None = None,
+    validate_cash: bool = True,
+) -> tuple[float, dict[str, dict[str, float]]]:
+    """Rebuild cash and positions from append-only fill and cash ledgers."""
+    cash = float(account.get("initial_cash", 0.0) or 0.0)
+    positions: dict[str, dict[str, float]] = {}
+    ledger = fills.copy() if fills is not None else pd.DataFrame()
+    if (
+        not ledger.empty
+        and "fill_id" in ledger.columns
+        and ledger["fill_id"].astype(str).duplicated().any()
+    ):
+        raise ValueError("Duplicate fill_id detected in paper-trading ledger")
+    sort_columns = [
+        column
+        for column in ("fill_date", "filled_at")
+        if column in ledger.columns
+    ]
+    if sort_columns:
+        ledger = ledger.sort_values(sort_columns, kind="stable")
+    timeline = []
+    for ordinal, row in enumerate(ledger.to_dict(orient="records")):
+        event_date = pd.Timestamp(row.get("fill_date") or pd.Timestamp.min)
+        timeline.append((event_date, 1, ordinal, row))
+    if cash_events is not None and not cash_events.empty:
+        events = cash_events.copy()
+        if "event_id" not in events.columns or "date" not in events.columns:
+            raise ValueError("Paper cash-event ledger has no event_id/date")
+        if events["event_id"].astype(str).duplicated().any():
+            raise ValueError("Duplicate event_id detected in paper cash-event ledger")
+        amounts = pd.to_numeric(events.get("amount"), errors="coerce")
+        event_dates = pd.to_datetime(events["date"], errors="coerce")
+        if amounts.isna().any() or (~np.isfinite(amounts)).any() or event_dates.isna().any():
+            raise ValueError("Paper cash-event ledger contains invalid amounts/dates")
+        for ordinal, (date, amount) in enumerate(zip(event_dates, amounts)):
+            timeline.append((pd.Timestamp(date), 0, ordinal, {"amount": float(amount)}))
+    for event_date, event_kind, _, row in sorted(timeline, key=lambda item: item[:3]):
+        if asof is not None and event_date > pd.Timestamp(asof):
+            continue
+        if event_kind == 0:
+            cash += row["amount"]
+            if validate_cash and cash < -1e-8:
+                raise ValueError(f"Paper cash-event ledger uses unavailable cash: date={event_date.date()} cash={cash}")
+            continue
+        ticker = str(row.get("ticker") or "")
+        side = str(row.get("side") or "").upper()
+        quantity = float(row.get("quantity", 0.0) or 0.0)
+        fill_price = float(row.get("fill_price", 0.0) or 0.0)
+        notional = float(
+            row.get("notional", quantity * fill_price)
+            or quantity * fill_price
+        )
+        fee = float(row.get("fee", 0.0) or 0.0)
+        if (not ticker or side not in {"BUY", "SELL"}
+                or not np.isfinite([quantity, fill_price, notional, fee]).all()
+                or quantity <= 0 or fill_price <= 0 or notional <= 0 or fee < 0):
+            raise ValueError(f"Invalid fill ledger row: {row}")
+        if side == "BUY":
+            cash -= notional + fee
+            old = positions.get(
+                ticker,
+                {"quantity": 0.0, "avg_price": 0.0},
+            )
+            old_quantity = float(old["quantity"])
+            new_quantity = old_quantity + quantity
+            average = (
+                (old_quantity * float(old["avg_price"]) + notional)
+                / new_quantity
+            )
+            positions[ticker] = {
+                "quantity": new_quantity,
+                "avg_price": average,
+            }
+        else:
+            old = positions.get(ticker)
+            held = float((old or {}).get("quantity", 0.0) or 0.0)
+            if quantity > held + 1e-9:
+                raise ValueError(
+                    f"Fill ledger oversells {ticker}: sell={quantity}, held={held}"
+                )
+            cash += notional - fee
+            remaining = held - quantity
+            if remaining <= 1e-9:
+                positions.pop(ticker, None)
+            else:
+                positions[ticker] = {
+                    "quantity": remaining,
+                    "avg_price": float(old["avg_price"]),
+                }
+        if validate_cash and cash < -1e-8:
+            raise ValueError(
+                f"Paper fill ledger uses unavailable cash: date={event_date.date()} cash={cash}"
+            )
+    return float(cash), positions
+
+
 def _positions_from_map(
     pos: dict[str, dict[str, float]],
     *,
@@ -63,7 +188,11 @@ def _positions_from_map(
             continue
         avg = float(pos[ticker].get("avg_price", 0.0) or 0.0)
         px = float(prices.get(ticker, np.nan))
-        mv = qty * px if np.isfinite(px) and px > 0 else 0.0
+        if not np.isfinite(px) or px <= 0:
+            raise ValueError(
+                f"Cannot mark held position {ticker}: no price at or before mark date"
+            )
+        mv = qty * px
         cost_basis = qty * avg
         rows.append({
             "ticker": ticker,
@@ -90,17 +219,190 @@ def _latest_price_row(prices: pd.DataFrame, asof: str | None = None) -> tuple[st
         if px.empty:
             return None, pd.Series(dtype="float64")
     dt = pd.Timestamp(px.index.max())
-    return dt.strftime("%Y-%m-%d"), px.loc[dt]
+    return dt.strftime("%Y-%m-%d"), px.ffill().loc[dt]
+
+
+_FMP_REPORTED_PRICE_HALF_QUANTUM_USD = 0.0050001
+
+
+def _derived_dividend_cash_per_share(target: TargetResult) -> pd.DataFrame:
+    """Derive conservative cash distributions in executable-price units.
+
+    FMP's published total-return close is cent-quantized while executable close
+    may carry finer decimals. Interval arithmetic treats any distribution that
+    could be zero within the reported precision as zero. A definitely negative
+     interval remains a hard error, so this does not weaken the quality gate.
+    """
+    execution_close = target.prices.apply(pd.to_numeric, errors="coerce")
+    total_return_close = target.total_return_close_prices.apply(
+        pd.to_numeric,
+        errors="coerce",
+    )
+    common_dates = execution_close.index.intersection(total_return_close.index)
+    common_cols = execution_close.columns.intersection(total_return_close.columns)
+    execution_close = execution_close.reindex(index=common_dates, columns=common_cols)
+    total_return_close = total_return_close.reindex(
+        index=common_dates,
+        columns=common_cols,
+    )
+    previous_execution = execution_close.shift(1)
+    previous_total_return = total_return_close.shift(1)
+    total_return_ratio = total_return_close / previous_total_return
+    distribution = previous_execution * total_return_ratio - execution_close
+
+    quantum = _FMP_REPORTED_PRICE_HALF_QUANTUM_USD
+    ratio_low = (total_return_close - quantum).clip(lower=1e-12) / (
+        previous_total_return + quantum
+    )
+    ratio_high = (total_return_close + quantum) / (
+        previous_total_return - quantum
+    ).clip(lower=1e-12)
+    distribution_low = (
+        (previous_execution - quantum).clip(lower=1e-12) * ratio_low
+        - (execution_close + quantum)
+    )
+    distribution_high = (
+        (previous_execution + quantum) * ratio_high
+        - (execution_close - quantum)
+    )
+
+    material_negative = distribution_high.lt(0)
+    if material_negative.any(axis=None):
+        locations = np.argwhere(material_negative.to_numpy())[:20]
+        sample = [
+            {
+                "date": pd.Timestamp(distribution.index[i]).date().isoformat(),
+                "ticker": str(distribution.columns[j]),
+                "amount": float(distribution.iat[i, j]),
+                "upper_bound": float(distribution_high.iat[i, j]),
+            }
+            for i, j in locations
+        ]
+        raise ValueError(
+            "Published execution and total-return prices imply negative cash "
+            f"distributions beyond source precision; sample={sample}"
+        )
+    return distribution.where(distribution_low.gt(0), 0.0)
+
+
+def _fills_before_ex_date(
+    fills: pd.DataFrame,
+    ex_date: pd.Timestamp,
+) -> pd.DataFrame:
+    if fills is None or fills.empty or "fill_date" not in fills.columns:
+        return pd.DataFrame(columns=getattr(fills, "columns", None))
+    dates = pd.to_datetime(fills["fill_date"], errors="coerce").dt.normalize()
+    return fills.loc[dates.lt(ex_date)].copy()
+
+
+def _accrue_dividend_cash_events(
+    *,
+    account: dict[str, Any],
+    target: TargetResult,
+    fills: pd.DataFrame,
+    asof: str | None = None,
+    persist: bool = True,
+    existing_override: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Append deterministic dividend events for shares held before each ex-date."""
+    account_id = str(account["id"])
+    existing = (existing_override.copy() if existing_override is not None
+                else load_table(account_id, "cash_events"))
+    if getattr(target, "total_return_close_prices", pd.DataFrame()).empty or fills is None or fills.empty:
+        return existing
+    distributions = _derived_dividend_cash_per_share(target)
+    cutoff = pd.Timestamp(asof or target.decision_date).normalize()
+    bounded = distributions.loc[distributions.index <= cutoff]
+    candidate_locations = np.argwhere(bounded.gt(0).to_numpy())
+    existing_by_id = (
+        existing.set_index(existing["event_id"].astype(str), drop=False)
+        if not existing.empty and "event_id" in existing.columns
+        else pd.DataFrame()
+    )
+    rows: list[dict[str, Any]] = []
+    for row_no, col_no in candidate_locations:
+        ex_date = pd.Timestamp(bounded.index[row_no]).normalize()
+        ticker = str(bounded.columns[col_no])
+        amount_per_share = float(bounded.iat[row_no, col_no])
+        eligible_fills = _fills_before_ex_date(fills, ex_date)
+        # Only quantities are needed to derive entitlements. Dividend cash can
+        # itself fund later fills, and is reconstructed after this derivation.
+        _, held = _state_from_fill_ledger(account, eligible_fills, validate_cash=False)
+        quantity = float((held.get(ticker) or {}).get("quantity", 0.0) or 0.0)
+        if quantity <= 1e-12:
+            continue
+        event_id = f"DIVIDEND:{account_id}:{ticker}:{ex_date.date().isoformat()}"
+        amount = quantity * amount_per_share
+        if not existing_by_id.empty and event_id in existing_by_id.index:
+            prior = existing_by_id.loc[event_id]
+            if isinstance(prior, pd.DataFrame):
+                raise ValueError(f"Duplicate paper cash event: {event_id}")
+            for field, observed in (
+                ("quantity", quantity),
+                ("amount_per_share", amount_per_share),
+                ("amount", amount),
+            ):
+                expected = float(prior.get(field, np.nan))
+                if not np.isclose(expected, observed, rtol=1e-8, atol=1e-8):
+                    raise ValueError(
+                        "Published dividend economics changed after paper ledger "
+                        f"posting: event_id={event_id} field={field} "
+                        f"ledger={expected} observed={observed}"
+                    )
+            continue
+        rows.append(
+            {
+                "event_id": event_id,
+                "account_id": account_id,
+                "event_type": "DIVIDEND_CASH",
+                "date": ex_date.date().isoformat(),
+                "ticker": ticker,
+                "quantity": quantity,
+                "amount_per_share": amount_per_share,
+                "amount": amount,
+                "dataset_version_id": target.data_contract.get(
+                    "dataset_version_id"
+                ),
+                "created_at": now_iso(),
+            }
+        )
+    if rows:
+        output = (
+            pd.concat([existing, pd.DataFrame(rows)], ignore_index=True)
+            if not existing.empty
+            else pd.DataFrame(rows)
+        )
+        output = output.sort_values(["date", "ticker", "event_id"]).reset_index(
+            drop=True
+        )
+        if persist:
+            save_table(account_id, "cash_events", output)
+        return output
+    return existing
 
 
 def _first_open_after(
     open_prices: pd.DataFrame,
     decision_date: str,
     ticker: str,
+    *,
+    cutoff: str,
+    after_date: str | None = None,
+    not_before: str | None = None,
 ) -> tuple[str | None, float | None]:
     if open_prices is None or open_prices.empty or ticker not in open_prices.columns:
         return None, None
-    after = open_prices.loc[open_prices.index > pd.Timestamp(decision_date), ticker].dropna()
+    lower_bound = max(
+        pd.Timestamp(decision_date),
+        pd.Timestamp(after_date) if after_date else pd.Timestamp(decision_date),
+    )
+    after = open_prices.loc[
+        (open_prices.index > lower_bound)
+        & (open_prices.index <= pd.Timestamp(cutoff)),
+        ticker,
+    ].dropna()
+    if not_before is not None:
+        after = after.loc[after.index >= pd.Timestamp(not_before)]
     after = after[after > 0]
     if after.empty:
         return None, None
@@ -108,22 +410,67 @@ def _first_open_after(
     return dt.strftime("%Y-%m-%d"), float(after.iloc[0])
 
 
-def _bar_volume(
+def _trailing_volume_before(
     volumes: pd.DataFrame | None,
     date: str,
     ticker: str,
+    *,
+    window: int,
 ) -> float | None:
     if volumes is None or volumes.empty or ticker not in volumes.columns:
         return None
-    try:
-        value = volumes.loc[pd.Timestamp(date), ticker]
-    except KeyError:
-        return None
-    try:
-        value = float(value)
-    except (TypeError, ValueError):
-        return None
-    return value if np.isfinite(value) and value > 0 else None
+    values = pd.to_numeric(
+        volumes.loc[volumes.index < pd.Timestamp(date), ticker],
+        errors="coerce",
+    )
+    values = values[np.isfinite(values) & (values > 0)].tail(max(1, window))
+    return float(values.mean()) if not values.empty else None
+
+
+def _is_rebalance_decision(
+    account: dict[str, Any],
+    target: TargetResult,
+) -> bool:
+    decision = pd.Timestamp(target.decision_date)
+    mode = str(account.get("rebalance_mode") or "month_end").lower()
+    if mode in {"every_n_days", "n_days", "interval"}:
+        step = int(
+            account.get("rebalance_days")
+            or getattr(CONFIG.backtest, "rebalance_days", 5)
+        )
+        dates = pd.DatetimeIndex(target.composite.index)
+        return decision in get_rebalance_dates(
+            dates,
+            mode="every_n_days",
+            step_days=step,
+        )
+
+    future_dates = pd.DatetimeIndex(target.prices.index)
+    future_dates = future_dates[future_dates > decision]
+    next_date = pd.Timestamp(future_dates.min()) if len(future_dates) else None
+    if next_date is None:
+        try:
+            import exchange_calendars as xcals
+
+            calendar = xcals.get_calendar("XNYS")
+            next_date = pd.Timestamp(calendar.next_session(decision))
+        except (ImportError, ValueError):
+            next_date = pd.Timestamp(decision + pd.offsets.BDay(1))
+    if mode in {"month_end", "monthly"}:
+        return next_date.to_period("M") != decision.to_period("M")
+    if mode in {"week_end", "weekly"}:
+        return next_date.to_period("W-FRI") != decision.to_period("W-FRI")
+    raise ValueError(
+        f"Unknown rebalance mode={mode!r}; "
+        "expected every_n_days/month_end/week_end"
+    )
+
+
+def _expected_target_session(asof: str | None) -> pd.Timestamp:
+    """Resolve the XNYS session a paper run is required to have processed."""
+    if asof is None:
+        return latest_completed_xnys_session()
+    return xnys_session_on_or_before(pd.Timestamp(asof))
 
 
 def _mark_equity(
@@ -137,8 +484,12 @@ def _mark_equity(
     provisional_value = 0.0
     for ticker, p in positions_map.items():
         px = float(latest_prices.get(ticker, np.nan))
-        if np.isfinite(px) and px > 0:
-            provisional_value += float(p.get("quantity", 0.0)) * px
+        if not np.isfinite(px) or px <= 0:
+            raise ValueError(
+                f"Cannot mark held position {ticker}: "
+                "no price at or before mark date"
+            )
+        provisional_value += float(p.get("quantity", 0.0)) * px
     equity = float(cash) + provisional_value
     positions_df = _positions_from_map(positions_map, prices=latest_prices, equity=equity)
     save_table(account_id, "positions", positions_df)
@@ -161,12 +512,86 @@ def _mark_equity(
     return positions_df, equity
 
 
+def _validate_execution_units(
+    *, account: dict[str, Any], target: TargetResult,
+    fills: pd.DataFrame, orders: pd.DataFrame,
+) -> None:
+    """Block unsupported share-unit changes before any new account postings.
+
+    Compare the same historical executable bar across immutable versions, not
+    today's price against cost basis. Dividends and ordinary price moves do not
+    change this anchor. Closed position cycles no longer carry share units.
+    """
+    cutoff = pd.Timestamp(target.decision_date)
+    if account.get("last_mark_date") and pd.Timestamp(account["last_mark_date"]) > cutoff:
+        raise ValueError("Cannot run a paper account before its last committed mark")
+    anchors: dict[str, list[dict]] = {}
+    quantities: dict[str, float] = {}
+    if not fills.empty:
+        dates = pd.to_datetime(fills["fill_date"], errors="coerce")
+        if dates.isna().any() or dates.gt(cutoff).any():
+            raise ValueError("Paper fill history is invalid or ahead of the requested as-of")
+        sort_columns = [column for column in ("fill_date", "filled_at") if column in fills]
+        for row in fills.sort_values(sort_columns, kind="stable").to_dict("records"):
+            ticker = str(row["ticker"])
+            delta = float(row["quantity"]) * (1 if row["side"] == "BUY" else -1)
+            quantities[ticker] = quantities.get(ticker, 0.) + delta
+            if row["side"] == "BUY":
+                anchors.setdefault(ticker, []).append({
+                    "date": row["fill_date"], "price": row.get("raw_open_price"),
+                    "version": row.get("dataset_version_id"), "field": "open",
+                })
+            if quantities[ticker] <= 1e-9:
+                anchors.pop(ticker, None)
+    if not orders.empty and "status" in orders:
+        for row in orders.loc[orders.status.eq(ORDER_PENDING)].to_dict("records"):
+            if not fills.empty and "order_id" in fills:
+                completed = pd.to_numeric(fills.loc[
+                    fills.order_id.eq(row.get("order_id")), "quantity"
+                ], errors="coerce").sum()
+                if completed >= float(row.get("quantity") or 0.) - 1e-9:
+                    continue
+            anchors.setdefault(str(row["ticker"]), []).append({
+                "date": row["decision_date"], "price": row.get("ref_price"),
+                "version": row.get("dataset_version_id"), "field": "close",
+            })
+    contract = getattr(target, "data_contract", {})
+    current_version = contract.get("dataset_version_id")
+    for ticker, observations in anchors.items():
+        for anchor in observations:
+            if current_version and anchor["version"] == current_version:
+                continue  # The same immutable publication preserves share units.
+            date = pd.Timestamp(anchor["date"])
+            frame = target.open_prices if anchor["field"] == "open" else target.prices
+            observed = (frame.loc[date, ticker] if date in frame.index and ticker in frame.columns else np.nan)
+            if pd.isna(observed) and current_version and contract.get("data_universe"):
+                from src.data.foundation import MarketDataReader
+                reader = MarketDataReader()
+                version = reader.require_version(contract["data_universe"], current_version, require_price_semantics=True)
+                wide = reader.load_wide_tables(contract["data_universe"], tickers=[ticker], start=date, end=date, version=version)
+                frame = wide[anchor["field"]]
+                observed = frame.loc[date, ticker] if date in frame.index and ticker in frame.columns else np.nan
+            reference = pd.to_numeric(anchor["price"], errors="coerce")
+            if not np.isfinite(reference) or not np.isfinite(observed) or reference <= 0 or observed <= 0:
+                raise ValueError(
+                    f"PAPER_PRICE_UNITS_UNVERIFIED: {ticker} {date.date()}; "
+                    "a held position or pending order lacks a verifiable execution-price anchor"
+                )
+            if not np.isclose(float(observed), float(reference), rtol=1e-5, atol=1e-8):
+                raise ValueError(
+                    f"PAPER_PRICE_UNITS_CHANGED: {ticker} {date.date()} "
+                    f"old={reference} current={observed}; split/unit adjustments are not supported; "
+                    "reconcile the account and pending orders before resuming"
+                )
+
+
 def _fill_pending_orders(
     *,
     account: dict[str, Any],
     target: TargetResult,
     cash: float,
     positions_map: dict[str, dict[str, float]],
+    cutoff: str,
 ) -> tuple[float, list[dict[str, Any]], pd.DataFrame]:
     account_id = str(account["id"])
     orders = load_table(account_id, "orders")
@@ -176,28 +601,132 @@ def _fill_pending_orders(
         return cash, [], orders
 
     execution = resolve_execution_config(account.get("execution") or {})
+    adv_window = int(
+        ((execution.get("slippage") or {}).get("adv_window", 20)) or 20
+    )
+    existing_fills = load_table(account_id, "fills")
+    cash_events = load_table(account_id, "cash_events")
     fills: list[dict[str, Any]] = []
 
+    committed_dates = [str(account.get("last_mark_date") or "")]
+    for frame, column in ((existing_fills, "fill_date"), (cash_events, "date")):
+        if not frame.empty and column in frame:
+            committed_dates.extend(frame[column].dropna().astype(str))
+    committed_through = max(committed_dates) or None
+    if committed_through and pd.Timestamp(committed_through) > pd.Timestamp(cutoff):
+        raise ValueError("Cannot insert paper trades before already committed account history")
+
     pending_idx = orders.index[orders["status"].astype(str) == ORDER_PENDING].tolist()
-    # Sells first, then buys, so rebalances can fund purchases.
-    pending_idx.sort(key=lambda i: 0 if str(orders.loc[i, "side"]) == "SELL" else 1)
+    def scheduled_open(index):
+        order = orders.loc[index]
+        prior = (existing_fills.loc[existing_fills["order_id"].astype(str).eq(str(order.get("order_id") or ""))]
+                 if not existing_fills.empty and "order_id" in existing_fills else pd.DataFrame())
+        last = str(prior.fill_date.max()) if not prior.empty and "fill_date" in prior else None
+        try:
+            day, _ = _first_open_after(target.open_prices, str(order.get("decision_date") or ""),
+                                      str(order.get("ticker") or ""), cutoff=cutoff, after_date=last,
+                                      not_before=committed_through)
+        except (ValueError, TypeError):
+            day = None
+        return (day or "9999-12-31", 0 if str(order.get("side")).upper() == "SELL" else 1)
+    # Funding can move between orders at the same open, never back in time.
+    pending_idx.sort(key=scheduled_open)
+    execution_date: str | None = None
     for idx in pending_idx:
         row = orders.loc[idx]
         ticker = str(row.get("ticker") or "")
         side = str(row.get("side") or "").upper()
         decision_date = str(row.get("decision_date") or "")
-        qty_requested = float(row.get("quantity", 0.0) or 0.0)
-        if not ticker or side not in ("BUY", "SELL") or qty_requested <= 0:
+        order_id = str(row.get("order_id") or "")
+        total_requested = float(row.get("quantity", 0.0) or 0.0)
+        if (
+            not order_id
+            or not ticker
+            or side not in ("BUY", "SELL")
+            or not decision_date
+            or total_requested <= 0
+        ):
             orders.loc[idx, "status"] = ORDER_REJECTED
             orders.loc[idx, "reject_reason"] = "invalid_order"
             continue
-        fill_date, raw_open = _first_open_after(target.open_prices, decision_date, ticker)
+
+        prior = pd.DataFrame()
+        if not existing_fills.empty and "order_id" in existing_fills.columns:
+            prior = existing_fills[
+                existing_fills["order_id"].astype(str) == order_id
+            ]
+        already_filled = (
+            float(
+                pd.to_numeric(
+                    prior.get("quantity", pd.Series(dtype=float)),
+                    errors="coerce",
+                ).fillna(0.0).sum()
+            )
+            if not prior.empty
+            else 0.0
+        )
+        remaining_requested = max(0.0, total_requested - already_filled)
+        if remaining_requested <= 1e-9:
+            orders.loc[idx, "status"] = ORDER_FILLED
+            orders.loc[idx, "filled_quantity"] = int(round(already_filled))
+            orders.loc[idx, "reject_reason"] = ""
+            continue
+        last_fill_date = (
+            str(prior["fill_date"].dropna().astype(str).max())
+            if not prior.empty
+            and "fill_date" in prior.columns
+            and prior["fill_date"].notna().any()
+            else None
+        )
+        fill_date, raw_open = _first_open_after(
+            target.open_prices,
+            decision_date,
+            ticker,
+            cutoff=cutoff,
+            after_date=last_fill_date,
+            not_before=committed_through,
+        )
         if fill_date is None or raw_open is None:
             continue
-        volume = _bar_volume(target.volumes, fill_date, ticker)
+        if fill_date != execution_date:
+            current_ledger = (pd.concat([existing_fills, pd.DataFrame(fills)], ignore_index=True)
+                              if fills else existing_fills)
+            cash_events = _accrue_dividend_cash_events(
+                account=account, target=target, fills=current_ledger,
+                asof=fill_date, persist=False, existing_override=cash_events,
+            )
+            cash, current_positions = _state_from_fill_ledger(
+                account, current_ledger, cash_events, asof=fill_date,
+            )
+            positions_map.clear()
+            positions_map.update(current_positions)
+            execution_date = fill_date
+        volume = _trailing_volume_before(
+            target.volumes,
+            fill_date,
+            ticker,
+            window=adv_window,
+        )
+        if (
+            str(execution.get("slippage_model") or "").lower()
+            == "volume_share"
+            and volume is None
+        ):
+            raise ValueError(
+                "Cannot apply volume-share execution without trailing volume: "
+                f"ticker={ticker} fill_date={fill_date}"
+            )
+        volume_quantity = max_volume_fill_quantity(
+            requested_quantity=remaining_requested,
+            volume=volume,
+            execution=execution,
+        )
+        quantity_limit = int(np.floor(volume_quantity + 1e-12))
+        if quantity_limit <= 0:
+            continue
         if side == "SELL":
             held_qty = float(positions_map.get(ticker, {}).get("quantity", 0.0) or 0.0)
-            qty = min(qty_requested, held_qty)
+            qty = min(remaining_requested, held_qty, quantity_limit)
             if qty <= 1e-12:
                 orders.loc[idx, "status"] = ORDER_REJECTED
                 orders.loc[idx, "reject_reason"] = "insufficient_position"
@@ -224,12 +753,12 @@ def _fill_pending_orders(
         else:
             max_qty = max_buy_quantity_for_cash(
                 cash=cash,
-                requested_quantity=qty_requested,
+                requested_quantity=min(remaining_requested, quantity_limit),
                 raw_price=raw_open,
                 volume=volume,
                 execution=execution,
             )
-            qty = min(int(qty_requested), max_qty)
+            qty = min(int(remaining_requested), quantity_limit, max_qty)
             if qty <= 0:
                 orders.loc[idx, "status"] = ORDER_REJECTED
                 orders.loc[idx, "reject_reason"] = "insufficient_cash"
@@ -257,8 +786,7 @@ def _fill_pending_orders(
         notional = float(ex["notional"])
         fee_components = ex.get("fee_components") or {}
         fill_id = str(uuid4())
-        order_id = str(row.get("order_id") or "")
-        fills.append({
+        fill_record = {
             "fill_id": fill_id,
             "order_id": order_id,
             "account_id": account_id,
@@ -269,6 +797,7 @@ def _fill_pending_orders(
             "fill_price": float(fill_price),
             "notional": float(notional),
             "bar_volume": float(volume) if volume is not None else np.nan,
+            "volume_reference": f"ADV{adv_window}_before_fill",
             "participation_rate": float(ex.get("participation_rate", 0.0) or 0.0),
             "slippage_model": str(ex.get("slippage_model") or execution.get("slippage_model")),
             "slippage_bps": float(ex.get("slippage_bps", 0.0) or 0.0),
@@ -288,27 +817,62 @@ def _fill_pending_orders(
             "decision_date": decision_date,
             "fill_date": fill_date,
             "filled_at": now_iso(),
-        })
-        orders.loc[idx, "status"] = ORDER_FILLED
-        orders.loc[idx, "filled_quantity"] = int(qty)
+            "dataset_version_id": getattr(target, "data_contract", {}).get("dataset_version_id"),
+            "data_universe": getattr(target, "data_contract", {}).get("data_universe"),
+        }
+        fills.append(fill_record)
+        cumulative_quantity = already_filled + float(qty)
+        orders.loc[idx, "status"] = (
+            ORDER_FILLED
+            if cumulative_quantity >= total_requested - 1e-9
+            else ORDER_PENDING
+        )
+        orders.loc[idx, "filled_quantity"] = int(round(cumulative_quantity))
         orders.loc[idx, "fill_price"] = float(fill_price)
         orders.loc[idx, "fill_date"] = fill_date
+        orders.loc[idx, "last_fill_date"] = fill_date
         orders.loc[idx, "filled_at"] = now_iso()
         orders.loc[idx, "bar_volume"] = float(volume) if volume is not None else np.nan
         orders.loc[idx, "slippage_model"] = str(ex.get("slippage_model") or execution.get("slippage_model"))
         orders.loc[idx, "slippage_bps"] = float(ex.get("slippage_bps", 0.0) or 0.0)
         orders.loc[idx, "slippage_cost"] = float(ex.get("slippage_cost", 0.0) or 0.0)
         orders.loc[idx, "fee_model"] = str(ex.get("fee_model") or execution.get("fee_model"))
-        orders.loc[idx, "fee"] = float(fee)
-        orders.loc[idx, "total_cost_cash"] = float(ex.get("total_cost", 0.0) or 0.0)
+        prior_fee = (
+            float(pd.to_numeric(prior["fee"], errors="coerce").fillna(0).sum())
+            if not prior.empty and "fee" in prior.columns
+            else 0.0
+        )
+        prior_cost = (
+            float(
+                pd.to_numeric(
+                    prior["total_cost_cash"],
+                    errors="coerce",
+                ).fillna(0).sum()
+            )
+            if not prior.empty and "total_cost_cash" in prior.columns
+            else 0.0
+        )
+        orders.loc[idx, "fee"] = prior_fee + float(fee)
+        orders.loc[idx, "total_cost_cash"] = (
+            prior_cost + float(ex.get("total_cost", 0.0) or 0.0)
+        )
         orders.loc[idx, "reject_reason"] = ""
 
-    save_table(account_id, "orders", orders)
     if fills:
-        existing = load_table(account_id, "fills")
         fills_df = pd.DataFrame(fills)
-        out = pd.concat([existing, fills_df], ignore_index=True) if not existing.empty else fills_df
+        out = (
+            pd.concat([existing_fills, fills_df], ignore_index=True)
+            if not existing_fills.empty
+            else fills_df
+        )
         save_table(account_id, "fills", out)
+    if not cash_events.empty:
+        # Cash entitlements may depend on fills made earlier in this batch.
+        # Persist fills first; a retry can deterministically recover the events.
+        save_table(account_id, "cash_events", cash_events)
+    # Publish the order projection after fills. If this write fails, the next
+    # run reconstructs filled_quantity from the durable fill ledger.
+    save_table(account_id, "orders", orders)
     return cash, fills, orders
 
 
@@ -323,6 +887,18 @@ def _create_rebalance_orders(
     account_id = str(account["id"])
     decision_date = target.decision_date
     existing = load_table(account_id, "orders")
+    if (
+        not existing.empty
+        and "status" in existing.columns
+        and existing["status"].astype(str).eq(ORDER_PENDING).any()
+    ):
+        log.info(
+            "Skip rebalance order creation while prior orders are pending: "
+            "account_id=%s decision_date=%s",
+            account_id,
+            decision_date,
+        )
+        return []
     if not existing.empty and "decision_date" in existing.columns:
         same_day = existing[existing["decision_date"].astype(str) == decision_date]
         if not same_day.empty:
@@ -369,6 +945,8 @@ def _create_rebalance_orders(
             "quantity": qty,
             "filled_quantity": 0,
             "ref_price": ref_price,
+            "dataset_version_id": getattr(target, "data_contract", {}).get("dataset_version_id"),
+            "data_universe": getattr(target, "data_contract", {}).get("data_universe"),
             "target_weight": target_by_ticker.get(ticker, 0.0),
             "current_value": current_value,
             "target_value": target_value,
@@ -386,16 +964,45 @@ def _create_rebalance_orders(
     return rows
 
 
-def run_account_once(account_id: str, *, asof: str | None = None) -> dict[str, Any]:
-    """Run one manual paper-trading cycle for an account."""
+def _run_account_once_locked(
+    account_id: str,
+    *,
+    asof: str | None = None,
+) -> dict[str, Any]:
+    """Run one cycle while the caller holds the account run lock."""
     account = load_account(account_id)
     if account is None:
         raise FileNotFoundError(f"Paper account not found: {account_id}")
     if account.get("status") != STATUS_ACTIVE:
         raise ValueError("模拟盘账户不是 active 状态，不能运行")
 
+    observed_schema = int(account.get("schema_version") or 0)
+    observed_method = str(account.get("accounting_methodology") or "")
+    if (
+        observed_schema != PAPER_ACCOUNT_SCHEMA_VERSION
+        or observed_method != PAPER_ACCOUNTING_METHODOLOGY
+    ):
+        durable = {
+            name: load_table(account_id, name)
+            for name in ("fills", "cash_events", "equity_curve")
+        }
+        if any(not frame.empty for frame in durable.values()):
+            raise ValueError(
+                "Paper account predates dividend-aware execution-price accounting "
+                "and already has a durable ledger. Rebuild it through an explicit "
+                "account migration; it cannot be silently relabelled."
+            )
+        account = update_account(
+            account_id,
+            {
+                "schema_version": PAPER_ACCOUNT_SCHEMA_VERSION,
+                "accounting_methodology": PAPER_ACCOUNTING_METHODOLOGY,
+            },
+        )
+
     try:
         strategy = account_strategy(account)
+        risk_cfg = account.get("risk_config") or {}
         target = generate_target_weights(
             strategy=strategy,
             universe=str(account["universe"]),
@@ -403,18 +1010,69 @@ def run_account_once(account_id: str, *, asof: str | None = None) -> dict[str, A
             asof=asof,
             n_groups=int(account.get("n_groups") or 5),
             top_group=int(account.get("top_group") or account.get("n_groups") or 5),
+            tradability=risk_cfg.get("tradability"),
+            require_point_in_time=bool(
+                risk_cfg.get(
+                    "require_point_in_time_universe",
+                    getattr(
+                        CONFIG.backtest,
+                        "require_point_in_time_universe",
+                        False,
+                    ),
+                )
+            ),
         )
-        positions = load_table(account_id, "positions")
-        positions_map = _positions_to_map(positions)
-        cash = float(account.get("cash", account.get("initial_cash", 0.0)) or 0.0)
+        expected_session = _expected_target_session(asof)
+        actual_session = pd.Timestamp(target.decision_date).normalize()
+        if actual_session != expected_session:
+            raise ValueError(
+                "Paper target data is stale or ahead of the requested as-of: "
+                f"expected_session={expected_session.date()} "
+                f"decision_date={actual_session.date()}. Refresh market data "
+                "and factor artifacts before running the account."
+            )
+        if target.tickers_missing:
+            raise ValueError(
+                "Paper universe contains tickers with no usable OHLCV history: "
+                f"{target.tickers_missing[:20]}"
+            )
+        fill_ledger = load_table(account_id, "fills")
+        _validate_execution_units(
+            account=account, target=target, fills=fill_ledger,
+            orders=load_table(account_id, "orders"),
+        )
+        cash_events = load_table(account_id, "cash_events")
+        cash, positions_map = _state_from_fill_ledger(
+            account,
+            fill_ledger,
+            cash_events,
+            validate_cash=False,
+        )
 
         cash, fills, _ = _fill_pending_orders(
             account=account,
             target=target,
             cash=cash,
             positions_map=positions_map,
+            cutoff=target.decision_date,
         )
-        mark_date, latest_prices = _latest_price_row(target.prices, asof=asof)
+        # Re-read the durable ledger after execution. This also makes a retry
+        # after a later projection write failure exactly idempotent.
+        fill_ledger = load_table(account_id, "fills")
+        cash_events = _accrue_dividend_cash_events(
+            account=account,
+            target=target,
+            fills=fill_ledger,
+        )
+        cash, positions_map = _state_from_fill_ledger(
+            account,
+            fill_ledger,
+            cash_events,
+        )
+        mark_date, latest_prices = _latest_price_row(
+            target.prices,
+            asof=target.decision_date,
+        )
         positions_df, equity = _mark_equity(
             account_id=account_id,
             cash=cash,
@@ -422,17 +1080,110 @@ def run_account_once(account_id: str, *, asof: str | None = None) -> dict[str, A
             latest_prices=latest_prices,
             mark_date=mark_date,
         )
-        new_orders = _create_rebalance_orders(
+        is_rebalance = _is_rebalance_decision(account, target)
+        new_orders: list[dict[str, Any]] = []
+        if is_rebalance:
+            new_orders = _create_rebalance_orders(
+                account=account,
+                target=target,
+                cash=cash,
+                positions_df=positions_df,
+                equity=equity,
+            )
+            target_table = target.target_weights.copy()
+            target_table["account_id"] = account_id
+            target_table["generated_at"] = now_iso()
+            save_table(account_id, "target_weights", target_table)
+            target_history = load_table(account_id, "target_history")
+            if (
+                not target_history.empty
+                and "decision_date" in target_history.columns
+            ):
+                target_history = target_history[
+                    target_history["decision_date"].astype(str)
+                    != str(target.decision_date)
+                ]
+            target_history = (
+                pd.concat([target_history, target_table], ignore_index=True)
+                if not target_history.empty
+                else target_table.copy()
+            )
+            target_history = target_history.sort_values(
+                ["decision_date", "ticker"]
+            ).reset_index(drop=True)
+            save_table(account_id, "target_history", target_history)
+
+        position_history = load_table(account_id, "position_history")
+        if not position_history.empty and "date" in position_history.columns:
+            position_history = position_history[
+                position_history["date"].astype(str)
+                != str(mark_date or target.decision_date)
+            ]
+        position_rows = positions_df.copy()
+        position_rows.insert(0, "date", mark_date or target.decision_date)
+        position_rows["account_id"] = account_id
+        position_history = (
+            pd.concat([position_history, position_rows], ignore_index=True)
+            if not position_history.empty
+            else position_rows
+        )
+        save_table(account_id, "position_history", position_history)
+
+        replay_snapshot = build_paper_snapshot(
+            source_id=account_id,
             account=account,
             target=target,
+            positions=positions_df,
             cash=cash,
-            positions_df=positions_df,
             equity=equity,
+            is_rebalance=is_rebalance,
         )
-        target_table = target.target_weights.copy()
-        target_table["account_id"] = account_id
-        target_table["generated_at"] = now_iso()
-        save_table(account_id, "target_weights", target_table)
+        decision_ts = pd.Timestamp(target.decision_date)
+        fills_on_date = pd.DataFrame()
+        if not fill_ledger.empty and "fill_date" in fill_ledger.columns:
+            fills_on_date = fill_ledger[
+                fill_ledger["fill_date"].astype(str)
+                == target.decision_date
+            ]
+        if not fills_on_date.empty:
+            replay_snapshot.daily_summary.loc[
+                decision_ts,
+                "total_fee",
+            ] = float(
+                pd.to_numeric(
+                    fills_on_date.get("fee", pd.Series(dtype=float)),
+                    errors="coerce",
+                ).fillna(0.0).sum()
+            )
+            replay_snapshot.daily_summary.loc[
+                decision_ts,
+                "total_slippage_cost",
+            ] = float(
+                pd.to_numeric(
+                    fills_on_date.get(
+                        "slippage_cost",
+                        pd.Series(dtype=float),
+                    ),
+                    errors="coerce",
+                ).fillna(0.0).sum()
+            )
+            replay_snapshot.daily_summary.loc[
+                decision_ts,
+                "total_cost_cash",
+            ] = float(
+                pd.to_numeric(
+                    fills_on_date.get(
+                        "total_cost_cash",
+                        pd.Series(dtype=float),
+                    ),
+                    errors="coerce",
+                ).fillna(0.0).sum()
+            )
+            replay_snapshot.daily_summary.loc[
+                decision_ts,
+                "execution_date",
+            ] = target.decision_date
+        upsert_snapshot(account_dir(account_id), replay_snapshot)
 
         orders_current = load_table(account_id, "orders")
         pending_count = (
@@ -444,7 +1195,9 @@ def run_account_once(account_id: str, *, asof: str | None = None) -> dict[str, A
             "account_id": account_id,
             "run_at": now_iso(),
             "decision_date": target.decision_date,
+            "expected_session": expected_session.strftime("%Y-%m-%d"),
             "mark_date": mark_date,
+            "is_rebalance": bool(is_rebalance),
             "cash": float(cash),
             "equity": float(equity),
             "fills_count": len(fills),
@@ -452,10 +1205,18 @@ def run_account_once(account_id: str, *, asof: str | None = None) -> dict[str, A
             "pending_orders": pending_count,
             "tickers_used": len(target.tickers_used),
             "tickers_missing": len(target.tickers_missing),
+            "dataset_version_id": target.data_contract.get("dataset_version_id"),
+            "factor_publication_id": target.data_contract.get(
+                "factor_publication_id"
+            ),
             "error": "",
         }
         runs = load_table(account_id, "runs")
-        runs = pd.concat([runs, pd.DataFrame([run_row])], ignore_index=True) if not runs.empty else pd.DataFrame([run_row])
+        runs = (
+            pd.concat([runs, pd.DataFrame([run_row])], ignore_index=True)
+            if not runs.empty
+            else pd.DataFrame([run_row])
+        )
         save_table(account_id, "runs", runs)
 
         diagnostics = {
@@ -465,24 +1226,77 @@ def run_account_once(account_id: str, *, asof: str | None = None) -> dict[str, A
             "tickers_used": len(target.tickers_used),
             "tickers_missing": target.tickers_missing,
             "warnings": target.warnings,
+            "is_rebalance": bool(is_rebalance),
+            "expected_session": expected_session.strftime("%Y-%m-%d"),
+            "decision_replay": {
+                "available": True,
+                "schema_version": replay_snapshot.manifest["schema_version"],
+            },
             "last_orders_created": len(new_orders),
             "last_fills_count": len(fills),
             "pending_orders": pending_count,
+            "data_contract": target.data_contract,
         }
-        account = update_account(account_id, {
-            "cash": float(cash),
-            "last_equity": float(equity),
-            "last_run_at": run_row["run_at"],
-            "last_decision_date": target.decision_date,
-            "last_mark_date": mark_date,
-            "last_error": None,
-            "diagnostics": diagnostics,
-        })
+        account = update_account(
+            account_id,
+            {
+                "cash": float(cash),
+                "last_equity": float(equity),
+                "last_run_at": run_row["run_at"],
+                "last_decision_date": target.decision_date,
+                "last_mark_date": mark_date,
+                "last_error": None,
+                "diagnostics": diagnostics,
+                "data_contract": target.data_contract,
+                "data_request_id": None,
+            },
+        )
         return {
             "account": account,
             "run": run_row,
             "diagnostics": diagnostics,
         }
+    except MarketDataNotReadyError as e:
+        request_id = e.request_id
+        if str(account.get("universe") or "").startswith("watchlist:"):
+            snapshot = account.get("watchlist_snapshot") or {}
+            start_iso, end_iso, _ = resolve_date_range(
+                CONFIG.date_range.start,
+                asof or CONFIG.date_range.end,
+            )
+            request = enqueue_market_data_request(
+                data_universe=watchlist_snapshot_data_universe(snapshot),
+                universe_frame=watchlist_universe_frame(snapshot),
+                start=start_iso,
+                end=end_iso,
+                initial_start=(
+                    pd.Timestamp(start_iso) - pd.Timedelta(days=400)
+                ).strftime("%Y-%m-%d"),
+                consumer_kind="paper_account",
+                consumer_id=account_id,
+                force=True,
+            )
+            request_id = request.request_id
+        update_account(
+            account_id,
+            {
+                "last_run_at": datetime.now().isoformat(timespec="seconds"),
+                "last_error": f"WAITING_FOR_DATA: {e}",
+                "data_request_id": request_id,
+                "diagnostics": {
+                    "waiting_for_data": {
+                        "data_universe": e.data_universe,
+                        "request_id": request_id,
+                        "coverage": (
+                            e.coverage.to_dict()
+                            if e.coverage is not None
+                            else None
+                        ),
+                    }
+                },
+            },
+        )
+        raise
     except Exception as e:  # noqa: BLE001
         log.exception("Paper account run failed: account_id=%s error=%s", account_id, e)
         try:
@@ -493,6 +1307,12 @@ def run_account_once(account_id: str, *, asof: str | None = None) -> dict[str, A
         except Exception:  # noqa: BLE001
             pass
         raise
+
+
+def run_account_once(account_id: str, *, asof: str | None = None) -> dict[str, Any]:
+    """Run one serialized, retry-safe paper-trading cycle."""
+    with account_run_lock(account_id):
+        return _run_account_once_locked(account_id, asof=asof)
 
 
 __all__ = ["run_account_once"]

@@ -19,7 +19,7 @@ import pandas as pd
 from src.config import PROJECT_ROOT
 
 from . import ALGORITHM_VERSION, SCHEMA_VERSION
-from .adapters import FMPCurrentClassificationProvider, LocalEODMarketDataProvider
+from .adapters import FMPCurrentClassificationProvider, PublishedEODMarketDataProvider
 from .aggregation import GroupAggregationResult, aggregate_groups
 from .artifacts import (
     FileGroupArtifactStore,
@@ -207,9 +207,14 @@ class GroupAnalyticsService:
     ) -> None:
         self.settings = settings or load_group_analytics_settings()
         self.classification_provider = (
-            classification_provider or FMPCurrentClassificationProvider()
+            classification_provider or FMPCurrentClassificationProvider(
+                group_id_mapping_path=self.settings.group_id_mapping_path,
+            )
         )
-        self.market_provider = market_provider or LocalEODMarketDataProvider()
+        self.market_provider = market_provider or PublishedEODMarketDataProvider(
+            universe=self.settings.default_universe,
+            require_benchmark=self.settings.inputs.require_benchmark,
+        )
         self.artifact_store = artifact_store or FileGroupArtifactStore(self.settings)
         self._now = now
         self._exchange_calendar = exchange_calendar
@@ -329,6 +334,7 @@ class GroupAnalyticsService:
             market = self.market_provider.snapshot(
                 symbols=symbols,
                 benchmark=self.settings.benchmark,
+                asof=target,
                 force=request.force,
             )
             pair_index = pd.DatetimeIndex([prior, target], name="session")

@@ -1,0 +1,12 @@
+[Unit]
+Description=Publish factor research after the daily market-data task
+
+[Timer]
+OnCalendar=Tue..Sat *-*-* 08:45:00 Asia/Singapore
+Persistent=true
+AccuracySec=2min
+RandomizedDelaySec=30s
+Unit=quant-factor-research.service
+
+[Install]
+WantedBy=timers.target

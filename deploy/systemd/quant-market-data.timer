@@ -1,0 +1,12 @@
+[Unit]
+Description=Ingest daily FMP bars after each completed US trading session
+
+[Timer]
+OnCalendar=Tue..Sat *-*-* 08:15:00 Asia/Singapore
+Persistent=true
+AccuracySec=2min
+RandomizedDelaySec=30s
+Unit=quant-market-data.service
+
+[Install]
+WantedBy=timers.target

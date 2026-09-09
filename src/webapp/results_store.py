@@ -15,7 +15,6 @@ Web 服务仅消费这些缓存，不做任何重计算。
         group_metrics.parquet
         backtest_config.json
 
-为兼容旧版（outputs/factors/...），如果新路径不存在会回退读旧路径。
 """
 from __future__ import annotations
 
@@ -25,7 +24,8 @@ from typing import Any
 import pandas as pd
 
 from src.config import CONFIG, PROJECT_ROOT
-from src.factors.artifacts import load_factor_values
+from src.factors.artifacts import load_factor_raw_values, load_factor_values
+from src.utils.identifiers import InvalidResourceId, safe_path_component
 from src.utils.io import ensure_dir, load_json, read_parquet, save_json, write_parquet
 
 _OUT_DIR = (
@@ -42,15 +42,12 @@ DEFAULT_UNIVERSE = "SP500"
 # ---------------------------------------------------------------
 
 def _universe_root(universe: str) -> Path:
+    universe = safe_path_component(universe, label="universe")
     return _OUT_DIR / "universes" / universe / "factors"
 
 
-def _legacy_root() -> Path:
-    """兼容旧路径 outputs/factors/。"""
-    return _OUT_DIR / "factors"
-
-
 def factor_dir(name: str, universe: str = DEFAULT_UNIVERSE) -> Path:
+    name = safe_path_component(name, label="factor_id")
     p = _universe_root(universe) / name
     ensure_dir(p)
     return p
@@ -71,6 +68,7 @@ def save_factor_artifacts(
     ls_returns: pd.Series,
     group_metrics: pd.DataFrame,
     backtest_config: dict,
+    ic_outcome_audit: pd.DataFrame | None = None,
     universe: str = DEFAULT_UNIVERSE,
 ) -> Path:
     d = factor_dir(name, universe=universe)
@@ -82,6 +80,8 @@ def save_factor_artifacts(
     write_parquet(ls_returns.to_frame("LongShort"), d / "ls_returns.parquet")
     write_parquet(group_metrics, d / "group_metrics.parquet")
     save_json(backtest_config, d / "backtest_config.json")
+    if ic_outcome_audit is not None:
+        write_parquet(ic_outcome_audit, d / "ic_outcome_audit.parquet")
     return d
 
 
@@ -101,6 +101,19 @@ def save_factor_values(
     """
     d = factor_dir(name, universe=universe)
     path = d / "factor_values.parquet"
+    write_parquet(values, path)
+    return path
+
+
+def save_factor_raw_values(
+    name: str,
+    values: pd.DataFrame,
+    *,
+    universe: str = DEFAULT_UNIVERSE,
+) -> Path:
+    """Persist the formula-level values before winsorization/neutralization."""
+    d = factor_dir(name, universe=universe)
+    path = d / "factor_raw_values.parquet"
     write_parquet(values, path)
     return path
 
@@ -137,21 +150,13 @@ def list_universes() -> list[str]:
                 # 至少有一个因子目录才算有效
                 if any((p / "factors").iterdir()):
                     universes.append(p.name)
-    # 兼容旧路径
-    if (_legacy_root()).exists() and any((_legacy_root()).iterdir()):
-        if DEFAULT_UNIVERSE not in universes:
-            universes.append(DEFAULT_UNIVERSE)
     return sorted(universes) or [DEFAULT_UNIVERSE]
 
 
 def list_factors(universe: str = DEFAULT_UNIVERSE) -> list[str]:
     root = _universe_root(universe)
     if not root.exists():
-        # 兼容旧路径：universe=SP500 时 fallback 到 outputs/factors/
-        if universe == DEFAULT_UNIVERSE and _legacy_root().exists():
-            root = _legacy_root()
-        else:
-            return []
+        return []
     return sorted([
         p.name for p in root.iterdir()
         if p.is_dir() and (p / "meta.json").exists()
@@ -175,18 +180,17 @@ def _load_factor_dir(d: Path, name: str) -> dict[str, Any] | None:
         "confidence_checks": read_parquet(d / "confidence_checks.parquet") if (d / "confidence_checks.parquet").exists() else pd.DataFrame(),
         "rank_autocorr": read_parquet(d / "rank_autocorr.parquet") if (d / "rank_autocorr.parquet").exists() else pd.DataFrame(),
         "quantile_turnover": read_parquet(d / "quantile_turnover.parquet") if (d / "quantile_turnover.parquet").exists() else pd.DataFrame(),
+        "ic_outcome_audit": read_parquet(d / "ic_outcome_audit.parquet") if (d / "ic_outcome_audit.parquet").exists() else pd.DataFrame(),
     }
 
 
 def load_factor(name: str, universe: str = DEFAULT_UNIVERSE) -> dict[str, Any] | None:
-    d = _universe_root(universe) / name
-    out = _load_factor_dir(d, name)
-    if out is not None:
-        return out
-    # fallback to legacy
-    if universe == DEFAULT_UNIVERSE:
-        return _load_factor_dir(_legacy_root() / name, name)
-    return None
+    try:
+        name = safe_path_component(name, label="factor_id")
+        d = _universe_root(universe) / name
+    except InvalidResourceId:
+        return None
+    return _load_factor_dir(d, name)
 
 
 __all__ = [
@@ -194,5 +198,6 @@ __all__ = [
     "save_factor_artifacts", "list_factors", "load_factor",
     "factor_dir", "list_universes",
     "save_factor_values", "load_factor_values",
+    "save_factor_raw_values", "load_factor_raw_values",
     "save_factor_confidence_artifacts",
 ]

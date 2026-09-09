@@ -1,0 +1,12 @@
+[Unit]
+Description=Send paper-trading daily summary between paper and broad jobs
+
+[Timer]
+OnCalendar=Tue..Sat *-*-* 11:00:00 Asia/Singapore
+Persistent=true
+AccuracySec=1min
+RandomizedDelaySec=20s
+Unit=quant-paper-discord-daily.service
+
+[Install]
+WantedBy=timers.target

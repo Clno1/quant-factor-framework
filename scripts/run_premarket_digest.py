@@ -33,6 +33,14 @@ def main(argv: list[str] | None = None) -> int:
         help="Send to Discord. Without this flag the command never contacts Discord.",
     )
     parser.add_argument(
+        "--prepare",
+        action="store_true",
+        help=(
+            "Build and freeze PENDING payloads without contacting Discord. "
+            "The scheduled sender later claims these immutable rows."
+        ),
+    )
+    parser.add_argument(
         "--scheduled",
         action="store_true",
         help="Require an XNYS session and the 09:20-09:29 America/New_York window.",
@@ -74,6 +82,10 @@ def main(argv: list[str] | None = None) -> int:
         help="Safely load KEY=VALUE settings without shell-sourcing the file.",
     )
     args = parser.parse_args(argv)
+    if args.prepare and args.send:
+        parser.error("--prepare and --send are mutually exclusive")
+    if args.prepare and args.scheduled:
+        parser.error("--prepare derives the current XNYS session without --scheduled")
     if args.scheduled and not args.send:
         parser.error("--scheduled requires --send")
     if args.scheduled and args.allow_outside_window:
@@ -101,6 +113,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--rebuild-failed requires an explicit single --channel")
     if args.rebuild_failed and args.retry_unknown:
         parser.error("--rebuild-failed and --retry-unknown are mutually exclusive")
+    if args.prepare and (args.retry_unknown or args.rebuild_failed):
+        parser.error("--prepare cannot be combined with delivery recovery flags")
     if (args.retry_unknown or args.rebuild_failed) and not args.session:
         parser.error(
             "--retry-unknown and --rebuild-failed require an explicit --session"
@@ -114,6 +128,7 @@ def main(argv: list[str] | None = None) -> int:
         service = PremarketDigestService(settings)
         summary = service.run(
             send=args.send,
+            prepare=args.prepare,
             scheduled=args.scheduled,
             requested_session=args.session,
             channels=_channels(args.channel),
@@ -123,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     except Exception as exc:  # configuration only; never serialize secret values
         summary = {
-            "mode": "send" if args.send else "dry-run",
+            "mode": "send" if args.send else "prepare" if args.prepare else "dry-run",
             "status": "FAILED_CONFIGURATION",
             "error_code": "STARTUP_FAILED",
             "error_type": type(exc).__name__,

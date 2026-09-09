@@ -1,0 +1,31 @@
+[Unit]
+Description=Quant independent read-only operations website (root deployment)
+Wants=network-online.target
+After=network-online.target quant-operations-watchdog.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/home/projects/quant
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONPATH=/home/projects/quant
+EnvironmentFile=/etc/quant/operations-web.env
+ExecStartPre=/home/projects/quant/.venv/bin/python -c "import fastapi, jinja2, uvicorn, sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
+ExecStart=/home/projects/quant/.venv/bin/python /home/projects/quant/scripts/run_operations_web.py --host 0.0.0.0 --port 18825
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+MemoryHigh=140M
+MemoryMax=180M
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadOnlyPaths=/home/projects/quant
+ReadWritePaths=-/home/projects/quant/runlog
+
+[Install]
+WantedBy=multi-user.target

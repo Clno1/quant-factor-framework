@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="section-block first-section">
+    <div class="section-heading"><div><h2>业务消息投递证据</h2><p>运维站不发送 Discord 告警；这里只读取既有业务通知的发送结果。</p></div></div>
+    <div class="table-wrap">
+        <table class="ops-table">
+            <thead><tr><th>交易日</th><th>任务</th><th>业务频道</th><th>状态</th><th>尝试次数</th><th>发送时间</th><th>消息 ID</th><th>错误</th></tr></thead>
+            <tbody>
+            {% for row in rows %}
+                <tr>
+                    <td class="mono">{{ row.target_session or '-' }}</td>
+                    <td><a class="primary-link" href="/jobs/{{ row.job_id }}">{{ row.job_id }}</a></td>
+                    <td>{{ row.channel }}</td>
+                    <td><span class="status status-{{ delivery_status_class(row.status) }}">{{ delivery_status_label(row.status) }}</span><small class="row-note mono">{{ row.status }}</small></td>
+                    <td>{{ row.attempts }}</td>
+                    <td class="mono">{{ format_time(row.sent_at) }}</td>
+                    <td class="mono compact-hash" title="{{ row.message_id or '' }}">{{ (row.message_id or '-')[:16] }}</td>
+                    <td>{{ row.error_code or row.error_summary or '-' }}</td>
+                </tr>
+            {% else %}<tr><td colspan="8" class="table-empty">暂无结构化投递记录；这不等同于“已经发送”。</td></tr>{% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+{% endblock %}

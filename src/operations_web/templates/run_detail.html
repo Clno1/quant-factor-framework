@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="detail-header">
+    <div>
+        <a class="back-link" href="/jobs/{{ run.job_id }}">返回任务详情</a>
+        <div class="title-line"><h2>运行 {{ run.source_run_id }}</h2><span class="status status-{{ run.status | lower }}">{{ status_label(run.status) }}</span></div>
+        <p>来源：<span class="mono">{{ run.source }}</span></p>
+    </div>
+    <dl class="key-facts">
+        <div><dt>任务</dt><dd class="mono">{{ run.job_id }}</dd></div>
+        <div><dt>目标日</dt><dd class="mono">{{ run.target_session or '-' }}</dd></div>
+        <div><dt>开始</dt><dd class="mono">{{ format_time(run.started_at) }}</dd></div>
+        <div><dt>结束</dt><dd class="mono">{{ format_time(run.completed_at) }}</dd></div>
+    </dl>
+</section>
+
+{% if run.error_summary %}
+<section class="error-banner"><strong>{{ run.error_code or '运行错误' }}</strong><p>{{ run.error_summary }}</p></section>
+{% endif %}
+
+<section class="section-block first-section">
+    <div class="section-heading"><div><h2>阶段明细</h2><p>每个阶段使用原任务已经落盘的运行证据。</p></div></div>
+    <div class="table-wrap">
+        <table class="ops-table">
+            <thead><tr><th>阶段</th><th>状态</th><th>开始</th><th>结束</th><th>耗时</th><th>处理量</th><th>说明</th></tr></thead>
+            <tbody>
+            {% for stage in run.stages %}
+                <tr>
+                    <td>{{ stage.stage_name }}</td>
+                    <td><span class="status status-{{ stage.status | lower }}">{{ status_label(stage.status) }}</span></td>
+                    <td class="mono">{{ format_time(stage.started_at) }}</td>
+                    <td class="mono">{{ format_time(stage.completed_at) }}</td>
+                    <td class="mono">{% if stage.duration_seconds is not none %}{{ '%.2f' | format(stage.duration_seconds) }} 秒{% else %}-{% endif %}</td>
+                    <td class="mono">{{ stage.rows_processed if stage.rows_processed is not none else '-' }}</td>
+                    <td>{{ stage.detail or '-' }}</td>
+                </tr>
+            {% else %}<tr><td colspan="7" class="table-empty">该来源没有更细的阶段证据。</td></tr>{% endfor %}
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<section class="split-grid">
+    <div class="section-block compact"><div class="section-heading"><div><h2>输入版本</h2></div></div><pre class="json-block">{{ run.input_versions | tojson(indent=2) }}</pre></div>
+    <div class="section-block compact"><div class="section-heading"><div><h2>输出版本</h2></div></div><pre class="json-block">{{ run.output_versions | tojson(indent=2) }}</pre></div>
+</section>
+{% endblock %}

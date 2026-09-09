@@ -1,0 +1,28 @@
+# Reviewed corrections for the main-factor S&P 500 PIT window.
+#
+# This registry is deliberately small. Every entry must identify one exact
+# provider row or one dated symbol transition and must include primary-source
+# evidence. The loader rejects broad aliases and unmatched corrections.
+schema_version: 1
+universe: SP500
+
+event_ticker_corrections:
+  - id: solstice_when_issued_to_regular
+    effective_date: "2025-10-31"
+    field: added_ticker
+    provider_value: SOLSV
+    corrected_value: SOLS
+    security_contains: "Solstice Advanced Materials"
+    reason: "FMP used the when-issued symbol; the S&P 500 addition was announced under regular-way ticker SOLS."
+    sources:
+      - "https://www.spglobal.com/spdji/en/documents/indexnews/announcements/20251027-1480741/1480741_hon-dd-5-spin.pdf"
+
+symbol_transitions:
+  - id: echostar_sats_to_echo
+    effective_date: "2026-06-24"
+    removed_ticker: SATS
+    added_ticker: ECHO
+    security_name: "EchoStar Corporation"
+    reason: "EchoStar changed its Nasdaq ticker from SATS to ECHO; this is a symbol transition, not an index deletion."
+    sources:
+      - "https://ir.echostar.com/news-releases/news-release-details/echostar-changing-stocker-ticker-sats-echo-marking-companys-next"

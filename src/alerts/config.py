@@ -7,29 +7,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from src.config import CONFIG, PROJECT_ROOT
-
-
-def load_local_env(path: str | Path | None = None) -> Path | None:
-    """Load simple KEY=VALUE entries without overriding process variables."""
-    env_path = Path(path) if path is not None else PROJECT_ROOT / ".env.local"
-    if not env_path.exists():
-        return None
-    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[7:].strip()
-        if "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key, value = key.strip(), value.strip()
-        if not key or not key.replace("_", "").isalnum():
-            continue
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-            value = value[1:-1]
-        os.environ.setdefault(key, value)
-    return env_path
+from src.utils.env import load_local_env
 
 
 def _nested(mapping: dict[str, Any], *keys: str, default: Any = None) -> Any:
@@ -57,6 +35,7 @@ class AlertSettings:
     broad_min_return_20d: float = 10.0
     broad_min_adr_20d: float = 4.5
     broad_min_current_dollar_volume: float = 5_000_000.0
+    min_exact_daily_coverage: float = 0.80
     min_avg_dollar_volume: float = 10_000_000.0
     broad_max_symbols: int = 600
     strict_min_return_20d: float = 20.0
@@ -64,6 +43,7 @@ class AlertSettings:
     strict_min_dollar_volume: float = 10_000_000.0
     strict_min_avg_dollar_volume: float = 10_000_000.0
     quote_chunk_size: int = 100
+    max_quote_lag_seconds: int = 900
     intraday_enabled: bool = False
     intraday_interval: int = 5
     intraday_max_symbols: int = 25
@@ -116,11 +96,14 @@ class AlertSettings:
             broad_min_current_dollar_volume=float(
                 _nested(root, "broad_scan", "min_current_dollar_volume_m", default=5.0)
             ) * 1_000_000,
+            min_exact_daily_coverage=float(
+                _nested(root, "daily_data", "min_exact_coverage", default=0.80)
+            ),
             min_avg_dollar_volume=float(
-                _nested(root, "broad_scan", "min_avg_dollar_volume_m", default=10.0)
+                _nested(root, "daily_data", "min_avg_dollar_volume_m", default=10.0)
             ) * 1_000_000,
             broad_max_symbols=min(1000, max(1, int(
-                _nested(root, "broad_scan", "max_symbols", default=600)
+                _nested(root, "daily_data", "max_symbols", default=600)
             ))),
             strict_min_return_20d=float(_nested(root, "strict_scan", "min_return_20d", default=20.0)),
             strict_min_adr_20d=float(_nested(root, "strict_scan", "min_adr_20d", default=6.0)),
@@ -133,6 +116,9 @@ class AlertSettings:
             quote_chunk_size=min(500, max(1, int(
                 _nested(root, "quotes", "chunk_size", default=100)
             ))),
+            max_quote_lag_seconds=max(0, int(
+                _nested(root, "quotes", "max_lag_seconds", default=900)
+            )),
             intraday_enabled=bool(_nested(root, "intraday", "enabled", default=False)),
             intraday_interval=int(_nested(root, "intraday", "interval", default=5)),
             intraday_max_symbols=max(1, int(

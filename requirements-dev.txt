@@ -1,4 +1,6 @@
 -r requirements.txt
 
+pytest>=8.0,<9
+
 # Group analytics API contract tests
 httpx>=0.27,<1

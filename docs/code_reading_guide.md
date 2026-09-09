@@ -7,7 +7,7 @@
 - 读到某个配置项时应该跳到哪个模块
 - 当前系统的数据是怎么从 FMP 行情一路流到网页上的
 
-## 先抓住三条主线
+## 先抓住四条主线
 
 ### 1. 离线研究主线
 
@@ -61,6 +61,22 @@ configs/default.yaml
 
 > 一个策略如果每天模拟交易，订单、成交、持仓和权益曲线怎么更新？
 
+### 4. 大盘顶底研究主线
+
+```text
+market_regime_research 配置
+  -> scripts/run_market_regime_research.py
+  -> sources.py（长期数据和可用时间）
+  -> pit.py（历史成分审计）
+  -> labels.py（只在结果变量中看未来）
+  -> features.py（只能看当时及过去）
+  -> pipeline.py
+  -> outputs/market_regime_research/runs/<RUN_ID>/
+```
+
+第一次阅读建议按上面的顺序。实现状态和公式见
+`docs/market_regime_research_implementation.md`。
+
 ## 第一阶段：只读两个文件
 
 ### `configs/default.yaml`
@@ -72,6 +88,7 @@ configs/default.yaml
 | `universes` | 跑哪些股票池 | `scripts/run_mvp.py` 会循环这些股票池 |
 | `date_range` | 研究时间范围 | 数据下载、IC、回测都会使用这个范围 |
 | `data` | FMP 数据源和缓存 | `src/data/loader.py`、`src/data/fmp.py` |
+| `market_regime_research` | 大盘顶底研究的数据、标签和 P0 参数 | `src/market_regime_research/` |
 | `preprocessing` | 因子预处理 | `src/preprocessing/pipeline.py` |
 | `ic_analysis` | IC 计算参数 | `src/analysis/ic.py` |
 | `factor_confidence` | 因子置信评估阈值 | `src/analysis/confidence.py` |
@@ -146,12 +163,9 @@ src/data/cleaner.py
 date x ticker
 ```
 
-例如：
-
-- `adj_close.parquet`
-- `open.parquet`
-- `returns.parquet`
-- `volume.parquet`
+例如运行时字典里会有 `wide["adj_close"]`、`wide["open"]`、`wide["returns"]` 和
+`wide["volume"]`。这些是从一个已发布 `bars.parquet` 版本 pivot 出来的内存 DataFrame，
+不会再写入旧的逐字段宽表目录。
 
 看到 `get_factor()` 和 `factor.compute_from_wide()`，跳到：
 

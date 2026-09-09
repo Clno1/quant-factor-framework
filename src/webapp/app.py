@@ -2,12 +2,13 @@
 FastAPI 主应用。
 
 启动：
-    uvicorn src.webapp.app:app --host 0.0.0.0 --port 8000
+    uvicorn src.webapp.app:app --host 127.0.0.1 --port 8000
 或：
-    python scripts/run_mvp.py --serve
+    python scripts/run_mvp.py --serve-only
 """
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import os
 import time
 from pathlib import Path
@@ -17,6 +18,22 @@ from fastapi.staticfiles import StaticFiles
 
 from src.config import CONFIG
 from src.utils.logger import get_logger
+from src.webapp.security import (
+    basic_auth_credentials,
+    install_basic_auth_middleware,
+)
+from src.webapp.research_labels import (
+    factor_direction_label,
+    factor_input_label,
+    hash_label,
+    preprocessing_method_label,
+    quality_check_label,
+    research_label,
+    research_text,
+    target_data_status_label,
+    target_data_status_note,
+    universe_label,
+)
 
 log = get_logger(__name__)
 
@@ -24,6 +41,42 @@ _HERE = Path(__file__).resolve().parent
 
 # 静态资源版本号：进程启动时间戳，每次重启 Web 服务都会刷新缓存
 ASSET_VER = str(int(time.time()))
+
+
+def _recover_application_state() -> tuple[int, int]:
+    """Recover interrupted jobs and activate the WAITING_FOR_DATA monitor."""
+    interrupted = 0
+    submitted = 0
+    try:
+        from src.backtest.store import startup_recovery
+
+        interrupted = startup_recovery()
+        if interrupted:
+            log.warning(
+                "startup_recovery: %d stale backtest tasks marked as failed.",
+                interrupted,
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.error("startup_recovery failed: %s", exc)
+
+    try:
+        from src.backtest.runner import get_runner
+
+        submitted = get_runner().reconcile_waiting()
+        if submitted:
+            log.info(
+                "startup_recovery: submitted %d backtests whose data is ready.",
+                submitted,
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.error("WAITING_FOR_DATA startup reconciliation failed: %s", exc)
+    return interrupted, submitted
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    _recover_application_state()
+    yield
 
 
 def _strict_config_flag(value, *, default: bool = False) -> bool:
@@ -46,7 +99,9 @@ def create_app() -> FastAPI:
         title=CONFIG.webapp.title,
         description="Multi-Factor Quant Research Dashboard",
         version="0.1.0",
+        lifespan=_lifespan,
     )
+    install_basic_auth_middleware(app, basic_auth_credentials())
 
     # 挂载静态资源
     static_dir = _HERE / "static"
@@ -54,8 +109,21 @@ def create_app() -> FastAPI:
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
     # 注册路由 + 注入模板全局变量
+    from src.webapp.breakout_routes import (
+        router as breakout_router,
+        templates as breakout_templates,
+    )
     from src.webapp.routes import router, templates
     from src.webapp.routes_v2 import router_v2, templates as templates_v2
+    from src.webapp.research_routes import (
+        research_status_payload,
+        router as research_router,
+        templates as research_templates,
+    )
+    from src.webapp.decision_replay_routes import (
+        router as decision_replay_router,
+        templates as decision_replay_templates,
+    )
     try:
         writer_enabled = _strict_config_flag(
             os.environ.get(
@@ -73,10 +141,41 @@ def create_app() -> FastAPI:
         group_analytics_enabled = False
     templates.env.globals["asset_ver"] = ASSET_VER
     templates_v2.env.globals["asset_ver"] = ASSET_VER
+    decision_replay_templates.env.globals["asset_ver"] = ASSET_VER
+    breakout_templates.env.globals["asset_ver"] = ASSET_VER
+    research_templates.env.globals["asset_ver"] = ASSET_VER
     templates.env.globals["group_analytics_enabled"] = group_analytics_enabled
     templates_v2.env.globals["group_analytics_enabled"] = group_analytics_enabled
+    decision_replay_templates.env.globals["group_analytics_enabled"] = group_analytics_enabled
+    breakout_templates.env.globals["group_analytics_enabled"] = group_analytics_enabled
+    research_templates.env.globals["group_analytics_enabled"] = group_analytics_enabled
+    for template_env in (
+        templates,
+        templates_v2,
+        decision_replay_templates,
+        breakout_templates,
+        research_templates,
+    ):
+        template_env.env.globals.update(
+            {
+                "factor_direction_label": factor_direction_label,
+                "factor_input_label": factor_input_label,
+                "hash_label": hash_label,
+                "preprocessing_method_label": preprocessing_method_label,
+                "quality_check_label": quality_check_label,
+                "research_label": research_label,
+                "research_status": research_status_payload,
+                "research_text": research_text,
+                "target_data_status_label": target_data_status_label,
+                "target_data_status_note": target_data_status_note,
+                "universe_label": universe_label,
+            }
+        )
     app.include_router(router)
     app.include_router(router_v2)
+    app.include_router(research_router)
+    app.include_router(decision_replay_router)
+    app.include_router(breakout_router)
 
     # Optional composition-root registration.  No factor/backtest/paper module
     # imports the group domain, and disabled deployments do not import its Web
@@ -88,16 +187,24 @@ def create_app() -> FastAPI:
         )
         group_analytics_templates.env.globals["asset_ver"] = ASSET_VER
         group_analytics_templates.env.globals["group_analytics_enabled"] = True
+        group_analytics_templates.env.globals["research_status"] = (
+            research_status_payload
+        )
+        group_analytics_templates.env.globals.update(
+            {
+                "factor_direction_label": factor_direction_label,
+                "factor_input_label": factor_input_label,
+                "hash_label": hash_label,
+                "preprocessing_method_label": preprocessing_method_label,
+                "quality_check_label": quality_check_label,
+                "research_label": research_label,
+                "research_text": research_text,
+                "target_data_status_label": target_data_status_label,
+                "target_data_status_note": target_data_status_note,
+                "universe_label": universe_label,
+            }
+        )
         app.include_router(group_analytics_router)
-
-    # 启动恢复：把上次进程残留的 running 任务标为 failed
-    try:
-        from src.backtest.store import startup_recovery
-        fixed = startup_recovery()
-        if fixed:
-            log.warning("startup_recovery: %d stale backtest tasks marked as failed.", fixed)
-    except Exception as e:  # noqa: BLE001
-        log.error("startup_recovery failed: %s", e)
 
     log.info(
         "FastAPI app created. Title=%s asset_ver=%s group_analytics=%s",
