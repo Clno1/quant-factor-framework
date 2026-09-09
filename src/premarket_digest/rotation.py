@@ -117,9 +117,11 @@ def rotation_payload(report, context, settings):
         lines = []
         for r in eligible[:2]:
             p = r["production"]
-            line = f"**{r['name']}** · {p['state_name']}\n5日 {_pct(p['rs5'])}｜20日 {_pct(p['rs20'])}｜60日 {_pct(p['rs60'])}（相对{r['benchmark']}）"
+            line = f"**{r['name']}** · {p['state_name']} · {ACTION_ZH[p['action']]}\n5日 {_pct(p['rs5'])}｜20日 {_pct(p['rs20'])}｜60日 {_pct(p['rs60'])}（相对{r['benchmark']}）"
             if p.get("breadth") is not None:
                 line += f"\n站20日线 {int(p['breadth_n'])}只有效样本中的 {p['breadth']:.0f}%"
+                if p["breadth_n"] < 5:
+                    line += "（小样本，未达广度确认门槛）"
             else:
                 line += "\n真实广度未接入，仅价格观察"
             if r.get("candidates"):

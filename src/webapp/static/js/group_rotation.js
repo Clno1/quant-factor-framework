@@ -24,9 +24,9 @@
     for (const r of rows) {
       const p = r.production, tr = node("tr"); if (selection === r.id) tr.className = "selected";
       const first = node("td"), button = node("button", r.name); button.type = "button"; button.setAttribute("aria-pressed", selection === r.id ? "true" : "false"); button.addEventListener("click", () => select(r.id));
-      first.append(button, node("span", `${r.proxy || "等权篮子"} · ${p.state_name}${p.boundary ? " · 边界附近" : ""}`, "rotation-sub")); tr.append(first);
+      first.append(button, node("span", `${r.proxy || "等权篮子"} · 已确认：${p.state_name}${p.boundary ? " · 边界附近" : ""}${p.confirmation_count ? ` · 新状态待确认 ${p.confirmation_count}/${p.confirmation_required}` : ""}`, "rotation-sub")); tr.append(first);
       for (const [key,label] of [["rs5","5日相对"],["rs20","20日相对"],["rs60","60日相对"]]) { const td=node("td", pct(p[key]), p[key]>0?"rotation-positive":p[key]<0?"rotation-negative":"");td.dataset.label=label;tr.append(td); }
-      const breadth=node("td", p.breadth === null ? (r.members.length?"无有效样本":"未接入") : `${p.breadth.toFixed(0)}% · 样本${p.breadth_n}/${p.breadth_expected}`);breadth.dataset.label="站20日线广度";tr.append(breadth);
+      const breadth=node("td", p.breadth === null ? (r.members.length?"无有效样本":"未接入") : `${p.breadth.toFixed(0)}% · 样本${p.breadth_n}/${p.breadth_expected}${p.breadth_n < 5 ? "（小样本）" : ""}`);breadth.dataset.label="站20日线广度";tr.append(breadth);
       const action=node("td",actions[p.action]);action.dataset.label="研究优先级";tr.append(action);tbody.append(tr);
     }
     if (!rows.some(r=>r.id===selection)) { selection=undefined; el("rotation-detail").replaceChildren(node("p","点击主题，查看历史、个股候选与原版对账。")); detailSequence++; }

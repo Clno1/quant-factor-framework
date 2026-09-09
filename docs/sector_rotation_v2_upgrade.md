@@ -2,7 +2,7 @@
 
 实施日期：2026-09-09。依据：`sector_rotation_v2_public_source_revision.md`。
 
-本次是原板块分析领域的原地升级，不是新的交易引擎。代码实现不等于已经完成作者数据对账、策略收益验证或 SG 部署。没有自动买卖、仓位修改，也没有因开发验收向 Discord 发送消息。
+本次是原板块分析领域的原地升级，不是新的交易引擎。代码实现不等于作者数据对账或策略有效。首次实现时未部署、未发送；2026-09-09 后续真实数据验证与部署进度另见 `sector_rotation_v2_validation_20260909.md`。没有自动买卖或仓位修改。
 
 ## 1. 本次交付与仍待验证的部分
 
@@ -184,7 +184,7 @@ cd /home/projects/quant
 
 若你实际使用不同env路径，沿用现有服务中的路径，不要新建或覆盖已有密钥文件。FMP凭据只给writer所需环境，Discord Webhook只给既有投递worker。检查日志时不要粘贴凭据内容。
 
-若writer成功但 `candidate_linkage=unavailable`，先检查既有 `quant-us-daily-refresh.service` 的完成日US_ACTIVE缓存/manifest及覆盖率；不能把它理解为“所有股票没有机会”。恢复后重新构建轮动可生成新的关联快照。
+若writer成功但 `candidate_linkage=unavailable`，先检查当前数据底座已发布的 US_LIQUID_5M / US_ACTIVE 完成日数据及覆盖率；不能把它理解为“所有股票没有机会”。当前主框架已升级，不应再依赖旧 raw OHLCV 缓存或重新开启已归档的 `quant-us-daily-refresh.timer`。恢复后重新构建轮动可生成新的关联快照。
 
 ### 7.2 修改现有systemd writer，不重复建计时任务
 
@@ -211,7 +211,7 @@ ReadWritePaths=/home/projects/quant/data /home/projects/quant/outputs /home/proj
 ExecStartPre=
 ExecStartPre=/home/projects/quant/.venv/bin/python -c "import sys; assert sys.version_info >= (3, 11)"
 ExecStart=
-ExecStart=/home/projects/quant/.venv/bin/python /home/projects/quant/scripts/run_group_rotation.py --refresh --asof latest
+ExecStart=/usr/bin/flock --exclusive --wait 10800 /home/projects/quant/data/lake/.broad-production.lock /home/projects/quant/.venv/bin/python /home/projects/quant/scripts/run_group_rotation.py --refresh --asof latest
 ```
 
 这些目录须已经存在。若现有unit有额外写目录保护或其他drop-in，按实际有效配置合并，不删除无关保护。主模板默认仍是通用 `/opt/quant`/quant用户；SG使用上面的既有root覆盖。
@@ -225,7 +225,7 @@ journalctl -u quant-group-analytics-eod.service -n 80 --no-pager
 systemctl list-timers --all 'quant-*'
 ```
 
-已有轮动构建timer和美东09:20投递timer继续使用；不用另建一套。本仓库writer timer为新加坡周二至周六07:45，先等已有US行情刷新完成。`After=`只是顺序关系，不会主动启动或保证刷新成功；个股关联自身仍会做完成日门槛。
+已有轮动构建timer和美东09:20投递timer继续使用；不用另建一套。当前仓库与 SG writer timer 为新加坡周二至周六 **13:15**，接在当前 11:30 宽基数据链之后，不是早期版本的07:45。保留 `flock`、`MemoryHigh=400M`、`MemoryMax=550M`、`CPUQuota=100%` 与30分钟失败重试。`After=`只是顺序关系，不会主动启动或保证刷新成功；个股关联自身仍会做完成日门槛。
 
 主站重启要用你现有的网站服务名。本次默认配置开启只读轮动入口，但若网站环境保留 `GROUP_ANALYTICS_ENABLED=false` 或 `GROUP_ANALYTICS_WEB_ENABLED=false`，需要把网站进程中的这两个开关改为true。writer的WEB_ENABLED=false不影响另一进程的主站配置。
 
@@ -233,7 +233,7 @@ systemctl list-timers --all 'quant-*'
 
 主站、对账、JSON/Markdown预览均检查后，再让既有投递timer执行。不要为了测新版就删除SQLite去重记录：同日已经SENT仍不会重复发，UNKNOWN必须人工确认，FAILED重建沿用旧的显式恢复流程，详见 `premarket_discord.md`。
 
-需要人工发送时，仍使用既有 `run_premarket_digest.py --send --allow-outside-window --channel sector-rotation` 授权开关和原有env文件；该命令会真实发送，本文的默认验收步骤不执行它。
+正常人工补发仍使用既有 `run_premarket_digest.py --send --allow-outside-window --channel sector-rotation` 授权开关和原有env文件。单独的升级验收使用 `scripts/accept_group_rotation.py --acceptance-id rotation-v2-20260909 --env-file /etc/quant/premarket-digest.env` 先预览；明确获授权后才加 `--send`。验收只向板块频道发一条、不提及角色，独立记录 attempt/receipt，任何已有尝试均拒绝重发，不篡改日常摘要去重库。
 
 回退可以先隐藏主站入口/暂停轮动writer，保存所有产物及投递数据库，再恢复旧代码和writer入口。不要通过删除rotation目录制造静默回退；要回旧版需要完整版本回退并显式验证旧榜日期，不让旧统计冒充新报告。
 
@@ -245,4 +245,4 @@ systemctl list-timers --all 'quant-*'
 
 浏览器使用隔离临时目录的合成行情完成桌面与390px手机验收，包括范围切换、主题详情、股票池链接、图表、返回列表和错误日志；模拟数据未写入项目生产outputs，未发送到Discord。
 
-上线后仍须先采集同日TradingView对照与真实冻结快照。未来5/20日收益、相同有效样本的RS20/RS60基线、原版积分消融、背景增量、成本/PIT/重叠收益检验尚未执行。没有这些结果前，这一版的承诺是“可读、可核对的日线研究工具”，不是“已经验证能选中下一轮赢家”。
+上述187项是首次实现时的历史记录。2026-09-09 继续验证已完成真实ETF回看、成本敏感性、相同有效样本基线及独立20日区间比较，详见验证记录；这些结果没有证明当前复杂规则胜过简单RS20。TradingView外部对账、真正前瞻验证、历史PIT持仓广度与宏观增量仍待完成。这一版的承诺是“可读、可核对的日线研究工具”，不是“已经验证能选中下一轮赢家”。
