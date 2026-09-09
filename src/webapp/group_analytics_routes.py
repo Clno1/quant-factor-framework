@@ -1061,7 +1061,52 @@ def _run_payload(
 
 @router.get("/group-analytics", response_class=HTMLResponse)
 def group_analytics_page(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request, "group_rotation.html", {})
+
+
+@router.get("/group-analytics/daily", response_class=HTMLResponse)
+def group_analytics_legacy_page(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "group_analytics.html", {})
+
+
+def _rotation_snapshot(run: str | None):
+    from src.group_analytics.rotation.store import RotationStore
+
+    if run is not None and not re.fullmatch(r"rot_[0-9]{8}_[a-f0-9]{16}", run):
+        raise HTTPException(status_code=422, detail="无效快照编号")
+    try:
+        store = RotationStore(settings.output_root / "group_analytics" / "rotation")
+        snapshot = store.load(run)
+        snapshot.pop("input_panel", None)  # Audit input remains local, not a bulk data API.
+        snapshot["last_attempt"] = store.last_attempt() if run is None else None
+    except FileNotFoundError:
+        raise HTTPException(status_code=503, detail="尚无轮动快照，请运行 scripts/run_group_rotation.py --refresh") from None
+    except (ValueError, KeyError, OSError, TypeError):
+        raise HTTPException(status_code=503, detail="轮动快照未通过校验，未使用旧单日榜替代") from None
+    try:
+        expected = latest_completed_session().date().isoformat()
+        snapshot["freshness"] = "current" if snapshot["source_session"] == expected else "historical"
+    except Exception:
+        snapshot["freshness"] = "unknown"
+    return snapshot
+
+
+@router.get("/api/group-analytics/rotation", response_class=JSONResponse)
+def rotation_summary(run: str | None = None):
+    snapshot = _rotation_snapshot(run)
+    snapshot["rows"] = [{k: v for k, v in row.items() if k not in {"history", "reference_history"}}
+                        for row in snapshot["rows"]]
+    return JSONResponse(snapshot)
+
+
+@router.get("/api/group-analytics/rotation/{theme_id}", response_class=JSONResponse)
+def rotation_detail(theme_id: str, run: str | None = None):
+    snapshot = _rotation_snapshot(run)
+    for row in snapshot["rows"]:
+        if row["id"] == theme_id:
+            return JSONResponse({"run_id": snapshot["run_id"], "source_session": snapshot["source_session"],
+                                 "freshness": snapshot["freshness"], "theme": row})
+    raise HTTPException(status_code=404, detail="主题不存在于此快照")
 
 
 @router.get("/group-analytics/groups/{group_id}", response_class=HTMLResponse)

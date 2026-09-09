@@ -109,7 +109,7 @@ class RunGroupAnalyticsCliTests(unittest.TestCase):
         self.assertEqual(payload["error"]["code"], "INTERNAL_ERROR")
         self.assertEqual(payload["status"], "FAILED")
 
-    def test_systemd_uses_one_all_level_writer_only_command(self):
+    def test_systemd_uses_one_upgraded_rotation_writer_only_command(self):
         service_file = (
             Path(__file__).resolve().parents[1]
             / "deploy/systemd/quant-group-analytics-eod.service"
@@ -117,7 +117,8 @@ class RunGroupAnalyticsCliTests(unittest.TestCase):
         content = service_file.read_text(encoding="utf-8")
 
         self.assertEqual(content.count("\nExecStart="), 1)
-        self.assertIn("--level all", content)
+        self.assertIn("scripts/run_group_rotation.py --refresh --asof latest", content)
+        self.assertNotIn("run_premarket_digest.py", content)
         self.assertIn("EnvironmentFile=-/etc/quant/momentum-alerts.env", content)
         self.assertIn("Environment=GROUP_ANALYTICS_ENABLED=true", content)
         self.assertIn("Environment=GROUP_ANALYTICS_WEB_ENABLED=false", content)

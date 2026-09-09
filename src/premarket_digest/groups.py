@@ -59,11 +59,18 @@ class GroupArtifactDigestSource:
         *,
         reader: ArtifactReader | None = None,
         now: datetime | None = None,
+        rotation_store=None,
     ) -> None:
         self.settings = settings
         group_settings = load_group_analytics_settings()
         self.reader = reader or ArtifactReader(group_settings)
         self.now = now or datetime.now(timezone.utc)
+        # An injected legacy reader without a namespace must not accidentally
+        # discover real production snapshots from the process-global root.
+        from src.group_analytics.rotation.store import RotationStore
+        self.rotation_store = rotation_store
+        if self.rotation_store is None and hasattr(self.reader, "settings"):
+            self.rotation_store = RotationStore(self.reader.settings.output_root / "group_analytics" / "rotation")
 
     def _load_level(
         self,
@@ -223,6 +230,12 @@ class GroupArtifactDigestSource:
             ) from None
 
     def load(self, source_session: str) -> dict[str, Any]:
+        # Upgrade in place. Once rotation has been initialized, corruption or
+        # staleness must fail closed, never silently send the legacy ranking.
+        from .rotation import load_rotation_report
+
+        if self.rotation_store is not None and self.rotation_store.initialized:
+            return load_rotation_report(source_session, store=self.rotation_store, now=self.now)
         specs = (
             (
                 "sector",

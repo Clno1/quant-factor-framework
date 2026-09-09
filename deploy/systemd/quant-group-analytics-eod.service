@@ -1,5 +1,5 @@
 [Unit]
-Description=Build isolated SP500 EOD group analytics artifacts
+Description=Build isolated daily sector/theme rotation and candidate snapshots
 Wants=network-online.target
 After=network-online.target quant-market-data.service quant-us-equity-coverage.service quant-broad-factor-data.service
 StartLimitIntervalSec=4h
@@ -16,7 +16,7 @@ EnvironmentFile=-/etc/quant/momentum-alerts.env
 Environment=GROUP_ANALYTICS_ENABLED=true
 Environment=GROUP_ANALYTICS_WEB_ENABLED=false
 ExecStartPre=/opt/quant/.venv/bin/python -c "import sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
-ExecStart=/usr/bin/flock --exclusive --wait 10800 /opt/quant/data/lake/.broad-production.lock /opt/quant/.venv/bin/python /opt/quant/scripts/run_group_analytics.py --mode eod --universe SP500 --taxonomy FMP --level all --asof latest
+ExecStart=/usr/bin/flock --exclusive --wait 10800 /opt/quant/data/lake/.broad-production.lock /opt/quant/.venv/bin/python /opt/quant/scripts/run_group_rotation.py --refresh --asof latest
 TimeoutStartSec=3h
 Restart=on-failure
 RestartSec=30min

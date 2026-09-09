@@ -113,6 +113,8 @@ class PremarketDigestService:
             payload = build_sector_rotation_payload(report, context, self.settings)
             metadata = {
                 "partial": report.get("partial", False),
+                "rotation_run_id": report.get("run_id"),
+                "report_kind": report.get("kind", "legacy_daily"),
                 "available_levels": sorted((report.get("levels") or {}).keys()),
                 "level_errors": report.get("errors") or {},
                 "run_ids": {
