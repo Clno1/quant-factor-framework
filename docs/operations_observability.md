@@ -845,3 +845,26 @@ NO_TRADE_CONFIRMED 标签保留为历史记录，但不能继续作为已确认�
 本地与 SG 回归均 51 passed，备份为 `cup-gap-evidence-20260909T1230CST`。独立报告位于
 `outputs/data_audits/cup_handle_gaps/2026-09-08_b80e243c01104313bdd05ebeba13ba4b.json`，四张生产
 shadow 表没有改变，进度仍为 v3 0/5，发送关闭。
+
+## 40. 2026-09-09 上游阻断与最后心跳的不同含义
+
+23:17 SGT 对 SG 运维 API、systemd 和生产 SQLite 的联合核查结果：
+
+- `/healthz` 200，快照 SUCCESS，年龄约 56 秒；watchdog 与运维 Web 健康。
+- intraday_momentum 快照为 STALE，systemd 为 failed/exit-code=1；stage 仍是
+  waiting_for_open，heartbeat_at=2026-09-09T13:29:45Z，已经过期约 6,423 秒。
+  这是遗留阶段而非当前执行状态。页面不能单独用 stage 推断任务正在等待开盘。
+- 候选 18:30 失败、盘中开盘后失败，根因是宽基行情仍在 09-04，而当天要求 09-08。
+  更上游在 RML 历史区间补齐阶段失败；准确路径见宽基实施文档第 28 节。
+- API 同时保留 OPEN 的 SYSTEMD_SERVICE_FAILED、STALE_HEARTBEAT 和
+  CUP_HANDLE_SHADOW_SESSION_FAILED。后者明确绑定 v3、09-08 及两个覆盖率失败原因。
+  最近完整日 FAIL 没有被新的调度状态覆盖，进度仍 0/5。
+- 当日实时计数为 0，与上一完整日的 2,760 次评估是不同时间范围；metrics 中旧动量
+  latest_observation=PASS 也不是茶杯柄结果。只有“茶杯柄独立影子验收”里的 v3 FAIL 可用于晋级。
+- 当天候选快照及四张茶杯柄表均无记录，不是“成功评估后零命中”。09-08 历史缺口仍保留
+  12 unresolved + 1 旧 no-trade 标签；旧标签的证据不足限制继续适用，未重写成修复后的新结论。
+
+待改善的展示项：失败时将遗留 stage 明确标为“最后阶段”，并将上游 RML 失败、coverage 过期、
+候选失败与盘中失败串联显示；今日计数与最近完整日计数应分别标注日期。本次没有修改页面或算法。
+恢复不能靠清除 incident 或 reset-failed 伪装成功，必须先使新鲜 coverage/PIT 正式发布并通过合同
+校验，再运行候选和盘中链。未运行周期、旧版本通过日不得补计。

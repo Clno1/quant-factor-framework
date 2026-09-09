@@ -31,7 +31,7 @@ def validate_key(key):
 def configure_key(path):
     if path.exists() or path.is_symlink():
         raise ValueError("KEY_FILE_ALREADY_EXISTS_NOT_OVERWRITTEN")
-    key = validate_key(getpass.getpass("OpenAI API key (hidden): ").strip())
+    key = validate_key(getpass.getpass("Selected provider API key (hidden): ").strip())
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "w", encoding="ascii") as handle:
         handle.write(key + "\n")
@@ -60,7 +60,8 @@ def budget_status(store):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--key-file", type=Path, default=Path("/etc/quant/ep-llm-trial.key"))
+    parser.add_argument("--key-file", type=Path)
+    parser.add_argument("--provider", choices=("openai", "kimi-cn", "kimi-intl"))
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("configure-key", help="Interactive hidden input; never connects to model API")
     commands.add_parser("plan", help="Read-only source and budget checks; never reads the key")
@@ -69,19 +70,26 @@ def main():
     execute.add_argument("ticker", choices=tuple(SOURCES))
     execute.add_argument("--execute", action="store_true")
     args = parser.parse_args()
+    if args.command == "run" and not args.execute:
+        raise ValueError("EXPLICIT_EXECUTE_REQUIRED")
+    if args.command in {"run", "configure-key"} and not args.provider:
+        raise ValueError("EXPLICIT_PROVIDER_REQUIRED")
+    provider = args.provider or "openai"
+    key_file = args.key_file or Path("/etc/quant/ep-llm-trial.key" if provider == "openai"
+                                    else f"/etc/quant/ep-llm-trial-{provider}.key")
     if args.command == "configure-key":
-        print(json.dumps(configure_key(args.key_file)))
+        print(json.dumps(configure_key(key_file)))
         return 0
 
-    from src.breakouts.ep.llm_provider import LlmSettings, OpenAIResponsesTransport
+    from src.breakouts.ep.llm_provider import LlmSettings, create_transport
     from src.breakouts.ep.llm_service import plan_llm, run_llm
     from src.breakouts.ep.store import EpStore
 
     # Ignore ambient model/budget overrides: this approval is for this fixed trial only.
-    settings = LlmSettings(model="gpt-5.4-mini", enabled=False,
+    settings = LlmSettings(model="gpt-5.4-mini" if provider == "openai" else "kimi-k2.6", provider=provider, enabled=False,
         daily_microusd=3_000_000, monthly_microusd=10_000_000, total_microusd=10_000_000)
     store = EpStore(DATABASE, read_only=True)
-    summary = {"database": str(DATABASE), "model": settings.model,
+    summary = {"database": str(DATABASE), "model": settings.model, "provider": settings.provider,
         "total_limit_microusd": settings.total_microusd, "budget": budget_status(store),
         "delivery": "DISABLED_SHADOW_ONLY"}
     if args.command == "plan":
@@ -90,10 +98,10 @@ def main():
     elif args.command == "run":
         if not args.execute:
             raise ValueError("EXPLICIT_EXECUTE_REQUIRED")
-        key = read_key(args.key_file)
+        key = read_key(key_file)
         before = store.report()
         result = run_llm(EpStore(DATABASE), SOURCES[args.ticker], replace(settings, enabled=True),
-                         OpenAIResponsesTransport(key))
+                         create_transport(settings, key))
         if store.report() != before:
             raise ValueError("CANDIDATE_SNAPSHOT_CHANGED")
         detail = result.get("result") or {}
@@ -111,5 +119,5 @@ if __name__ == "__main__":
         sys.exit(main())
     except (ValueError, OSError, UnicodeError, EOFError):
         # Do not echo exceptions or a key pasted in an unexpected format.
-        print(json.dumps({"status": "BLOCKED", "reason": "CHECK_SOURCE_DATABASE_EXECUTE_FLAG_AND_PRIVATE_KEY_FILE"}))
+        print(json.dumps({"status": "BLOCKED", "reason": "CHECK_PROVIDER_SOURCE_DATABASE_EXECUTE_FLAG_AND_PRIVATE_KEY_FILE"}))
         sys.exit(2)

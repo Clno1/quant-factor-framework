@@ -1158,3 +1158,29 @@ watchdog API 当前返回 `DEGRADED`，明确显示最近完整交易日 2026-09
 哈希一致，部署后本地及 SG 的茶杯柄、分钟监控、审计脚本与 watchdog 定向回归均 51 passed。
 修复在盘中服务未运行时部署，下一次常规定时启动自动生效。新增诊断脚本只读 SQLite、有限查询
 至多 20 只股票、保存隔离报告，不触发历史回放晋级或 Discord 发送。
+
+## 43. 2026-09-09 23:17 SGT：茶杯柄被宽基 RML 历史补齐阻断
+
+当天并非茶杯柄正在正常运行。quant-intraday-candidate-prepare.service 于 18:30 失败，
+quant-intraday-momentum-monitor.service 在开盘后及重试时失败，21:38 达到启动频率限制。
+共同报错为 coverage target 2026-09-04 过期，期望 2026-09-08。status CLI 的
+waiting_for_open 是 09:29:45 ET 旧心跳，必须结合 systemd failed 和运维站 STALE 判断。
+两个 timer 均 enabled/active，下一次分别为 09-10 18:30 和 21:20 SGT；timer 健康不代表作业成功。
+
+上游 quant-us-equity-coverage.service 初次 11:31 启动、11:37 失败，12:07 重试、12:08 再失败。
+Security Master 已发布 `6ff24226200643b8a4f9b7a999037458`（target 09-08），但 16 个增量身份中
+RML 的 2019-01-02 至 2026-09-04 历史获取为空，阻止 coverage 发布。具体审计：
+`data/lake/staging/us_equity_coverage_incremental/asof=2026-09-08/run=20260909T040722Z_af98b9dd/identity_delta_audit.json`。
+初次峰值 595.1 MiB、重试峰值 229.6 MiB，均无 swap；重试全链 52.075 秒，非内存耗尽。
+详细身份、来源局限和恢复门槛见宽基实施文档第 28 节。
+
+v3 最近完整日 09-08 仍 FAIL，观察 0/5、通过日期为空、剩余五个连续合格交易日。09-09 未收盘，
+但至核查时没有候选快照、周期、评估、缺口和日结记录，不能计数。09-08 的 600 候选、56 实际评估
+股票、2,760 次评估及 13 个缺口的明细见茶杯柄文档第 25 节；53/56 可评估和 3/56 缺口比例均越界。
+候选绑定 coverage `562967c01bb54e2ab39454804cc4ac73`、PIT `c1329fcd14dd4521911976b21fa6be22`，
+本次不可变合同校验通过，不代表新鲜度通过。发送 false、历史台账、所有门槛均未修改。
+
+watchdog 正常（峰值约 111.5 MiB），operations-web active（当前约 42.8 MiB、峰值 49.7 MiB、
+swap 0），healthz 返回 200，快照年龄约 56 秒。运维 API 同时保留 09-08 v3 FAIL、当日服务失败、
+当日心跳中断，未被 SCHEDULED 覆盖。没有把旧动量 PASS 当作茶杯柄 PASS；MDB 旧回放和两条
+SHADOW 信号均不能证明误报率为零。本次仅核验和同步文档，没有盲目重启服务或改写发布版本。

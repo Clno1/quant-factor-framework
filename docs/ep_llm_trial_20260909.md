@@ -2,6 +2,9 @@
 
 日期：2026-09-09。
 
+后续更新：现支持显式选择 Kimi；以下 OpenAI 部署记录保留为历史记录。
+当前 Kimi 配置和执行方式见 [Kimi 适配说明](ep_llm_kimi.md)。切换提供方不重置原试验数据库或累计预算。
+
 ## 已确认范围
 
 - 模型：GPT-5.4 mini。
@@ -48,7 +51,7 @@ SG 验证结果：
 用户可在自己的终端执行以下命令，出现隐藏输入提示后粘贴 API 密钥并回车：
 
 ```sh
-ssh -t root@43.156.89.232 '/home/projects/quant/.venv/bin/python /home/projects/quant/tmp/ep-llm-trial-20260909/reviews/2026-09-09-ep-llm-trial/run.py configure-key'
+ssh -t root@43.156.89.232 '/home/projects/quant/.venv/bin/python /home/projects/quant/tmp/ep-llm-trial-20260909/reviews/2026-09-09-ep-llm-trial/run.py --provider openai configure-key'
 ```
 
 成功时只显示 `key_configured: true` 和文件位置，不显示密钥。配置完成后告知助手，再由助手按已批准的模型与累计预算先执行 GTLB 一份并核查输出。

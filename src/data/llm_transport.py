@@ -1,4 +1,4 @@
-"""Credential-isolated, bounded HTTP transport for the official Responses endpoint."""
+"""Credential-isolated, bounded HTTP transports for allowlisted official endpoints."""
 import re
 from time import monotonic
 
@@ -8,6 +8,7 @@ class LlmTransportError(Exception):
 
 
 class ResponsesHttpClient:
+    provider = "openai"
     endpoint = "https://api.openai.com/v1/responses"
 
     def __init__(self, key: str, *, timeout=60):
@@ -34,3 +35,19 @@ class ResponsesHttpClient:
                     return bytes(raw)
         except requests.RequestException:
             raise LlmTransportError("LLM_TRANSPORT_FAILED") from None
+
+
+class KimiHttpClient(ResponsesHttpClient):
+    """Explicit region selection; never try a credential against another provider."""
+
+    ENDPOINTS = {
+        "kimi-cn": "https://api.moonshot.cn/v1/chat/completions",
+        "kimi-intl": "https://api.moonshot.ai/v1/chat/completions",
+    }
+
+    def __init__(self, key: str, *, provider: str, timeout=60):
+        if provider not in self.ENDPOINTS:
+            raise ValueError("UNSUPPORTED_LLM_PROVIDER")
+        super().__init__(key, timeout=timeout)
+        self.provider = provider
+        self.endpoint = self.ENDPOINTS[provider]

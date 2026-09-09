@@ -1,4 +1,4 @@
-"""Single-shot Responses adapter; credentials never enter saved request/result objects."""
+"""Single-shot provider adapters; credentials never enter saved request/result objects."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -6,7 +6,7 @@ import json
 import os
 from typing import Protocol
 
-from src.data.llm_transport import ResponsesHttpClient, LlmTransportError as LlmError
+from src.data.llm_transport import ResponsesHttpClient, KimiHttpClient, LlmTransportError as LlmError
 from .llm_contract import Response, strict_json
 
 
@@ -23,9 +23,11 @@ class LlmSettings:
     total_microusd: int = 10_000_000
     max_output_tokens: int = 4000
     max_request_bytes: int = 120000
+    provider: str = "openai"
 
     def __post_init__(self):
-        if type(self.enabled) is not bool or self.model not in {"", *RATES}:
+        models = {"openai": set(RATES), "kimi-cn": {"kimi-k2.6"}, "kimi-intl": {"kimi-k2.6"}}
+        if self.provider not in models or type(self.enabled) is not bool or self.model not in {"", *models[self.provider]}:
             raise ValueError("UNSUPPORTED_LLM_SETTINGS")
         for key, minimum, maximum in (("daily_microusd", 1, 100_000_000), ("monthly_microusd", 1, 1_000_000_000),
                                       ("total_microusd", 1, 1_000_000_000),
@@ -35,7 +37,8 @@ class LlmSettings:
 
     @classmethod
     def from_env(cls):
-        return cls(model=os.getenv("EP_LLM_MODEL", ""), enabled=os.getenv("EP_LLM_ENABLED", "false").lower() == "true",
+        return cls(model=os.getenv("EP_LLM_MODEL", ""), provider=os.getenv("EP_LLM_PROVIDER", "openai"),
+                   enabled=os.getenv("EP_LLM_ENABLED", "false").lower() == "true",
                    daily_microusd=int(os.getenv("EP_LLM_DAILY_MICROUSD", "3000000")),
                    monthly_microusd=int(os.getenv("EP_LLM_MONTHLY_MICROUSD", "50000000")),
                    total_microusd=int(os.getenv("EP_LLM_TOTAL_MICROUSD", "10000000")),
@@ -44,6 +47,38 @@ class LlmSettings:
 
 # Standard USD/million token rates verified 2026-09-08. No alias substitution or automatic model upgrade.
 RATES = {"gpt-5.4-mini": (0.75, 4.5), "gpt-5.4": (2.5, 15)}
+
+
+def pricing(settings: LlmSettings) -> dict:
+    if settings.provider == "openai":
+        rates, currency, factor, revision = RATES[settings.model], "USD", 1, "2026-09-08-standard"
+    elif settings.provider == "kimi-intl":
+        rates, currency, factor, revision = (0.95, 4.00), "USD", 1, "2026-09-09-kimi-k26"
+    else:
+        # Conservative budget conversion, NOT a live FX quote. Cache discounts are ignored.
+        rates, currency, factor, revision = (6.50, 27.00), "CNY", 0.20, "2026-09-09-kimi-k26"
+    return {"input_per_million": rates[0], "output_per_million": rates[1],
+            "currency": currency, "budget_usd_per_currency_unit": factor, "revision": revision}
+
+
+def inline_schema(schema: dict) -> dict:
+    """The fixed, acyclic contract is expanded for K2.6's limited $ref support."""
+    definitions = schema.get("$defs", {})
+
+    def expand(value):
+        if isinstance(value, list):
+            return [expand(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+        if "$ref" in value:
+            return expand(definitions[value["$ref"].removeprefix("#/$defs/")])
+        branches = value.get("anyOf", [])
+        if len(branches) == 2 and branches[0].get("type") == "string" and branches[1] == {"type": "null"}:
+            return {**{key: item for key, item in value.items() if key != "anyOf"},
+                    **branches[0], "type": ["string", "null"]}
+        return {key: expand(item) for key, item in value.items() if key != "$defs"}
+
+    return expand(schema)
 
 
 def responses_payload(request: dict, settings: LlmSettings) -> dict:
@@ -55,6 +90,14 @@ def responses_payload(request: dict, settings: LlmSettings) -> dict:
         "text": {"format": {"type": "json_schema", "name": "ep_claims", "strict": True, "schema": Response.model_json_schema()}},
         "max_output_tokens": settings.max_output_tokens, "store": False, "tools": [], "truncation": "disabled",
         "service_tier": "default"}
+    if settings.provider != "openai":
+        payload = {"model": settings.model,
+            "messages": [{"role": "system", "content": request["rules"]},
+                         {"role": "user", "content": json.dumps(content, ensure_ascii=False)}],
+            "response_format": {"type": "json_schema", "json_schema": {"name": "ep_claims", "strict": True,
+                                "schema": inline_schema(Response.model_json_schema())}},
+            "max_completion_tokens": settings.max_output_tokens,
+            "thinking": {"type": "disabled"}, "stream": False, "n": 1}
     if len(json.dumps(payload, ensure_ascii=False).encode()) > settings.max_request_bytes:
         raise ValueError("LLM_REQUEST_BUDGET_EXCEEDED")
     return payload
@@ -66,6 +109,44 @@ class OpenAIResponsesTransport(ResponsesHttpClient):
             return strict_json(super().generate(payload))
         except ValueError:
             raise LlmError("LLM_INVALID_RESPONSE_JSON") from None
+
+
+class KimiChatTransport(KimiHttpClient):
+    def generate(self, payload: dict) -> dict:
+        try:
+            return strict_json(super().generate(payload))
+        except ValueError:
+            raise LlmError("LLM_INVALID_RESPONSE_JSON") from None
+
+
+def create_transport(settings: LlmSettings, key: str) -> ModelTransport:
+    if settings.provider == "openai":
+        return OpenAIResponsesTransport(key)
+    return KimiChatTransport(key, provider=settings.provider)
+
+
+def extract_kimi_response(body: dict) -> tuple[dict, dict]:
+    if not isinstance(body, dict) or body.get("object") != "chat.completion":
+        raise LlmError("LLM_UNEXPECTED_OUTPUT")
+    choices = body.get("choices")
+    if not isinstance(choices, list) or len(choices) != 1:
+        raise LlmError("LLM_EXPECTED_ONE_JSON_OUTPUT")
+    choice = choices[0]
+    if not isinstance(choice, dict):
+        raise LlmError("LLM_UNEXPECTED_OUTPUT")
+    if choice.get("finish_reason") != "stop":
+        raise LlmError("LLM_RESPONSE_INCOMPLETE")
+    message = choice.get("message") or {}
+    if message.get("refusal"):
+        raise LlmError("LLM_REFUSAL")
+    if message.get("role") != "assistant" or message.get("tool_calls") or message.get("function_call"):
+        raise LlmError("LLM_UNEXPECTED_OUTPUT")
+    if not isinstance(message.get("content"), str):
+        raise LlmError("LLM_EXPECTED_ONE_JSON_OUTPUT")
+    usage = body.get("usage") or {}
+    if any(type(usage.get(key)) is not int or usage[key] < 0 for key in ("prompt_tokens", "completion_tokens")):
+        raise LlmError("LLM_USAGE_UNAVAILABLE")
+    return strict_json(message["content"]), {"input_tokens": usage["prompt_tokens"], "output_tokens": usage["completion_tokens"]}
 
 
 def extract_response(body: dict) -> tuple[dict, dict]:

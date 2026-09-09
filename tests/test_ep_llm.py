@@ -314,3 +314,118 @@ def test_http_transport_no_redirect_proxy_retry_or_key_echo(monkeypatch):
     assert OpenAIResponsesTransport("dummy-test-key").generate({})["status"] == "completed"
     assert captured["endpoint"] == "https://api.openai.com/v1/responses"
     assert captured["trust_env"] is False and captured["allow_redirects"] is False
+
+
+KIMI = LlmSettings(provider="kimi-cn", model="kimi-k2.6", enabled=True)
+
+
+class KimiTransport:
+    provider = "kimi-cn"
+
+    def __init__(self, change=None):
+        self.payloads = []
+        self.change = change
+
+    def generate(self, payload):
+        self.payloads.append(payload)
+        request = json.loads(payload["messages"][1]["content"])
+        body = {"object": "chat.completion", "model": "kimi-k2.6", "choices": [{"index": 0,
+            "message": {"role": "assistant", "content": json.dumps(envelope(request, []))}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1000, "completion_tokens": 500}}
+        if self.change:
+            self.change(body)
+        return body
+
+
+def test_kimi_wire_schema_and_budget_units():
+    from src.breakouts.ep.llm_service import estimate_reservation
+    payload = responses_payload(prepare_request(evidence_source()), KIMI)
+    assert payload["thinking"] == {"type": "disabled"}
+    assert payload["max_completion_tokens"] == 4000 and payload["stream"] is False
+    assert not {"tools", "input", "max_output_tokens", "service_tier", "store"} & payload.keys()
+    schema = payload["response_format"]["json_schema"]["schema"]
+    assert not any(token in json.dumps(schema) for token in ("$ref", "$defs", "anyOf"))
+    assert schema["properties"]["claims"]["items"]["properties"]["subject_text"]["type"] == ["string", "null"]
+    cn = estimate_reservation(payload, KIMI)
+    intl = estimate_reservation(payload, replace(KIMI, provider="kimi-intl"))
+    assert cn["pricing"]["currency"] == "CNY" and cn["pricing"]["budget_usd_per_currency_unit"] == 0.2
+    assert intl["pricing"]["currency"] == "USD"
+    assert cn["reserved_microusd"] > intl["reserved_microusd"] > 0
+
+
+@pytest.mark.parametrize("provider,model", [("openai", "kimi-k2.6"), ("kimi-cn", "gpt-5.4-mini"),
+                                           ("kimi-intl", "kimi-k2.5"), ("third-party", "kimi-k2.6")])
+def test_provider_model_pair_must_be_explicit(provider, model):
+    with pytest.raises(ValueError, match="UNSUPPORTED"):
+        LlmSettings(provider=provider, model=model)
+
+
+def test_kimi_same_validation_dedup_and_shared_budget(observed):
+    store, _, sid = seeded(observed)
+    assert run_llm(store, sid, SETTINGS, Transport(), clock=CLOCK)["status"] == "VALIDATED"
+    before = sum(row["reserved_microusd"] for row in store.llm_history(sid))
+    fake = KimiTransport()
+    blocked = run_llm(store, sid, replace(KIMI, total_microusd=before), fake, clock=CLOCK)
+    assert blocked["status"] == "BUDGET_EXHAUSTED" and not fake.payloads
+    result = run_llm(store, sid, KIMI, fake, clock=CLOCK)
+    assert result["status"] == "VALIDATED"
+    assert result["result"]["estimated_usage_microusd"] == 4000
+    assert result["result"]["eligible_for_rating"] is False
+    assert run_llm(store, sid, KIMI, fake, clock=CLOCK)["reused"]
+    assert len(fake.payloads) == 1 and len(store.llm_history(sid)) == 2
+
+
+@pytest.mark.parametrize("change", [
+    lambda b: b["choices"][0].update(finish_reason="length"),
+    lambda b: b["choices"][0]["message"].update(tool_calls=[{}]),
+    lambda b: b["choices"][0]["message"].update(refusal="No"),
+    lambda b: b["choices"][0]["message"].update(content="```json\n{}\n```"),
+    lambda b: b["choices"].append(deepcopy(b["choices"][0])),
+    lambda b: b["usage"].update(prompt_tokens=True),
+    lambda b: b["choices"].__setitem__(0, None),
+])
+def test_kimi_fail_closed_without_retry(observed, change):
+    store, _, sid = seeded(observed)
+    fake = KimiTransport(change)
+    assert run_llm(store, sid, KIMI, fake, clock=CLOCK)["status"] == "FAILED"
+    assert run_llm(store, sid, KIMI, fake, clock=CLOCK)["reused"]
+    assert len(fake.payloads) == 1 and store.llm_history(sid)[0]["reserved_microusd"] > 0
+
+
+def test_kimi_wrong_model_latches_all_providers(observed):
+    store, _, sid = seeded(observed)
+    fake = KimiTransport(lambda b: b.update(model="kimi-k3"))
+    assert run_llm(store, sid, KIMI, fake, clock=CLOCK)["status"] == "BILLING_REVIEW_REQUIRED"
+    assert run_llm(store, sid, SETTINGS, Transport(), clock=CLOCK)["external_requests"] == 0
+
+
+def test_kimi_provider_mismatch_rejected_before_reservation(observed):
+    store, _, sid = seeded(observed)
+    with pytest.raises(ValueError, match="PROVIDER_MISMATCH"):
+        run_llm(store, sid, KIMI, OpenAIResponsesTransport("dummy-test-key"), clock=CLOCK)
+    assert store.llm_history(sid) == []
+
+
+@pytest.mark.parametrize("provider,host", [("kimi-cn", "api.moonshot.cn"), ("kimi-intl", "api.moonshot.ai")])
+def test_kimi_http_endpoint_no_fallback_or_secret_echo(monkeypatch, provider, host):
+    import requests
+    from src.breakouts.ep.llm_provider import create_transport
+    captured = []
+
+    class Reply:
+        status_code = 401
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+
+    class Session:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def post(self, endpoint, **kwargs):
+            captured.append((endpoint, self.trust_env, kwargs))
+            return Reply()
+
+    monkeypatch.setattr(requests, "Session", Session)
+    with pytest.raises(LlmError, match="^LLM_HTTP_401$"):
+        create_transport(replace(KIMI, provider=provider), "dummy-test-key").generate({})
+    assert len(captured) == 1 and captured[0][0] == f"https://{host}/v1/chat/completions"
+    assert captured[0][1] is False and captured[0][2]["allow_redirects"] is False

@@ -56,7 +56,8 @@ def main() -> int:
         if name != "llm-extract":
             command.add_argument("--as-of")
         if name == "llm-plan":
-            command.add_argument("--model", choices=("gpt-5.4-mini", "gpt-5.4"))
+            command.add_argument("--model", choices=("gpt-5.4-mini", "gpt-5.4", "kimi-k2.6"))
+            command.add_argument("--provider", choices=("openai", "kimi-cn", "kimi-intl"))
         if name == "llm-extract":
             command.add_argument("--execute", action="store_true", help="Explicitly authorize one paid source extraction")
     for name in ("report", "explain", "sources", "source", "review-template", "reviews", "dossier", "fetches", "analyze", "analyses"):
@@ -84,17 +85,18 @@ def main() -> int:
                 result = {"source_id": args.source_id, "calls": EpStore(args.db, read_only=True).llm_history(args.source_id, as_of=as_of)}
             else:
                 from dataclasses import replace
-                from src.breakouts.ep.llm_provider import LlmSettings, OpenAIResponsesTransport
+                from src.breakouts.ep.llm_provider import LlmSettings, create_transport
                 from src.breakouts.ep.llm_service import plan_llm, run_llm
                 settings = LlmSettings.from_env()
                 if args.command == "llm-plan":
-                    if args.model:
-                        settings = replace(settings, model=args.model)
+                    settings = replace(settings, model=args.model or settings.model,
+                                       provider=args.provider or settings.provider)
                     result = plan_llm(EpStore(args.db, read_only=True), args.source_id, settings, as_of=as_of)
                 else:
                     if not args.execute or not settings.enabled or not settings.model:
                         raise ValueError("Requires --execute, EP_LLM_ENABLED=true and EP_LLM_MODEL; no request was sent")
-                    transport = OpenAIResponsesTransport(os.getenv("EP_LLM_API_KEY", ""))
+                    key_env = "EP_LLM_API_KEY" if settings.provider == "openai" else "EP_KIMI_API_KEY"
+                    transport = create_transport(settings, os.getenv(key_env, ""))
                     result = run_llm(EpStore(args.db), args.source_id, settings, transport)
         elif args.command == "collect":
             from src.breakouts.ep.provider import FmpEpProvider

@@ -71,3 +71,24 @@ def test_run_requires_execute_before_key_or_write(trial, observed, monkeypatch):
     with pytest.raises(ValueError, match="EXPLICIT_EXECUTE_REQUIRED"):
         trial.main()
     assert trial.budget_status(store)["calls"] == 0
+
+
+def test_kimi_trial_plan_uses_same_database_and_fixed_budget(trial, observed, monkeypatch, capsys):
+    store, _, sid = seeded(observed)
+    monkeypatch.setattr(trial, "DATABASE", store.path)
+    monkeypatch.setattr(trial, "SOURCES", {"SNOW": sid})
+    monkeypatch.setattr(trial, "read_key", lambda _: pytest.fail("plan read key"))
+    monkeypatch.setenv("EP_LLM_TOTAL_MICROUSD", "999999999")
+    monkeypatch.setattr(sys, "argv", ["run.py", "--provider", "kimi-cn", "plan"])
+    assert trial.main() == 0
+    value = json.loads(capsys.readouterr().out)
+    assert value["model"] == "kimi-k2.6" and value["provider"] == "kimi-cn"
+    assert value["database"] == str(store.path)
+    assert value["total_limit_microusd"] == 10_000_000 and value["http_requests"] == 0
+
+
+def test_paid_trial_requires_explicit_provider(trial, monkeypatch):
+    monkeypatch.setattr(trial, "read_key", lambda _: pytest.fail("unspecified provider read key"))
+    monkeypatch.setattr(sys, "argv", ["run.py", "run", "GTLB", "--execute"])
+    with pytest.raises(ValueError, match="EXPLICIT_PROVIDER_REQUIRED"):
+        trial.main()

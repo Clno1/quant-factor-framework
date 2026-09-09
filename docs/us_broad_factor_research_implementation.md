@@ -1055,3 +1055,42 @@ INACTIVE。早于该日期仍要求活跃基线，缺字段、多行、名称、
 `25cec81b68304b3a85e7829b31313567` 含 225,982 条 membership、当前成员 2,848，并通过全历史日线
 覆盖门禁。全链耗时 544.825 秒、systemd 峰值 701.9 MiB、无 swap。八因子随后从认证 checkpoint
 重建，核查时为 483/648；八因子发布完成前仍不能把整个后续链标为 SUCCESS。
+
+## 28. 2026-09-09 RML 增量历史缺失与下游茶杯柄阻断
+
+SG 23:17 SGT 只读复核确认 target 2026-09-08 日更失败，而不是盘中进程 OOM：11:31 初次运行
+11:37 失败，12:07 重试在 12:08 再失败。初次峰值 595.1 MiB，重试 229.6 MiB，均无 swap。
+重试报告为 `outputs/data_audits/broad_daily_pipeline/target=2026-09-08/run=20260909T040719Z_dc569da5.json`，
+全链耗时 52.075 秒，coverage 阶段 51.119 秒。
+
+证券主表已正式发布 target 09-08 的 `6ff24226200643b8a4f9b7a999037458`，manifest SHA-256
+`6a0b6eadb70faa3a7b1f3371f1e7149caafc07b791b31e84b79cfee6c3aa8a7a`。随后 coverage identity delta
+需要补齐 16 个身份，成功获取的历史共 13,126 行，但以下一条失败导致整次发布 fail closed：
+
+| 字段 | 冻结主表/审计中的值 |
+| --- | --- |
+| security_id | sec_d396285ca3c35145a5b3b250472e40d0 |
+| ticker / name | RML / Resolution Minerals Ltd. Sponsored ADR |
+| 类型/交易所 | ADR / NASDAQ |
+| CUSIP / ISIN | 76091K105 / US76091K1051 |
+| FMP listing_date / alias effective_from | 2003-11-28 |
+| 请求历史区间 | 2019-01-02 至 2026-09-04 |
+| alias_failures | 1，RML；alias_fallbacks 为空 |
+
+当前代码仅在历史 fetcher 返回 None/空表时写入此 alias_failure，因此已确认的是“该请求区间没有
+取得有效行情”，不是已确认 RML 没有真实历史、也不是已证明上市日期错误。审计没有保留底层原始
+HTTP 响应，不能仅凭这条记录断言供应商超时或确认真实上市日。主表 listing_date 来自
+FMP_PROFILE_BULK，CIK 为空；尚需核实美国 ADR 的真实上市/身份和供应商行情覆盖。
+
+审计文件：
+`data/lake/staging/us_equity_coverage_incremental/asof=2026-09-08/run=20260909T040722Z_af98b9dd/identity_delta_audit.json`。
+失败父版本为 coverage `562967c01bb54e2ab39454804cc4ac73`、Security Master
+`3ea8a269a67a4797be8bfcbfb2d7ae78`。正式 coverage/PIT 仍在 09-04；新主表发布成功不应导致旧
+coverage/PIT 自动改绑。09-08 茶杯柄候选的旧不可变合同本次重新校验通过，但用于 09-09 候选时
+新鲜度门槛明确失败，18:30 候选及开盘后的盘中监控因此均退出，未产生新评估。
+
+恢复建议及边界：先保存有日期和原始响应证据的 RML 定点历史查询，核实 ADR 与其他市场同名证券
+的身份及美国上市时间。如果供应商补齐则按现有合同重跑；如果上市/别名元数据错误则以可靠证据
+做有界纠正规则并同冻结源双重幂等验证；如果历史仍无法证明，则需正式审阅排除/向未来摄取政策，
+不能擅自追加到原 66 条 PROSPECTIVE_ONLY 台账。新 coverage、PIT 发布并核验后才可重建候选。
+本次没有修改身份规则、历史排除、门槛、生产数据或服务开关，也没有把失败日补记为 shadow 通过。
