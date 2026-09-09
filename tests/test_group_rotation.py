@@ -35,6 +35,13 @@ def sample(n=100):
     return dates, prices, volume, themes
 
 
+def test_injected_legacy_reader_never_reads_global_rotation_artifacts():
+    from src.premarket_digest.groups import GroupArtifactDigestSource
+    with patch("src.group_analytics.rotation.store.RotationStore",side_effect=AssertionError("global artifact leak")):
+        source=GroupArtifactDigestSource(PremarketDigestSettings(),reader=SimpleNamespace())
+    assert source.rotation_store is None
+
+
 def snapshot():
     d, p, v, themes = sample()
     from src.group_analytics.artifacts import normalize_json_value

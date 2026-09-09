@@ -59,7 +59,10 @@ def main(argv=None):
                 from src.premarket_digest.settings import load_premarket_digest_settings
                 report = CompletedSessionMomentumSource(load_premarket_digest_settings(load_env=False)).load(snapshot["source_session"])
             except Exception as exc:
-                reason = f"同日动量扫描未通过数据门槛（{type(exc).__name__}），主题计算不受影响"
+                import re
+                code = getattr(exc, "code", "")
+                safe_code = code if isinstance(code, str) and re.fullmatch(r"[A-Z0-9_]{1,80}", code) else type(exc).__name__
+                reason = f"同日动量扫描未通过数据门槛（{safe_code}），主题计算不受影响"
         snapshot = attach_candidates(snapshot, report, unavailable_reason=reason)
         snapshot.pop("run_id", None)
         run_id = None if args.dry_run else store.publish(snapshot)
