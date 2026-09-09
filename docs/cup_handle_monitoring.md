@@ -462,3 +462,126 @@ manifest 哈希均与正式发布一致，source data date 为 2026-09-04。
 全量扫描未发现非正成交量继续参与比例或非有限比值。VTS 和 NKTR 仅写入 SHADOW 信号，未投递。
 MDB 回放仍为 v1、110 根 bar、0 信号且误报代理为 null；生产信号也尚无完整后续窗口，均不能称为
 0% 误报。发送保持关闭，需等待 2026-09-08 收盘加 5 分钟后的正式日结。
+
+## 23. 2026-09-09 v3 首个完整日结未通过
+
+2026-09-08 收盘后的正式日结为 FAIL，不能计入 v3 的五交易日观察。当前通过日期为空，进度为
+`0/5`，剩余 5 个通过日。失败不是服务、内存或 FMP 请求整体中断：候选服务和盘中服务均 exit 0，
+盘中服务完整运行到 16:05 ET；准确失败项只有
+`INSUFFICIENT_EVALUABLE_TICKER_COVERAGE` 与 `EXCESSIVE_MINUTE_DATA_GAPS`。
+
+本日冻结 600 只盘中候选，实际进入茶杯柄评估的唯一股票为 56 只，其中 53 只可评估、3 只存在
+不可恢复分钟缺口。可评估覆盖率为 53/56，即 94.6429%，低于 95% 门槛；缺口股票比例为 3/56，
+即 5.3571%，高于 5% 上限。两个门槛都只差一只股票，但仍必须 fail closed，不能四舍五入为通过。
+70/78 个五分钟周期的覆盖率为 89.7436%，高于 85% 门槛；错误数为 0、P95 为 0.563372 ms、
+最大序列 76 根，均通过各自门槛。
+
+最终共有 2,760 次评估：3 次 MATCH、2,183 次 REJECTED、483 次 NOT_READY、91 次
+UNEVALUABLE、0 次 ERROR。前八个非 MATCH 原因为 `HANDLE_TOO_SHALLOW=1843`、
+`INSUFFICIENT_COMPLETED_5M_BARS=311`、`HANDLE_VOLUME_NOT_CONTRACTING=170`、
+`RIM_NOT_BROKEN=166`、`STALE_QUOTE=104`、`UNRESOLVED_5M_SOURCE_GAP=91`、
+`HANDLE_NOT_FORMED=67`、`INSUFFICIENT_VOLUME_EVIDENCE=4`。
+
+13 个唯一缺口事件涉及 OPY、TEN、WBI 三只股票：`UNRESOLVED_SOURCE_GAP=12`、
+`NO_TRADE_CONFIRMED=1`、`PROVIDER_GAP_CONFIRMED=0`。这是旧分类器写入的历史结果；第 24 节复核发现
+OPY 的“确认无成交”证据不足，不应把这个标签当作已证实的事实。缺口前后累计成交量增加也不能
+定位成交发生在缺失的五分钟内，因为报价观测区间跨越桶边界。历史记录保留，但其证据局限必须
+同时说明。重复观察只增加 `observation_count`，没有复制成新的唯一事件。
+
+ABG 的四次 `INSUFFICIENT_VOLUME_EVIDENCE` 均由 breakout volume 为 0 触发。payload 只保留原始
+baseline、handle 和 breakout volume，不生成 `handle_volume_ratio` 或
+`breakout_volume_ratio`；全部 v3 cycle 的 `data_contract_complete=1`。VTS、NKTR 的两个唯一信号
+仍只写入 SHADOW outbox，没有投递。MDB 回放仍是 v1 的 0 信号样本，误报代理为 null；现有生产
+shadow 信号也没有成熟后续窗口，不能声称误报率为 0%。
+
+候选服务峰值 588.3 MiB、盘中服务峰值 438.1 MiB、swap 均为 0；watchdog 持续成功，运维 Web
+保持 active。运维任务卡已固定显示 2026-09-08 `DEGRADED` 和上述两个失败原因，开放事故指纹绑定
+`daily-cup-5m-handle-shadow-v3`，没有被下一次 `SCHEDULED` 覆盖。发送继续保持
+`delivery_enabled=false`；2026-09-09 必须作为新的独立交易日重新满足全部门槛。
+
+## 24. 2026-09-09 缺口复查及证据分类修复
+
+通过 SG 对 OPY、TEN、WBI 各查询 FMP 原生 1min 和 5min 历史接口，两轮复查均确认 13 段区间
+全部没有返回行。最终独立报告为：
+
+```text
+/home/projects/quant/outputs/data_audits/cup_handle_gaps/2026-09-08_b80e243c01104313bdd05ebeba13ba4b.json
+```
+
+报告保留六份规范化响应和各自 SHA-256。1min 总行数分别为 OPY 208、TEN 224、WBI 260；5min
+分别为 71、75、75。故本次直接原因是已取到的 FMP 数据无法提供连续序列，无法靠重新聚合或切换
+同一供应商的 5min 接口补齐。仍不能仅由空行断言真实无成交或供应商漏报；收盘后的响应也不能
+倒推盘中可用性。本次查询前后四张 cup_handle 生产表的内容哈希完全一致，未改写历史观察。
+
+发现并修复证据分类问题：原代码用两次观测的累计成交量相等直接标为 NO_TRADE_CONFIRMED，但
+OPY 14:25-14:30 ET 后侧报价的 provider timestamp 仍为 14:23:25，重复陈旧报价没有提供数据完整性
+保证。累计量增加也可能发生在左边界之前或右边界之后。新证据口径 `quote-window-evidence-v2`
+只在两个有效 provider timestamp 都落在缺口内部且累计量增加时确认有成交缺失；累计量不变、
+负数、非有限数、回退或只有跨边界增量时保留 unresolved，并写明确 reason。真实无成交以后需要
+更强的供应商完整性证据才能确认，不能从重复 last-trade quote 推断。
+
+这是缺口证据标签修复；所有缺口仍为 UNEVALUABLE，OHLCV、交易信号判定和 shadow 门槛均不变。
+检测算法仍为 v3，证据子版本随每个新缺口写入；旧 v3 FAIL 原样保留。日更不会通过此修复自动
+变成 PASS，历史 0/5 也不变。本地与 SG 定向回归均为 51 passed，部署前备份为
+`/home/projects/quant-backups/cup-gap-evidence-20260909T1230CST`。盘中服务当前 inactive，下一次 timer
+启动读取新代码，不需提前启动盘中任务。
+
+可复用核查命令（只读取现有台账，独立生成新报告）：
+
+```bash
+.venv/bin/python scripts/diagnose_cup_handle_data_gaps.py \
+  --session 2026-09-08 --env-file /etc/quant/intraday-momentum-monitor.env
+```
+
+请求失败或空响应为 INCONCLUSIVE_REQUEST；重新查询出现行只记 ROWS_PRESENT_ON_REQUERY，不修改
+live 结果。要消除持续的数据覆盖问题，需要供应商补齐证据或接入经过合同验证的第二分钟数据源。
+不能事后剔除 OPY/TEN/WBI、扩大分母或降低 95%/5% 门槛来获得通过。盘前按历史分钟质量重新定义
+候选池是另一项策略输入变更，需要单独定义和重新验收，不能混作此次数据修复。
+
+## 25. 2026-09-09 夜间复核：上游 RML 历史数据阻断
+
+现场时间为 2026-09-09 23:17 SGT，XNYS 当日尚未收盘。只读检查 status CLI、systemd、journal、
+四张 cup_handle 表及候选快照；未修改历史记录、验收门槛或发送配置。
+
+- 当前算法为 `daily-cup-5m-handle-shadow-v3`。最近五个完整 XNYS 交易日为 09-01、09-02、
+  09-03、09-04、09-08；前四日没有 v3 证据，09-08 FAIL。通过日期为空，0/5，仍需五个连续
+  合格交易日。09-07 休市；09-09 尚未完整且没有实际评估，不计数，不复用 v1/v2。
+- 09-08 日线筛选 2,846 只、合格 1,300 只、冻结候选 600 只，盘中实际评估 56 只。
+  70/78 周期（89.74%）通过 85% 门槛；2,760 次评估中命中 3、拒绝 2,183、等待 483、
+  不可评估 91、错误 0。可评估 53/56（94.6429%）低于 95%，缺口 3/56（5.3571%）高于 5%。
+  P95 为 0.5634 ms，最大 76 根，错误周期比例 0，后三项通过，但不能抵消覆盖率失败。
+- 唯一缺口事件 13 条，涉及 OPY/TEN/WBI。历史分类为 UNRESOLVED_SOURCE_GAP 12、
+  NO_TRADE_CONFIRMED 1、PROVIDER_GAP_CONFIRMED 0；上一节已说明原 NO_TRADE 标签证据不足，
+  不能把它作为真实无成交事实。修复后的 quote-window-evidence-v2 已部署，但今天没有新评估
+  可用于生产验证，旧记录未重新分类或补记。
+- 前八原因：HANDLE_TOO_SHALLOW 1843、INSUFFICIENT_COMPLETED_5M_BARS 311、
+  HANDLE_VOLUME_NOT_CONTRACTING 170、RIM_NOT_BROKEN 166、STALE_QUOTE 104、
+  UNRESOLVED_5M_SOURCE_GAP 91、HANDLE_NOT_FORMED 67、INSUFFICIENT_VOLUME_EVIDENCE 4。
+  四条成交量证据不足均为 ABG，breakout_volume=0、ratios={}；扫描 v3 评估未发现非正成交量
+  被写成有效比例。不能把这些拒绝状态算成有效成交量确认。
+
+09-08 候选绑定 coverage `562967c01bb54e2ab39454804cc4ac73`、PIT
+`c1329fcd14dd4521911976b21fa6be22`、Security Master `3ea8a269a67a4797be8bfcbfb2d7ae78`，
+输入目标日为 09-04。本次调用 `validate_breakout_daily_data_contract` 重新通过不可变合同及
+PIT 哈希核验；旧版本完整不等于可以拿来充当 09-09 所需的 09-08 行情。
+
+当天阻断链如下，时间均为 SGT：
+
+1. 11:31 宽基任务启动，11:37 失败；12:07 重试，12:08 再失败，12:38 达到启动频率限制。
+   新主表发布成功，但 RML 在 2019-01-02 至 2026-09-04 的历史区间没有取得有效行情，
+   identity delta 审计失败，coverage/PIT 后续没有更新。
+2. 18:30 候选预计算失败；21:20 盘中进程启动，开盘后及后续重试均报
+   `target 2026-09-04 is stale; expected 2026-09-08`，21:38 达到启动频率限制。
+3. 09-09 候选快照及四张 cup_handle 表均无当日记录。CLI 中 09:29:45 ET 的
+   waiting_for_open 是最后一次旧心跳，不代表服务此刻运行中。
+
+上游初次失败峰值 595.1 MiB、重试 229.6 MiB，均无 swap；盘中失败日志记录峰值 84 MiB，
+不是资源耗尽。候选/盘中 timer 仍 enabled，下一次计划为 09-10 18:30/21:20 SGT。
+watchdog 正常完成（约 111.5 MiB），运维站存活、快照新鲜且保留 09-08 FAIL 与 v3 版本；
+同时存在当日服务失败和心跳中断 OPEN 事件。
+
+MDB 回放仍为旧 v1 的 110 根、零信号、误报代理 null，不能作为 v3 或 0% 误报证明。
+09-08 的三次命中对应 VTS/NKTR 两条 SHADOW 信号，结果观察窗口尚无完整标签，不能评估误报率。
+发送继续为 false。本次未重启或重跑被同一上游门槛阻断的任务。恢复前必须先核实 RML 的真实
+美国 ADR 上市/历史身份和供应商行情，再做有证据的定点纠正或经批准的历史排除；严禁把缺失行情
+当空成功。宽基正式发布并核验后才能生成新的绑定候选，错过的盘中周期不得事后补成通过日。

@@ -807,3 +807,64 @@ RESOLVED，版本切换和旧事故没有因当前运行状态被删除。
 `handle_volume_ratio` 或 `breakout_volume_ratio`，全量 v3 payload 扫描也未发现非正成交量合同违规
 或非有限比值。VTS、NKTR 为 SHADOW 信号且后续结果窗口未完成。MDB v1 回放仍是零信号、误报代理
 null，页面不得显示为 0% 误报。发送开关继续为 false。
+
+## 38. 2026-09-09 v3 首日失败状态保留验证
+
+收盘日结把 2026-09-08 v3 记录为 FAIL：53/56 只股票可评估，覆盖率 94.6429% 低于 95%；3/56
+只股票有缺口，比例 5.3571% 高于 5%。周期覆盖、检测错误、P95 和最大序列长度均合格，故任务卡的
+DEGRADED 必须解释为茶杯柄数据质量门禁失败，而不是 systemd 失败。候选与盘中 service 均
+`Result=success`、`ExecMainStatus=0`。
+
+运维 API 已公开 2,760 次评估、3 次命中、2,183 次拒绝、483 次等待、91 次不可评估、0 次错误，
+以及 13 个唯一缺口事件。OPY、TEN、WBI 为三个缺口 ticker；分类为
+`UNRESOLVED_SOURCE_GAP=12`、`NO_TRADE_CONFIRMED=1`、`PROVIDER_GAP_CONFIRMED=0`。页面不得用重复
+观察次数替代唯一事件数，也不得把 unresolved 自动显示成 FMP 已确认漏数。
+
+`intraday_momentum:cup_handle_latest_session_failed:daily-cup-5m-handle-shadow-v3` 事故当前为 OPEN，
+目标日为 2026-09-08；v1 的历史失败事故仍为 RESOLVED。下一次 timer 已排期，但 snapshot 继续显示
+最近完整日 FAIL 和 v3 `0/5`，证明 SCHEDULED 没有覆盖失败现场。watchdog 每分钟成功写入快照，
+运维 Web 持续 active。
+
+ABG 共四次因 breakout volume 为 0 被拒绝为 `INSUFFICIENT_VOLUME_EVIDENCE`，没有生成有效成交量
+比例。VTS、NKTR 命中仍为 SHADOW；MDB 回放和生产信号均没有成熟误报结果，误报率必须继续显示为
+未知而非 0%。达到五个 v3 PASS 日前 `delivery_enabled=false` 不得更改。
+
+## 39. 2026-09-09 缺口证据与复查报告
+
+9 月 8 日 OPY/TEN/WBI 的 13 个缺口，经独立查询 FMP 1min 与 5min 仍全部无行。新增
+`scripts/diagnose_cup_handle_data_gaps.py` 保存规范化响应、哈希、观察时间和原始 gap 分类；报告
+只表示查询时的事实，不回写 live 数据或改变日结。HTTP 请求成功与数据连续性应分别解释：本日
+failed_exact_requests=0，但 13 个缺口仍然存在。诊断报告目前是审计文件，并未新增网页按钮。
+
+证据分类子版本升级为 `quote-window-evidence-v2`，写入新 gap 的 evidence。旧“累计成交量不变”
+只能说明两次收到的数值相同，陈旧 last-trade quote 不能证明区间无成交。故原 OPY 的
+NO_TRADE_CONFIRMED 标签保留为历史记录，但不能继续作为已确认无成交的事实引用。新分类保留明确
+的 NO_FRESHNESS_WATERMARK、MISSING_BOUNDARY_OBSERVATIONS 等证据不足原因；仅桶内时间戳和
+增量可定位的证据可确认为有成交缺失。所有缺口仍不可评估，未通过日继续显示 FAIL/DEGRADED。
+
+本地与 SG 回归均 51 passed，备份为 `cup-gap-evidence-20260909T1230CST`。独立报告位于
+`outputs/data_audits/cup_handle_gaps/2026-09-08_b80e243c01104313bdd05ebeba13ba4b.json`，四张生产
+shadow 表没有改变，进度仍为 v3 0/5，发送关闭。
+
+## 40. 2026-09-09 上游阻断与最后心跳的不同含义
+
+23:17 SGT 对 SG 运维 API、systemd 和生产 SQLite 的联合核查结果：
+
+- `/healthz` 200，快照 SUCCESS，年龄约 56 秒；watchdog 与运维 Web 健康。
+- intraday_momentum 快照为 STALE，systemd 为 failed/exit-code=1；stage 仍是
+  waiting_for_open，heartbeat_at=2026-09-09T13:29:45Z，已经过期约 6,423 秒。
+  这是遗留阶段而非当前执行状态。页面不能单独用 stage 推断任务正在等待开盘。
+- 候选 18:30 失败、盘中开盘后失败，根因是宽基行情仍在 09-04，而当天要求 09-08。
+  更上游在 RML 历史区间补齐阶段失败；准确路径见宽基实施文档第 28 节。
+- API 同时保留 OPEN 的 SYSTEMD_SERVICE_FAILED、STALE_HEARTBEAT 和
+  CUP_HANDLE_SHADOW_SESSION_FAILED。后者明确绑定 v3、09-08 及两个覆盖率失败原因。
+  最近完整日 FAIL 没有被新的调度状态覆盖，进度仍 0/5。
+- 当日实时计数为 0，与上一完整日的 2,760 次评估是不同时间范围；metrics 中旧动量
+  latest_observation=PASS 也不是茶杯柄结果。只有“茶杯柄独立影子验收”里的 v3 FAIL 可用于晋级。
+- 当天候选快照及四张茶杯柄表均无记录，不是“成功评估后零命中”。09-08 历史缺口仍保留
+  12 unresolved + 1 旧 no-trade 标签；旧标签的证据不足限制继续适用，未重写成修复后的新结论。
+
+待改善的展示项：失败时将遗留 stage 明确标为“最后阶段”，并将上游 RML 失败、coverage 过期、
+候选失败与盘中失败串联显示；今日计数与最近完整日计数应分别标注日期。本次没有修改页面或算法。
+恢复不能靠清除 incident 或 reset-failed 伪装成功，必须先使新鲜 coverage/PIT 正式发布并通过合同
+校验，再运行候选和盘中链。未运行周期、旧版本通过日不得补计。

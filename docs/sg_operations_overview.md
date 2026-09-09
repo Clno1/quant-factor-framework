@@ -1119,3 +1119,68 @@ eligibility、PIT manifest 与 Security Master manifest 哈希。
 watchdog 和运维 Web 正常，当前任务卡为 RUNNING，并公开算法版本 v3、证据交易日和 `0/5`；v1
 最近失败事故仍保留在历史 incidents 中，没有被 SCHEDULED 删除。VTS、NKTR 的信号只进入 SHADOW
 outbox。最终是否记为第一个通过日，必须以收盘加 5 分钟生成的 v3 日结为准；发送保持关闭。
+
+## 41. 2026-09-09 v3 首日最终验收结果
+
+2026-09-08 的 v3 日结于 2026-09-09 04:05:09 SGT 完成，结果为 FAIL，当前仍为 `0/5`。服务本身
+正常完成：候选服务 exit 0、峰值 588.3 MiB；盘中服务 exit 0、峰值 438.1 MiB；两者 swap 均为
+0。候选、盘中和 watchdog timer 均 enabled/active，下一次分别为 18:30、21:20 和每分钟；运维
+Web 持续 active，约 42 MiB 常驻内存。
+
+准确门禁结果为：周期覆盖率 89.7436% 通过，错误率 0% 通过，P95 0.563372 ms 通过，最大 bar 数
+76 通过；但 56 只实际评估股票中只有 53 只可评估，94.6429% 低于 95%；OPY、TEN、WBI 三只
+缺口股票占 5.3571%，高于 5%。因此失败项为
+`INSUFFICIENT_EVALUABLE_TICKER_COVERAGE`、`EXCESSIVE_MINUTE_DATA_GAPS`，失败日不计数。
+
+缺口台账含 13 个唯一事件：12 个 `UNRESOLVED_SOURCE_GAP`、1 个 OPY
+`NO_TRADE_CONFIRMED`、0 个 `PROVIDER_GAP_CONFIRMED`。不得把 unresolved 自动改写成供应商错误，
+也不得填充 OHLCV。全部 70 个 v3 cycle 的版本合同完整；正式绑定仍是 coverage
+`562967c01bb54e2ab39454804cc4ac73`、PIT `c1329fcd14dd4521911976b21fa6be22` 和 bars SHA-256
+`350bc406683b95cd58c4d15efdf0397308701d5ce342bf2ec501c91876b97cee`，共享宽基上游版本没有变化。
+
+watchdog API 当前返回 `DEGRADED`，明确显示最近完整交易日 2026-09-08 FAIL、算法 v3 和两个失败
+原因；对应 `CUP_HANDLE_SHADOW_SESSION_FAILED` 事故保持 OPEN，v1 历史失败仍以 RESOLVED 保留。
+这验证了失败没有被后续等待状态覆盖。VTS、NKTR 只保存在 SHADOW outbox，发送开关保持 false。
+
+## 42. 2026-09-09 分钟缺口现场复查和修复
+
+现场再次读取 FMP 的 1min/5min 接口，OPY、TEN、WBI 共 13 个缺口在两种粒度中均无行，归因为
+当前供应商数据无法支持连续五分钟评估，不是 systemd 中断或候选上游过期。共享 coverage/PIT 未变。
+详细响应及哈希已写入 `outputs/data_audits/cup_handle_gaps/2026-09-08_b80e243c01104313bdd05ebeba13ba4b.json`。
+四张 shadow 生产表查询前后哈希完全一致，失败日不重算。
+
+修复了把陈旧等量报价误判为“确认无成交”的问题，以及跨桶累计成交量增量无法定位的问题。证据
+子版本 `quote-window-evidence-v2` 只接受桶内有效时间戳及成交量证据，未解决缺口继续不可评估。
+原 9 月 8 日 NO_TRADE_CONFIRMED 是历史分类器标签，现已确认其证据不足；旧表不改写，以修复说明
+记录局限。检测算法 v3、95%/5% 门槛、发送 false 和 0/5 进度保持原口径。
+
+部署备份：`/home/projects/quant-backups/cup-gap-evidence-20260909T1230CST`。源文件部署前与本地基线
+哈希一致，部署后本地及 SG 的茶杯柄、分钟监控、审计脚本与 watchdog 定向回归均 51 passed。
+修复在盘中服务未运行时部署，下一次常规定时启动自动生效。新增诊断脚本只读 SQLite、有限查询
+至多 20 只股票、保存隔离报告，不触发历史回放晋级或 Discord 发送。
+
+## 43. 2026-09-09 23:17 SGT：茶杯柄被宽基 RML 历史补齐阻断
+
+当天并非茶杯柄正在正常运行。quant-intraday-candidate-prepare.service 于 18:30 失败，
+quant-intraday-momentum-monitor.service 在开盘后及重试时失败，21:38 达到启动频率限制。
+共同报错为 coverage target 2026-09-04 过期，期望 2026-09-08。status CLI 的
+waiting_for_open 是 09:29:45 ET 旧心跳，必须结合 systemd failed 和运维站 STALE 判断。
+两个 timer 均 enabled/active，下一次分别为 09-10 18:30 和 21:20 SGT；timer 健康不代表作业成功。
+
+上游 quant-us-equity-coverage.service 初次 11:31 启动、11:37 失败，12:07 重试、12:08 再失败。
+Security Master 已发布 `6ff24226200643b8a4f9b7a999037458`（target 09-08），但 16 个增量身份中
+RML 的 2019-01-02 至 2026-09-04 历史获取为空，阻止 coverage 发布。具体审计：
+`data/lake/staging/us_equity_coverage_incremental/asof=2026-09-08/run=20260909T040722Z_af98b9dd/identity_delta_audit.json`。
+初次峰值 595.1 MiB、重试峰值 229.6 MiB，均无 swap；重试全链 52.075 秒，非内存耗尽。
+详细身份、来源局限和恢复门槛见宽基实施文档第 28 节。
+
+v3 最近完整日 09-08 仍 FAIL，观察 0/5、通过日期为空、剩余五个连续合格交易日。09-09 未收盘，
+但至核查时没有候选快照、周期、评估、缺口和日结记录，不能计数。09-08 的 600 候选、56 实际评估
+股票、2,760 次评估及 13 个缺口的明细见茶杯柄文档第 25 节；53/56 可评估和 3/56 缺口比例均越界。
+候选绑定 coverage `562967c01bb54e2ab39454804cc4ac73`、PIT `c1329fcd14dd4521911976b21fa6be22`，
+本次不可变合同校验通过，不代表新鲜度通过。发送 false、历史台账、所有门槛均未修改。
+
+watchdog 正常（峰值约 111.5 MiB），operations-web active（当前约 42.8 MiB、峰值 49.7 MiB、
+swap 0），healthz 返回 200，快照年龄约 56 秒。运维 API 同时保留 09-08 v3 FAIL、当日服务失败、
+当日心跳中断，未被 SCHEDULED 覆盖。没有把旧动量 PASS 当作茶杯柄 PASS；MDB 旧回放和两条
+SHADOW 信号均不能证明误报率为零。本次仅核验和同步文档，没有盲目重启服务或改写发布版本。
