@@ -160,7 +160,7 @@ family允许 rates/dollar/credit/growth/inflation/liquidity/events。strength必
 
 ## 7. SG服务器：继续用root部署
 
-以下是操作说明，本次没有远程执行。沿用 `/home/projects/quant` 和 `.venv`，不需要conda，也不要求创建quant用户。
+以下为操作模板。2026-09-09已经实际执行SG上线，具体备份、独立drop-in、重启和单条Discord验收结果见 `sector_rotation_v2_validation_20260909.md` 第7节。沿用 `/home/projects/quant` 和 `.venv`，不需要conda，也不要求创建quant用户。
 
 ### 7.1 更新代码后，先只构建和验收
 
