@@ -1119,3 +1119,25 @@ eligibility、PIT manifest 与 Security Master manifest 哈希。
 watchdog 和运维 Web 正常，当前任务卡为 RUNNING，并公开算法版本 v3、证据交易日和 `0/5`；v1
 最近失败事故仍保留在历史 incidents 中，没有被 SCHEDULED 删除。VTS、NKTR 的信号只进入 SHADOW
 outbox。最终是否记为第一个通过日，必须以收盘加 5 分钟生成的 v3 日结为准；发送保持关闭。
+
+## 41. 2026-09-09 v3 首日最终验收结果
+
+2026-09-08 的 v3 日结于 2026-09-09 04:05:09 SGT 完成，结果为 FAIL，当前仍为 `0/5`。服务本身
+正常完成：候选服务 exit 0、峰值 588.3 MiB；盘中服务 exit 0、峰值 438.1 MiB；两者 swap 均为
+0。候选、盘中和 watchdog timer 均 enabled/active，下一次分别为 18:30、21:20 和每分钟；运维
+Web 持续 active，约 42 MiB 常驻内存。
+
+准确门禁结果为：周期覆盖率 89.7436% 通过，错误率 0% 通过，P95 0.563372 ms 通过，最大 bar 数
+76 通过；但 56 只实际评估股票中只有 53 只可评估，94.6429% 低于 95%；OPY、TEN、WBI 三只
+缺口股票占 5.3571%，高于 5%。因此失败项为
+`INSUFFICIENT_EVALUABLE_TICKER_COVERAGE`、`EXCESSIVE_MINUTE_DATA_GAPS`，失败日不计数。
+
+缺口台账含 13 个唯一事件：12 个 `UNRESOLVED_SOURCE_GAP`、1 个 OPY
+`NO_TRADE_CONFIRMED`、0 个 `PROVIDER_GAP_CONFIRMED`。不得把 unresolved 自动改写成供应商错误，
+也不得填充 OHLCV。全部 70 个 v3 cycle 的版本合同完整；正式绑定仍是 coverage
+`562967c01bb54e2ab39454804cc4ac73`、PIT `c1329fcd14dd4521911976b21fa6be22` 和 bars SHA-256
+`350bc406683b95cd58c4d15efdf0397308701d5ce342bf2ec501c91876b97cee`，共享宽基上游版本没有变化。
+
+watchdog API 当前返回 `DEGRADED`，明确显示最近完整交易日 2026-09-08 FAIL、算法 v3 和两个失败
+原因；对应 `CUP_HANDLE_SHADOW_SESSION_FAILED` 事故保持 OPEN，v1 历史失败仍以 RESOLVED 保留。
+这验证了失败没有被后续等待状态覆盖。VTS、NKTR 只保存在 SHADOW outbox，发送开关保持 false。

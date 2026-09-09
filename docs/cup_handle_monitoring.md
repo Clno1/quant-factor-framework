@@ -462,3 +462,39 @@ manifest 哈希均与正式发布一致，source data date 为 2026-09-04。
 全量扫描未发现非正成交量继续参与比例或非有限比值。VTS 和 NKTR 仅写入 SHADOW 信号，未投递。
 MDB 回放仍为 v1、110 根 bar、0 信号且误报代理为 null；生产信号也尚无完整后续窗口，均不能称为
 0% 误报。发送保持关闭，需等待 2026-09-08 收盘加 5 分钟后的正式日结。
+
+## 23. 2026-09-09 v3 首个完整日结未通过
+
+2026-09-08 收盘后的正式日结为 FAIL，不能计入 v3 的五交易日观察。当前通过日期为空，进度为
+`0/5`，剩余 5 个通过日。失败不是服务、内存或 FMP 请求整体中断：候选服务和盘中服务均 exit 0，
+盘中服务完整运行到 16:05 ET；准确失败项只有
+`INSUFFICIENT_EVALUABLE_TICKER_COVERAGE` 与 `EXCESSIVE_MINUTE_DATA_GAPS`。
+
+本日冻结 600 只盘中候选，实际进入茶杯柄评估的唯一股票为 56 只，其中 53 只可评估、3 只存在
+不可恢复分钟缺口。可评估覆盖率为 53/56，即 94.6429%，低于 95% 门槛；缺口股票比例为 3/56，
+即 5.3571%，高于 5% 上限。两个门槛都只差一只股票，但仍必须 fail closed，不能四舍五入为通过。
+70/78 个五分钟周期的覆盖率为 89.7436%，高于 85% 门槛；错误数为 0、P95 为 0.563372 ms、
+最大序列 76 根，均通过各自门槛。
+
+最终共有 2,760 次评估：3 次 MATCH、2,183 次 REJECTED、483 次 NOT_READY、91 次
+UNEVALUABLE、0 次 ERROR。前八个非 MATCH 原因为 `HANDLE_TOO_SHALLOW=1843`、
+`INSUFFICIENT_COMPLETED_5M_BARS=311`、`HANDLE_VOLUME_NOT_CONTRACTING=170`、
+`RIM_NOT_BROKEN=166`、`STALE_QUOTE=104`、`UNRESOLVED_5M_SOURCE_GAP=91`、
+`HANDLE_NOT_FORMED=67`、`INSUFFICIENT_VOLUME_EVIDENCE=4`。
+
+13 个唯一缺口事件涉及 OPY、TEN、WBI 三只股票：`UNRESOLVED_SOURCE_GAP=12`、
+`NO_TRADE_CONFIRMED=1`、`PROVIDER_GAP_CONFIRMED=0`。OPY 有 7 个事件，其中一个通过前后累计成交量
+不变被证明为真实无成交；其余 OPY 事件以及 TEN、WBI 事件没有足够证据安全归类。多段缺口前后
+累计成交量增加，说明期间确有成交但没有得到可重建的完整五分钟序列；仍保留为 unresolved，不能
+猜测 OHLCV 或人为改成 provider gap。重复观察只增加 `observation_count`，没有复制成新的唯一事件。
+
+ABG 的四次 `INSUFFICIENT_VOLUME_EVIDENCE` 均由 breakout volume 为 0 触发。payload 只保留原始
+baseline、handle 和 breakout volume，不生成 `handle_volume_ratio` 或
+`breakout_volume_ratio`；全部 v3 cycle 的 `data_contract_complete=1`。VTS、NKTR 的两个唯一信号
+仍只写入 SHADOW outbox，没有投递。MDB 回放仍是 v1 的 0 信号样本，误报代理为 null；现有生产
+shadow 信号也没有成熟后续窗口，不能声称误报率为 0%。
+
+候选服务峰值 588.3 MiB、盘中服务峰值 438.1 MiB、swap 均为 0；watchdog 持续成功，运维 Web
+保持 active。运维任务卡已固定显示 2026-09-08 `DEGRADED` 和上述两个失败原因，开放事故指纹绑定
+`daily-cup-5m-handle-shadow-v3`，没有被下一次 `SCHEDULED` 覆盖。发送继续保持
+`delivery_enabled=false`；2026-09-09 必须作为新的独立交易日重新满足全部门槛。

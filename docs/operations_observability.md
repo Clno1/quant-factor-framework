@@ -807,3 +807,24 @@ RESOLVED，版本切换和旧事故没有因当前运行状态被删除。
 `handle_volume_ratio` 或 `breakout_volume_ratio`，全量 v3 payload 扫描也未发现非正成交量合同违规
 或非有限比值。VTS、NKTR 为 SHADOW 信号且后续结果窗口未完成。MDB v1 回放仍是零信号、误报代理
 null，页面不得显示为 0% 误报。发送开关继续为 false。
+
+## 38. 2026-09-09 v3 首日失败状态保留验证
+
+收盘日结把 2026-09-08 v3 记录为 FAIL：53/56 只股票可评估，覆盖率 94.6429% 低于 95%；3/56
+只股票有缺口，比例 5.3571% 高于 5%。周期覆盖、检测错误、P95 和最大序列长度均合格，故任务卡的
+DEGRADED 必须解释为茶杯柄数据质量门禁失败，而不是 systemd 失败。候选与盘中 service 均
+`Result=success`、`ExecMainStatus=0`。
+
+运维 API 已公开 2,760 次评估、3 次命中、2,183 次拒绝、483 次等待、91 次不可评估、0 次错误，
+以及 13 个唯一缺口事件。OPY、TEN、WBI 为三个缺口 ticker；分类为
+`UNRESOLVED_SOURCE_GAP=12`、`NO_TRADE_CONFIRMED=1`、`PROVIDER_GAP_CONFIRMED=0`。页面不得用重复
+观察次数替代唯一事件数，也不得把 unresolved 自动显示成 FMP 已确认漏数。
+
+`intraday_momentum:cup_handle_latest_session_failed:daily-cup-5m-handle-shadow-v3` 事故当前为 OPEN，
+目标日为 2026-09-08；v1 的历史失败事故仍为 RESOLVED。下一次 timer 已排期，但 snapshot 继续显示
+最近完整日 FAIL 和 v3 `0/5`，证明 SCHEDULED 没有覆盖失败现场。watchdog 每分钟成功写入快照，
+运维 Web 持续 active。
+
+ABG 共四次因 breakout volume 为 0 被拒绝为 `INSUFFICIENT_VOLUME_EVIDENCE`，没有生成有效成交量
+比例。VTS、NKTR 命中仍为 SHADOW；MDB 回放和生产信号均没有成熟误报结果，误报率必须继续显示为
+未知而非 0%。达到五个 v3 PASS 日前 `delivery_enabled=false` 不得更改。
