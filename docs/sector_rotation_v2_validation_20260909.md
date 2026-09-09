@@ -83,7 +83,8 @@ FMP的正式接口是 `/stable/etf/holdings`，供应商说明它提供持仓、
 ### SG暂存验收（尚未切换正式网站）
 
 - `/tmp/quant-rotation-v2-40a731e/` 暂存版本：129项相关测试通过。真实构建在550M内存/单核限制下完成，22/22主题有效，快照 `rot_20260908_4e372f3ecca819d4` 冻结重放MATCH。systemd未保留可用MemoryPeak，不能声称测得某个具体峰值。
-- 同日个股关联为 `MOMENTUM_PUBLISHED_DATA_NOT_READY`，未退回旧缓存、未把不可用解释为空候选集。SG既有 `quant-us-equity-coverage.service` 同时显示failed；本次未修改或强行绕过核心数据门槛。
+- 最终代码 `ec447fa` 位于 `/tmp/quant-rotation-v2-ec447fa/`，先使用真实缓存生成快照，再运行回归，**130项通过**；快照 `rot_20260908_7a1abb2a994f2b26`，22/22有效，重放MATCH。对应tar.gz与git bundle在SG `/tmp/`，尚未应用到正式仓库。
+- 同日个股关联为 `MOMENTUM_PUBLISHED_DATA_NOT_READY`，未退回旧缓存、未把不可用解释为空候选集。在生产根目录只读复核也得到 `[US_EQUITY_COVERAGE] target 2026-09-04 is stale; expected 2026-09-08`，不是临时目录独有问题。SG既有 `quant-us-equity-coverage.service` 同时显示failed；本次未修改或强行绕过核心数据门槛。
 - 部署前发现SG另有茶杯柄相关未提交改动：`src/breakouts/live/rolling.py`、对应测试及3份运维文档。已保留，已向用户询问是否可重启加载该并行版本；未覆盖它们。
 - 正式主站/轮动timer仍未切换，未发送Discord验收。需要确认并行改动可随主站重启加载后再执行发布。
 
