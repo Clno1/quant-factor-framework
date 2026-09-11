@@ -23,7 +23,7 @@ def release_date(source):
     for paragraph in source["parsed"]["paragraphs"][:15]:
         text = paragraph["text"]
         issuer = attribution.search(text)
-        if not issuer or not re.search(r"\btoday (?:announced|reported|released)\b", text[issuer.end():], re.I):
+        if not issuer or not re.search(r"\b(?:today (?:announced|reported|released)|has released)\b", text[issuer.end():], re.I):
             continue
         dates = list(DATE.finditer(text[:issuer.start()]))
         if len(dates) != 1:
@@ -94,6 +94,16 @@ def freshness(source, as_of, calendar=None):
             result["provider_time_in_window"] = window["start"] < published <= as_of
             if published.astimezone(ET).date() != day:
                 result["status"] = "PROVIDER_DATELINE_DATE_CONFLICT"
+                meta = source.get('result', {})
+                accepted = meta.get('filing_accepted_at')
+                if accepted and meta.get('issuer_linkage') == 'REGISTERED_CIK_AND_CURRENT_SEC_TICKER_MATCH':
+                    accepted = datetime.fromisoformat(accepted.replace('Z', '+00:00'))
+                    timestamp(accepted)
+                    if (accepted.astimezone(ET).date() == day and window['start'] < accepted <= published <= as_of
+                            and meta.get('verification', {}).get('status') == 'DOCUMENT_MATCHED'):
+                        result.update(status='BOUNDARY_RELEASE_TIME_UNVERIFIED',
+                            provider_time_in_window=True, followup_news_after_filing=True,
+                            filing_accepted_at=timestamp(accepted))
         except (ValueError, TypeError):
             result["provider_time_in_window"] = None
     return result

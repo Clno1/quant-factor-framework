@@ -97,6 +97,9 @@ def responses_payload(request: dict, settings: LlmSettings) -> dict:
     if request.get("version") == "ep-event-claims-v2":
         from .llm_event_claims import AtomicResponse
         schema = AtomicResponse.model_json_schema()
+    if request.get('version') == 'ep-event-context-v1':
+        from .llm_event_context import ContextResponse
+        schema = ContextResponse.model_json_schema()
     content = {k: v for k, v in request.items() if k != "rules"}
     payload = {"model": settings.model, "instructions": request["rules"],
         "input": [{"role": "user", "content": json.dumps(content, ensure_ascii=False)}],

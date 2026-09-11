@@ -1304,3 +1304,144 @@ watchdog于11:47:43 SUCCESS，111.4MiB峰值、零swap；运维网页active，�
 修复顺序：先核实两组身份的证券类别与主表合并依据，凭冻结源和权威证据修正并做双重幂等验证；
 再完成STRR受控查询和旧隔离台账承接，恢复完整历史与PIT/候选链。未修改主表或行情、重启服务、
 补记失败日或开启发送，本次仅巡检并同步文档。
+
+## 48. 2026-09-11 茶杯柄上游恢复执行
+
+针对第47节新增身份冲突及第45节三个恢复失败项完成代码修复，细则和SEC证据见宽基实施30.4。
+部署前备份：`/home/projects/quant-backups/cup-upstream-recovery-20260911T121242CST`，
+包含本轮修改的旧代码、规则、测试及`configs/default.yaml`。未改发送开关或日常timer，未删除数据。
+旧日更已自行失败，取消其重试等待；八因子随后因PIT绑定旧主表而失败，也只取消重试等待，
+不在修复写入期间反复抢锁。需在coverage/PIT恢复后重新验收其生产任务。
+
+`quant-cup-master-repair-20260911.service`于12:13:52至12:23:47执行成功。
+双次冻结源五表精确幂等通过，第三次发布target=09-10，generation=
+`496db448b54e4ae49701512b3acfd64c`，manifest SHA-256=
+`0afd6b0156d2efbf6a41537c0cfad1459c4ee9dc762ff36d6d91815d17c64a49`。
+cgroup峰值358.9MiB、swap0、CPU592.719秒。报告目录：
+`outputs/data_audits/cup_upstream_repair_20260911/`，不是手工改正式指针。
+
+12:26:48启动`quant-cup-history-repair-20260911.service`，显式
+`update_us_equity_coverage.py --target-session 2026-09-10 --repair-full-history --publish`。
+使用flock、单线程BLAS、MemoryHigh=700M、MemoryMax=900M、TasksMax=64、TimeoutStartSec=2h。
+启动前资源PASS，可用内存1195.52MB、磁盘30.969GiB。run路径见宽基实施30.4。
+身份增量43只、36219行、别名失败0；后续整票认证、coverage/PIT/候选尚待本轮最终验收。
+
+代码验证：本地相关主表/行情/PIT/茶杯柄测试106 passed；新增次日普通增量端到端测试通过，
+确认不需要再开启全历史修复且旧有效历史不变。SG相关回归80 passed，随后增加退市生命周期
+窗口保护，SG恢复分支22 passed。本地排除EP测试的扩展回归833 passed。
+本地全套测试停在`test_ep_llm_batches.py::test_batches_are_independently_reserved_cached_and_share_old_budget`
+的线程锁等待，堆栈涉及`src/breakouts/ep/store.py`连接管理；已终止本次测试进程，
+未修改EP模块，不能将本轮描述为全套通过。
+生产恢复未完成前，茶杯柄v3仍0/5、delivery=false，历史缺跑不补记。
+
+12:47发现PROP两条既有坏行未列入首次四行规则。只读审计确认与旧不可变台账逐值一致，
+已补充为六行；规则及代码二次备份：
+`/home/projects/quant-backups/cup-quarantine-review-20260911T125252CST`。
+原取数运行继续收集全部421只的证据，不将已记录的PROP失败改为成功。随后需在同一源合同下
+使用`--repair-full-history --reuse-frozen-repair-inputs --publish`重新验证并尝试原子发布，
+具体复用的是已认证原始字节，不是旧检查点通过状态。最终代码非EP扩展测试836 passed、
+SG主表/存储/覆盖/恢复测试84 passed；EP锁等待限制仍保留。
+
+首轮于13:11:04正式结束：421/421、420验证通过、PROP一只拒绝，未发布；
+耗时44分16秒，CPU512.619秒、峰值701.9MiB、swap0。STRR/ATCX/BGLC均已逐票通过。
+13:12:03启动独立`quant-cup-history-revalidate-20260911.service`，run=
+`data/lake/staging/us_equity_coverage_incremental/asof=2026-09-10/run=20260911T051205Z_f84e5438`，
+使用相同资源/锁约束。核对provider_cache_binding与首轮完全相同，身份增量命中认证缓存；
+新报告的`raw_inputs_reused`证明重新验证的是原始返回字节，旧首轮FAIL报告不变。
+
+### 本轮最终验收（13:32 SGT）
+
+1. `quant-cup-history-revalidate-20260911.service` 13:22:39 SUCCESS：421/421通过、
+   93分片重建，正式行情target=09-10、version=`76e68448ccea48f5b5e1dbf871c9f6c9`。
+   耗时634.337秒、CPU551.811秒、cgroup峰值701.8MiB、swap0；子进程ru_maxrss报告715.07MiB，
+   两种内存统计口径分别保留，不混为一个指标。原始取数轮FAIL报告未改写。
+2. `quant-cup-pit-recovery-20260911.service` 13:25:28 SUCCESS，显式完整历史PIT重建。
+   version=`857031854a554d9bbfee942a6bfc3919`，父行情、主表、三个文件哈希和所有门禁复核通过；
+   用时95.684秒、ru_maxrss733.84MiB。完整哈希见宽基实施30.4。
+3. `quant-intraday-candidate-prepare.service` 13:26:37至13:27:29 SUCCESS，CPU52.351秒、
+   cgroup峰值603.8MiB、swap0。SQLite今日快照source_data_date=09-10，cup v3筛选2846只、
+   合格1206只、选入600只，coverage/PIT/主表均绑定上述新版本。
+4. 恢复常态`quant-us-equity-coverage.service`后，13:28:25 SUCCESS，三阶段认证NOOP，
+   没有再次混入新源。OnSuccess正常启动八因子，generation=b6108d673ac447dab5e7be88e7f76ca1，
+   13:32为42/648，仍运行。检查点：
+   `outputs/universes/US_LIQUID_5M/factor_data/.staging_b6108d673ac447dab5e7be88e7f76ca1/checkpoint.json`。
+5. 清除了候选/盘中服务旧启动限制，未在闭市时伪造评估。timer保持启用，今日18:30再次准备，
+   21:20启动盘中监控；实际服务env确认cup delivery=false，v3仍0/5。默认配置与12:12备份字节一致。
+6. 主站研究页200/0.579秒，运维healthz 200/0.004秒；未为恢复重启两个Web服务。
+   运维快照13:30:26保留DEGRADED、09-08完整日失败及分钟缺口原因，没有被SCHEDULED覆盖。
+
+本次解除的是行情/PIT过期导致的候选阻断。真实分钟数据质量和完整交易日验收仍须继续观察；
+缺跑日不补记，八因子尚在重算，PIT行业历史相关正式置信门禁没有放宽。
+
+13:35收尾：八因子继续推进至80/648，两个Web保持active/running；日更和候选oneshot均为
+Result=success、inactive/dead（正常执行完成，并非崩溃）。关键三个systemd unit的
+`systemd-analyze verify`退出0；仅出现系统外部tat_agent旧`/var/run`路径警告。
+本轮修改的代码、规则、测试和四份文档本地/SG校验和一致，`git diff --check`通过。
+
+## 49. 2026-09-11 八因子发布后验收及盘中跟进
+
+15:54之后重新SSH核查，八因子已于15:17:46正式发布，不再沿用48节“正在计算”的结论。
+generation=b6108d673ac447dab5e7be88e7f76ca1，target=09-10，648个分片完成；
+15:18:01自动全链哈希及实际排名查询PASS。完整版本与资源证据见宽基实施30.5。
+readiness仅有两项PIT行业历史门禁，退出码2被unit按预期处理，不是运行失败。
+
+主站实际HTTP验收：八因子完整截面排名/百分位独立复算均一致，每次约0.91至0.99秒。
+MDB/AEVA近月历史均200，全历史1681/1643行分别14.056/13.790秒；后者性能仍需留意。
+资源检查PASS，可用内存约1198MB、磁盘29.181GiB。两个Web均保持运行，无需重启。
+
+另外发现并修复运维显示缺陷：主表正式代次创建于04:23:45 UTC，早期失败audit生成于
+04:12:05 UTC，但adapter只比较target，错误地让同日早期FAIL覆盖后来正式成功。
+现在只有相同target、当前正式PUBLISHED且其构建时间严格晚于audit，才将该audit标为
+`candidate_superseded_by_publication=true`；较新失败、时间相同、时间缺失或不可解析时仍保留阻断。
+不用文件复制mtime证明恢复，不修改audit、不手工写运维快照。旧报告路径和失败原因仍在metadata。
+
+部署前备份：`/home/projects/quant-backups/factor-cup-acceptance-20260911T1605CST.tar.gz`，
+包含adapter、对应测试、四份文档和default.yaml。仅部署adapter和测试，不覆盖其他在做的EP改动。
+本地和SG各65项相关测试通过；SG有一条Starlette/httpx弃用提示，无测试失败。
+重新运行watchdog后，16:05:23 SGT的`/api/projects`前四阶段均SUCCESS；宽基数据连续观察1/5，
+正式置信研究BLOCKED。茶杯柄任务仍DEGRADED并明确保留09-08分钟缺口失败，与主表显示修复无关。
+
+今日候选SQLite快照已实际成功：session=09-11、source=09-10，v3/2026-09-01.1，
+筛选2846、杯体合格1206、选入600；嵌套`data_contract.coverage.derived_universe`绑定本次PIT、
+coverage和主表。四张cup表当天仍0行，因为核查时未开盘；v3观察0/5，真实env发送false。
+候选timer18:30、盘中timer21:20正常启用，未提前运行盘中、修改阈值或补记失败日。
+
+已更新既有Codex巡检任务`sg`，在北京时间/新加坡时间04:45、11:45、18:45、21:45继续检查。
+当前夏令时下分别覆盖收盘日结、日间上游、盘前候选和开盘后落库；以XNYS实际开闭市为准，
+休市不造数据，冬令时不得把尚未收盘的04:45当作完整日。
+这是Codex跟进，不是新建SG生产timer；现有systemd继续独立运行。无变化不重复通知，
+首次真实运行确认、新失败、完整日验收变化或需人工决策时通知。5/5后也不能自动开启发送。
+
+18:53至18:56盘前巡检：18:30:42至18:30:45候选timer实际SUCCESS，CPU2.587秒，
+复用已认证的09-11候选600只及未变的09-10版本绑定。盘中timer仍等待21:20；四张cup表
+今日0行，v3仍0/5、发送false。watchdog及运维Web健康，资源PASS，可用内存1123.34MB、
+磁盘29.177GiB，无新增生产阻断，不启动额外任务。详细证据见茶杯柄31末尾。
+
+### 21:49至22:08：开盘后实际运行确认
+
+盘中service已于21:20:12启动且未重启。v3评估从4批/160次增长至截至22:05的7批/280次，
+覆盖48只；候选/coverage/PIT/主表合同一致，八因子未变。命中0、等待277、不可评估3，
+cup错误0；WBI两个UNRESOLVED_SOURCE_GAP，暂时缺口股比例2.08%，不代表完整日通过。
+P95=0.015572ms、最大7根，当前多为开盘后等待足够K线。共享monitor另有2次错误周期，
+不得与cup检测错误混用。服务峰值内存438.11MiB、swap0；运维Web及watchdog健康。
+今日session_observations尚未生成，v3仍0/5、发送关闭，继续等待收盘完整验收。
+详细周期、缺口证据和当前/历史指标区分见茶杯柄32；未修改生产代码、规则、配置或历史记录。
+
+## 50. 2026-09-11 22:48至22:52：v3盘中及五日严格核查
+
+正式status、四张cup表的一致只读快照、service/timer/journal、有效env和运维API已核对。
+完整XNYS窗口09-03/04/08/09/10，v3仍0/5、通过日期为空、剩余5日：03为v2，04/09/10缺跑，
+08因94.64%可评估覆盖及5.36%缺口股比例FAIL。不得复用旧版本或提前将今日加入通过日。
+
+今日截至22:50：候选600（筛选2846、合格1206），15批/600次、50只唯一股票；
+命中0、拒绝224、等待362、不可评估14、cup错误0。暂时可评估96%、缺口股4%，P95=0.245137ms、
+最多16根，15批合同完整。唯一缺口8（WBI2/UAN6，均UNRESOLVED_SOURCE_GAP），问题是桶内成交量
+归属及新鲜度证据不足；未补造行情、修改阈值或绕过问题股。今日IBTA零突破成交量正确拒绝，
+未生成比例或信号。MDB只有v1零信号回放；v3后验代理未发布，不报告0%误报。
+
+盘中service持续active/running、零重启，峰值440MiB、swap0；watchdog正常、operations Web健康。
+可用内存1000.895MB、磁盘28.738GiB，资源检查PASS。journal无error级条目，共享monitor另有
+两次错误周期，不能混为cup错误。候选timer下次09-14 18:30；operations Web为长驻服务，无timer。
+主表/coverage/PIT/八因子版本未变，无当前上游过期；未重启或再次全量重算。
+运维站继续保留09-08 FAIL和v3 0/5；其部分完整日质量指标不能冒充今日值。发送保持false，
+04:45待实际收盘后核验，全量统计、前八原因、证据及建议见茶杯柄33。

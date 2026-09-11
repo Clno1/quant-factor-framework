@@ -6,6 +6,40 @@
 schema_version: 2
 universe: US_SECURITY_MASTER
 
+# These provider profiles copy common-stock identifiers onto distinct instruments.
+# Exclude only exact, evidenced rows before issue-ID alias grouping.
+reviewed_excluded_instruments:
+  - id: hymcz_is_seller_warrant
+    ticker: HYMCZ
+    actual_asset_type: WARRANT
+    profile:
+      name_contains: "Hycroft Mining Holding Corporation"
+      asset_type: STOCK
+      exchange: NASDAQ
+      cik: "0001718405"
+      cusip: "44862P208"
+      isin: US44862P2083
+      listing_date: "2017-02-17"
+      is_active: false
+    reason: "SEC's 2021 Form 10-K identifies HYMCZ as warrants to purchase common stock, distinct from HYMC common stock. FMP copied common-stock identifiers into its inactive warrant profile."
+    sources:
+      - "https://www.sec.gov/Archives/edgar/data/1718405/000171840522000016/hymc-20211231.htm"
+  - id: bdxa_is_preferred_depositary_share
+    ticker: BDXA
+    actual_asset_type: PREFERRED
+    profile:
+      name_contains: "Becton, Dickinson and Company"
+      asset_type: STOCK
+      exchange: NYSE
+      cik: "0000010795"
+      cusip: "075887109"
+      isin: US0758871091
+      listing_date: "2017-05-11"
+      is_active: false
+    reason: "SEC lists BDXA as depositary shares representing 1/20 of Series A preferred stock, separately from BDX common stock. FMP copied common-stock identifiers into the inactive preferred profile."
+    sources:
+      - "https://www.sec.gov/Archives/edgar/data/10795/000114036119009406/nc10002034x1_8k.htm"
+
 # FMP can change issue identifiers across a documented rename even when SEC
 # filings establish continuity. These entries authorize only the exact dated
 # lineage edge; raw provider CUSIP/ISIN values remain unchanged and auditable.

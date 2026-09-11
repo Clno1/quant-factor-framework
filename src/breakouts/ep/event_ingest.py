@@ -6,12 +6,16 @@ from pathlib import Path
 
 from src.data.sec_company_index import INDEX_URL, SecCompanyIndexClient
 from src.data.sec_attachments import SecDisclosureClient
+from src.data.public_articles import SourceAccessError
 from src.utils.io import atomic_save_json
 from .discovery import OfficialSourceDiscovery
 from .models import EpSettings, NEW_YORK, ticker
 from .provider import FmpEpProvider
 from .service import EpRadar
 from .store import EpStore
+from .identity import load_identity_snapshot
+from .pipeline import process_identities, process_sources, queue_path, seed
+from .queue import PipelineQueue
 
 
 def registry_for_candidates(payload, symbols):
@@ -36,41 +40,104 @@ def registry_for_candidates(payload, symbols):
     return {"version": "ep-issuer-registry-v1", "issuers": found}, sorted(wanted - found.keys())
 
 
-def ingest(config, *, clock=lambda: datetime.now(timezone.utc), provider=None, index_client=None, disclosure_client=None):
+def ingest(config, *, clock=lambda: datetime.now(timezone.utc), provider=None, index_client=None,
+           disclosure_client=None, identity_snapshot=None):
+    from src.utils.file_lock import file_lock
+    with file_lock(Path(queue_path(config)).with_suffix('.ingest.lock')):
+        return _ingest(config, clock=clock, provider=provider, index_client=index_client,
+                       disclosure_client=disclosure_client, identity_snapshot=identity_snapshot)
+
+
+def _ingest(config, *, clock, provider, index_client, disclosure_client, identity_snapshot):
     now = clock()
     store = EpStore(config.database)
+    queue = PipelineQueue(queue_path(config))
+    queue.expire(now)
+    watch = {'status': 'WATCH_INPUT_NOT_CONFIGURED'}
+    if config.watch_input_path:
+        from .watch import ingest_watch_file
+        try:
+            watch = ingest_watch_file(queue, config.watch_input_path, now)
+        except (ValueError, OSError):
+            watch = {'status': 'WATCH_INPUT_UNAVAILABLE'}
+    provider = provider or FmpEpProvider()
+    identity_snapshot = identity_snapshot or load_identity_snapshot(now,
+        catalog_path=config.identity_catalog_path or None, snapshot_root=config.identity_snapshot_root or None,
+        source_root=config.identity_source_root or None)
     day = now.astimezone(NEW_YORK).date()
     contact = os.getenv("SEC_CONTACT_EMAIL")
-    index_client = index_client or SecCompanyIndexClient(contact_email=contact, max_requests=3, deadline_seconds=30)
     cache = Path(config.output_directory) / "sec_company_index.json"
     cached = None
-    if cache.is_file() and cache.stat().st_size <= 3_000_000:
-        cached = json.loads(cache.read_text())
-        received = datetime.fromisoformat(cached["received_at"])
-        if received.tzinfo is None or not timedelta(0) <= now - received < timedelta(hours=24):
-            cached = None
-    if cached is None:
-        fetched = index_client.fetch_json(INDEX_URL)
-        if fetched["status"] != "FETCHED":
-            return {"collection_status": "NOT_STARTED", "source_status": "COMPANY_INDEX_UNAVAILABLE",
-                    "index_status": fetched["status"], "market_complete": False}
-        payload = json.loads(fetched["json"])
-        registry_for_candidates(payload, [])
-        cached = {"received_at": now.isoformat(), "payload": payload, "source_url": INDEX_URL}
-        atomic_save_json(cached, cache)
-    priority_symbols = {ticker(row["ticker"]) for row in cached["payload"].values()}
-    report = EpRadar(store, provider or FmpEpProvider(), EpSettings(max_pages=2, max_profiles=20,
-                    max_requests=30, deadline_seconds=90, include_etfs=False), clock=clock,
-                    priority_symbols=priority_symbols).collect(
+    index_status = 'UNAVAILABLE'
+    try:
+        if cache.is_file() and cache.stat().st_size <= 3_000_000:
+            cached = json.loads(cache.read_text())
+            received = datetime.fromisoformat(cached["received_at"])
+            if received.tzinfo is None or not timedelta(0) <= now - received < timedelta(hours=24):
+                cached = None
+            elif cached.get('source_url') != INDEX_URL:
+                cached = None
+            else:
+                registry_for_candidates(cached['payload'], [])
+        if cached is None:
+            index_client = index_client or SecCompanyIndexClient(contact_email=contact, max_requests=3, deadline_seconds=30)
+            fetched = index_client.fetch_json(INDEX_URL)
+            index_status = fetched['status']
+            if fetched['status'] == 'FETCHED':
+                payload = json.loads(fetched['json'])
+                registry_for_candidates(payload, [])
+                cached = {'received_at': now.isoformat(), 'payload': payload, 'source_url': INDEX_URL}
+                atomic_save_json(cached, cache)
+        else:
+            index_status = 'CACHED_UNDER_24H'
+    except (ValueError, KeyError, TypeError, OSError, SourceAccessError):
+        cached, index_status = None, 'COMPANY_INDEX_NOT_AVAILABLE'
+    priority_symbols = {ticker(row['ticker']) for row in cached['payload'].values()} if cached else set()
+    report = EpRadar(store, provider, EpSettings(max_pages=config.news_pages_per_feed, max_profiles=0,
+                    max_requests=2 * config.news_pages_per_feed + 4, deadline_seconds=90, include_etfs=False), clock=clock,
+                    priority_symbols=priority_symbols, identity_snapshot=identity_snapshot, pipeline=queue).collect(
                         (day - timedelta(days=3)).isoformat(), day.isoformat())
     summary = {"run_id": report["run_id"], "collection_status": report["status"],
-               "candidate_count": len(report["candidates"]), "market_complete": False}
+               "candidate_count": len(report["candidates"]), "market_complete": False, 'watch': watch}
     symbols = [c["ticker"] for c in report["candidates"] if c["status"] != "EXCLUDED"]
-    registry, missing = registry_for_candidates(cached["payload"], symbols)
-    disclosure_client = disclosure_client or SecDisclosureClient(contact_email=contact, max_requests=20, deadline_seconds=90)
-    sources = OfficialSourceDiscovery(store, disclosure_client, registry, max_documents=3,
-                                      max_filings=2, max_exhibits=2, skip_existing=True,
-                                      prioritize_current=True, clock=clock).run(report["run_id"])
-    return {**summary, "registered_candidates": len(registry["issuers"]), "unmapped_symbols": missing,
-            "source_status": sources["status"], "source_counts": sources["summary"].get("counts", {}),
-            "sec_requests": index_client.requests + disclosure_client.requests}
+    registry, missing = registry_for_candidates(cached['payload'], symbols) if cached else (
+        {'version': 'ep-issuer-registry-v1', 'issuers': {}}, symbols)
+    # Keep identity and source work after the collection window advances.
+    if cached:
+        registry, _ = registry_for_candidates(cached['payload'], priority_symbols)
+    seed(queue, report, clock())
+    identities = process_identities(queue, store, provider, identity_snapshot, config, clock=clock)
+    source_counts = {}
+    try:
+        try:
+            disclosure_client = disclosure_client or SecDisclosureClient(contact_email=contact,
+                max_requests=30, deadline_seconds=110, max_bytes=5_000_000)
+        except ValueError:
+            disclosure_client = None
+        resolver = OfficialSourceDiscovery(store, disclosure_client, registry, max_documents=config.source_jobs_per_cycle,
+                                           max_filings=2, max_exhibits=2, clock=clock)
+        if config.official_registry_path:
+            from urllib.parse import urlsplit
+            from src.data.public_articles import PublicArticleClient
+            from .official_sources import OfficialSourceRouter, load_official_registry
+            official = load_official_registry(config.official_registry_path)
+            hosts = {h for row in official['issuers'].values()
+                     for h in (urlsplit(row['root_url']).hostname, row['ir_host'])}
+            public = PublicArticleClient(allowed_hosts=hosts, max_requests=30, deadline_seconds=110, max_bytes=5_000_000)
+            resolver = OfficialSourceRouter(store, disclosure_client, registry, public, official,
+                max_documents=config.source_jobs_per_cycle, max_filings=2, max_exhibits=2, clock=clock)
+        elif disclosure_client is None:
+            raise ValueError('SOURCE_ACCESS_NOT_CONFIGURED')
+        source_counts = process_sources(queue, store, resolver, config, clock=clock)
+        source_status = 'QUEUED_SOURCE_PASS_COMPLETED'
+    except (ValueError, OSError, SourceAccessError):
+        source_status = 'SOURCE_ACCESS_NOT_CONFIGURED_JOBS_RETAINED'
+    queue.save_checkpoint('discovery:last', {**summary, 'coverage': report['summary'].get('coverage', []),
+        'identity_source': identity_snapshot.provenance, 'identity_diagnostics': identity_snapshot.diagnostics,
+        'index_status': index_status, 'source_status': source_status}, clock())
+    atomic_save_json(queue.summary(), Path(config.output_directory) / 'pipeline.json')
+    return {**summary, "registered_candidates": len(set(symbols) & registry["issuers"].keys()), "unmapped_symbols": missing,
+            'identity_processing': identities, 'identity_source': identity_snapshot.provenance,
+            'index_status': index_status, 'queue': queue.summary(),
+            "source_status": source_status, "source_counts": source_counts,
+            "sec_requests": getattr(index_client, 'requests', 0) + getattr(disclosure_client, 'requests', 0)}

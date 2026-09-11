@@ -1,8 +1,8 @@
 [Unit]
-Description=Quant EP review queue refresh (enable only after source pipeline acceptance)
+Description=Quant EP event queue refresh (US premarket and early session)
 
 [Timer]
-OnCalendar=Mon..Fri *-*-* 08,09,10:20:00 America/New_York
+OnCalendar=Mon..Fri *-*-* 08..11:00/10:00 America/New_York
 Persistent=false
 RandomizedDelaySec=30
 Unit=quant-ep-event-review-root.service

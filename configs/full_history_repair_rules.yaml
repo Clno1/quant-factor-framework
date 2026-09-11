@@ -1,0 +1,25 @@
+schema_version: 1
+query_mappings:
+  - id: hson_strr_provider_merger_window
+    security_id: sec_9227ef0c29095fddbf7b0a2e9d60d9e0
+    historical_ticker: HSON
+    query_ticker: STRR
+    start: "2025-08-22"
+    end: "2025-09-04"
+    next_alias_start: "2025-09-05"
+    reason: "Merger closed August 22, but HSON changed its trading symbol to STRR only September 5. FMP stores the intervening nine sessions under STRR. Do not change the historical ticker or remap earlier STRR history."
+    sources:
+      - "https://www.sec.gov/Archives/edgar/data/1210708/000121070825000081/hson-20250902.htm"
+      - "https://www.sec.gov/Archives/edgar/data/1210708/000119312525185799/d931756dex991.htm"
+prior_quarantine:
+  version_id: ad5de5cfd10d47e2ae21364f1808248d
+  manifest_sha256: 6fbe3bc28ac4e477b782fa9cc337a3618a75875b4c3f31bf6676d9b481c8b7c0
+  quarantine_sha256: 081f7e715620f7e71a52102a96451d25843b91113b65fe2ed2a6f24b7b719255
+  # Only these previously reviewed rows may be inherited, and only on exact OHLCV match.
+  rows:
+    - {security_id: sec_3a54d48f107154568ff4b6a5a4ad31f2, ticker: PROP, date: "2019-01-04"}
+    - {security_id: sec_3a54d48f107154568ff4b6a5a4ad31f2, ticker: PROP, date: "2023-10-16"}
+    - {security_id: sec_92f654c0b5f25bd3834cce79b86f244e, ticker: ATCX, date: "2019-11-22"}
+    - {security_id: sec_92f654c0b5f25bd3834cce79b86f244e, ticker: ATCX, date: "2020-04-03"}
+    - {security_id: sec_b4a354ad8d91591dbc72d67186367360, ticker: BGLC, date: "2022-07-26"}
+    - {security_id: sec_b4a354ad8d91591dbc72d67186367360, ticker: BGLC, date: "2023-04-06"}

@@ -12,9 +12,15 @@ from .llm_batches import SCOPES
 from .llm_span_selection import prepare_span_packet, validate_selection
 from .llm_event import prepare_event_packet, validate_event
 from .llm_event_claims import prepare_atomic_packet, validate_atomic
+from .llm_event_context import prepare_context_packet, validate_context
 
 
 def _prepare(source, batch, protocol, paragraph_ids):
+    if protocol == 'event-context':
+        if batch is not None:
+            raise ValueError('EVENT_BATCH_NOT_SUPPORTED')
+        packet = prepare_context_packet(source, paragraph_ids)
+        return packet['request'], packet
     if protocol == "event-claims":
         if batch is not None:
             raise ValueError("EVENT_BATCH_NOT_SUPPORTED")
@@ -99,7 +105,7 @@ def run_llm(store, source_id, settings, transport, *, clock=lambda: datetime.now
         "read_timeout_seconds": settings.read_timeout_seconds}
     if packet is not None:
         journal_request.update(protocol=protocol)
-        journal_request["event_packet" if protocol in {"event-interpretation", "event-claims"} else "selection_packet"] = packet
+        journal_request["event_packet" if protocol in {"event-interpretation", "event-claims", "event-context"} else "selection_packet"] = packet
     claimed = store.reserve_llm_call(key, source_id, journal_request, reservation["reserved_microusd"], settings, now)
     if not claimed["reserved"]:
         return {"status": claimed["status"], "reused": claimed["result"] is not None or claimed["status"] == "RESERVED",
@@ -114,7 +120,8 @@ def run_llm(store, source_id, settings, transport, *, clock=lambda: datetime.now
         returned_model = body.get("model", "")
         if not isinstance(returned_model, str) or not re.fullmatch(re.escape(settings.model) + r"(?:-\d{4}-\d{2}-\d{2})?", returned_model):
             raise LlmError("LLM_MODEL_MISMATCH")
-        validation = (validate_atomic(packet, raw) if protocol == "event-claims" else
+        validation = (validate_context(packet, raw) if protocol == 'event-context' else
+                      validate_atomic(packet, raw) if protocol == "event-claims" else
                       validate_event(packet, raw) if protocol == "event-interpretation" else
                       validate_selection(packet, raw) if packet is not None else validate_response(request, raw))
         result = {"status": "VALIDATED", "validation": validation, "usage": usage,

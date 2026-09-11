@@ -8,6 +8,7 @@ import time
 from typing import Any, Callable
 
 from .classifier import classify
+from .identity import current_profile
 from .models import ALGORITHM_VERSION, EpSettings, NEW_YORK, digest, normalize_evidence, ticker, timestamp
 from .provider import EpProvider
 from .ranker import evaluate
@@ -47,13 +48,15 @@ class EpRadar:
     def __init__(self, store: EpStore, provider: EpProvider, settings: EpSettings | None = None,
                  *, clock: Callable[[], datetime] | None = None,
                  monotonic: Callable[[], float] = time.monotonic,
-                 priority_symbols: set[str] | None = None) -> None:
+                 priority_symbols: set[str] | None = None, identity_snapshot=None, pipeline=None) -> None:
         self.store = store
         self.provider = provider
         self.settings = settings or EpSettings()
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.monotonic = monotonic
         self.priority_symbols = priority_symbols
+        self.identity_snapshot = identity_snapshot
+        self.pipeline = pipeline
 
     def collect(self, start: str, end: str) -> dict[str, Any]:
         if self.store.read_only:
@@ -83,6 +86,11 @@ class EpRadar:
             day = first
             while day <= last:
                 key = day.isoformat()
+                checkpoint = self.pipeline.checkpoint('calendar:' + key) if self.pipeline else None
+                if checkpoint and timedelta(0) <= now - datetime.fromisoformat(checkpoint['received_at']) < timedelta(hours=1):
+                    coverage.append({'feed': 'calendar', 'day': key, 'status': 'CACHED_UNDER_ONE_HOUR', 'rows': checkpoint['rows']})
+                    day += timedelta(days=1)
+                    continue
                 rows, status = budget.call(self.provider.calendar, key)
                 count, invalid = self._page(run_id, "calendar", key, 0, rows, status, "CALENDAR", key, key)
                 if status == "OK" and count >= 4000:
@@ -90,6 +98,8 @@ class EpRadar:
                 if status == "OK" and invalid:
                     status = "INVALID_RECORDS"
                 coverage.append({"feed": "calendar", "day": key, "status": status, "rows": count})
+                if self.pipeline and status == 'OK':
+                    self.pipeline.save_checkpoint('calendar:' + key, {'received_at': timestamp(self.clock()), 'rows': count}, self.clock())
                 day += timedelta(days=1)
             cutoff = self.clock()
             documents = self.store.documents(start, end, cutoff)
@@ -98,6 +108,7 @@ class EpRadar:
                 grouped[document["ticker"]].append(document)
             identities = self.store.profiles(cutoff)
             profiles_requested = 0
+            bulk_profiles_used = 0
             evaluations = []
             def priority(symbol: str) -> int:
                 hints = {classify(doc)["event_type_hint"] for doc in grouped[symbol]}
@@ -116,14 +127,27 @@ class EpRadar:
                 identities.get(symbol, {}).get("observed_at", ""), symbol))
             for symbol in ordered:
                 cached = identities.get(symbol)
+                if self.identity_snapshot and symbol in self.identity_snapshot.rejected:
+                    status = self.identity_snapshot.rejected[symbol]
+                    self.store.save_profile(run_id, symbol, cutoff, status, None)
+                    cached = {'profile': None, 'observed_at': timestamp(cutoff), 'status': status}
+                    identities[symbol] = cached
+                bulk = self.identity_snapshot.profile(symbol, cutoff) if self.identity_snapshot else None
+                if bulk and (not current_profile(cached, cutoff) or cached['observed_at'] < timestamp(self.identity_snapshot.observed_at)):
+                    self.store.save_profile(run_id, symbol, cutoff, 'OK', bulk)
+                    cached = {'profile': bulk, 'observed_at': timestamp(cutoff), 'status': 'OK'}
+                    identities[symbol] = cached
+                if bulk:
+                    bulk_profiles_used += 1
                 profile = None
                 profile_observed_at = None
                 identity_status = "PROFILE_BUDGET_EXCEEDED"
-                if cached and cached["status"] == "OK" and (
-                    cutoff - datetime.fromisoformat(cached["observed_at"])
-                ) < timedelta(hours=24):
-                    profile, identity_status = cached["profile"], "CACHED_PROFILE_UNDER_24H"
+                if current_profile(cached, cutoff):
+                    profile = cached["profile"]
+                    identity_status = 'CURRENT_BULK_IDENTITY' if profile.get('identity_source') else 'CACHED_PROFILE_UNDER_24H'
                     profile_observed_at = cached["observed_at"]
+                elif self.identity_snapshot and symbol in self.identity_snapshot.rejected:
+                    identity_status = self.identity_snapshot.rejected[symbol]
                 elif profiles_requested < self.settings.max_profiles:
                     previous_count = budget.requests
                     profile, identity_status = budget.call(self.provider.profile, symbol)
@@ -141,12 +165,14 @@ class EpRadar:
                     identity_status=identity_status, include_etfs=self.settings.include_etfs)
                 evaluation["identity_observed_at"] = profile_observed_at
                 evaluations.append(evaluation)
-            completed = {"OK", "END_OF_FEED", "WINDOW_BOUNDARY_REACHED"}
+            completed = {"OK", "END_OF_FEED", "WINDOW_BOUNDARY_REACHED", "CACHED_UNDER_ONE_HOUR", "INCREMENTAL_BOUNDARY_REACHED"}
             partial = any(item["status"] not in completed for item in coverage)
             deferred = sum(item["identity"] is None for item in evaluations)
             summary = {"status": "PARTIAL" if partial or deferred else "COMPLETE_OBSERVATION",
                 "coverage": coverage, "requests": budget.requests, "candidate_count": len(evaluations),
                 "identity_pending_count": deferred, "profiles_requested": profiles_requested,
+                "bulk_profiles_used": bulk_profiles_used,
+                "bulk_identity": self.identity_snapshot.provenance if self.identity_snapshot else None,
                 "market_coverage_proven": False, "historical_first_seen_reconstructed": False,
                 "fulltext_retrieval": "NOT_IMPLEMENTED", "llm": "NOT_CONFIGURED",
                 "price_confirmation": "NOT_IMPLEMENTED", "delivery": "DISABLED_SHADOW_ONLY"}
@@ -197,6 +223,10 @@ class EpRadar:
 
     def _articles(self, run_id: str, feed: str, start: str, end: str,
                   budget: CollectionBudget, coverage: list[dict[str, Any]]) -> None:
+        if self.pipeline:
+            from .incremental import collect_articles
+            coverage.append(collect_articles(self, run_id, feed, start, end, budget))
+            return
         seen: set[str] = set()
         total = 0
         invalid_total = 0

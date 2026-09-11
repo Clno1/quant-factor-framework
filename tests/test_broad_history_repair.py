@@ -2,7 +2,9 @@ import pandas as pd
 import pytest
 
 from src.data.broad_history_repair import (
-    audit_overlap, fetch_replacement, replace_month, verify_repaired_rows,
+    audit_overlap, fetch_replacement, replace_month, verify_repaired_rows, inherit_quarantine,
+    refresh_canonical_sources,
+    load_repair_rules,
 )
 from src.data.broad_coverage import normalize_coverage_bars
 from src.data.foundation import DataFoundationError
@@ -26,6 +28,173 @@ def test_scope_collects_all_errors_and_does_not_weaken_authentication():
     assert [v["security_id"] for v in passed] == ["d"]
     assert [v["security_id"] for v in failures] == ["a", "b", "c"]
     assert [v["recoverable"] for v in failures] == [True, True, False]
+
+
+def test_next_increment_uses_canonical_source_and_still_authenticates_history(tmp_path):
+    kw = args(tmp_path)
+    old = bars(); bulk = bars(); bulk.loc[0, "volume"] = 100.01
+    mapped, proofs = refresh_canonical_sources(
+        mapped=bulk, previous_overlap=old.iloc[:2], security_ids={"a"},
+        cache_dir=tmp_path, contract={"parent": "repaired"},
+        universe=kw["universe"], symbols=kw["symbols"], refresh_start="2024-01-30",
+        target=kw["target"], fetcher=lambda *_: raw())
+    assert mapped.volume.eq(100).all()
+    passed, failed = audit_overlap(old, mapped, {"a"})
+    assert not failed and len(passed) == 1
+    assert proofs[0]["bulk_conflict_counts"]["volume"] == 1
+    assert proofs[0]["selection_scope"] == "AUTHENTICATED_RECENT_WINDOW_SAME_CANONICAL_SOURCE"
+    mapped.loc[0, "volume"] = 99
+    assert audit_overlap(old, mapped, {"a"})[1]  # Genuine canonical revision still fails.
+
+
+def test_retired_canonical_security_does_not_request_outside_alias_window(tmp_path):
+    kw = args(tmp_path)
+    kw["symbols"]["effective_to"] = "2024-01-31"
+    kw["universe"]["delisting_date"] = pd.Timestamp("2024-01-31")
+    def forbidden(*_):
+        pytest.fail("no approved alias overlaps this refresh window")
+    options = dict(security_ids={"a"}, cache_dir=tmp_path, contract={"parent": "v"},
+                   universe=kw["universe"], symbols=kw["symbols"],
+                   refresh_start="2024-02-01", target=kw["target"], fetcher=forbidden)
+    out, proof = refresh_canonical_sources(mapped=bars().iloc[:0],
+                                            previous_overlap=bars().iloc[:0], **options)
+    assert out.empty and not proof
+    with pytest.raises(DataFoundationError, match="outside approved alias window"):
+        refresh_canonical_sources(mapped=bars().iloc[-1:],
+                                  previous_overlap=bars().iloc[:0], **options)
+
+
+def test_exact_quarantine_inheritance_preserves_evidence_and_valid_parent(tmp_path):
+    from src.data.broad_coverage import split_coverage_bar_quality
+    f = bars()
+    f.loc[0, "open"] = 12
+    clean, approved = split_coverage_bar_quality(f)
+    inherited, bad = inherit_quarantine(f, approved=approved, previous=clean)
+    pd.testing.assert_frame_equal(inherited, clean)
+    assert len(bad) == 1 and bad.iloc[0].open == 12
+    with pytest.raises(DataFoundationError, match="authenticated parent"):
+        inherit_quarantine(f, approved=approved, previous=bars())
+    f.loc[0, "volume"] += .01
+    with pytest.raises(DataFoundationError, match="exactly match"):
+        inherit_quarantine(f, approved=approved, previous=clean)
+
+
+def test_prior_quarantine_is_evidence_not_legacy_price_authorization(tmp_path):
+    import yaml
+    from types import SimpleNamespace
+    from src.data.broad_history_repair import file_sha256
+    from src.data.broad_coverage import split_coverage_bar_quality
+    f = bars(); f.loc[0, "high"] = 1
+    _, bad = split_coverage_bar_quality(f)
+    bad.to_parquet(tmp_path / "bad.parquet", index=False)
+    source = {"version_id": "v", "manifest_sha256": "m", "quarantine_sha256": file_sha256(tmp_path / "bad.parquet"),
+              "rows": [{"security_id": "a", "ticker": "A", "date": "2024-01-30"}]}
+    policy = tmp_path / "rules.yaml"
+    policy.write_text(yaml.safe_dump({"schema_version": 1, "query_mappings": [], "prior_quarantine": source}))
+    version = SimpleNamespace(manifest_checksum_sha256="m", manifest_path=str(tmp_path / "manifest.json"))
+    catalog = SimpleNamespace(get_version=lambda *a, **kw: version)
+    calls = []
+    def verify(selected, *, require_price_semantics):
+        calls.append(require_price_semantics)
+        return {"bar_quarantine_path": "bad.parquet", "bar_quarantine_sha256": source["quarantine_sha256"]}
+    reader = SimpleNamespace(verify_version=verify)
+    _, selected, _ = load_repair_rules(policy, catalog=catalog, market_reader=reader)
+    assert len(selected) == 1 and calls == [False]
+    version.manifest_checksum_sha256 = "changed"
+    with pytest.raises(DataFoundationError, match="manifest mismatch"):
+        load_repair_rules(policy, catalog=catalog, market_reader=reader)
+
+
+def test_quarantine_survives_cache_and_hash_is_checked(tmp_path):
+    from src.data.broad_coverage import split_coverage_bar_quality
+    f = bars(); f.loc[0, "high"] = 1
+    clean, approved = split_coverage_bar_quality(f)
+    kw = args(tmp_path)
+    kw.update(previous=clean.iloc[:1], recent=clean, approved_quarantine=approved,
+              rules_contract={"source_hash": "fixture"})
+    fetch = lambda *_: f.set_index("date").drop(columns=["security_id", "ticker"])
+    path, proof = fetch_replacement(**kw, fetcher=fetch)
+    assert proof["quarantined_rows"] == 1 and len(pd.read_parquet(path)) == 2
+    _, proof2 = fetch_replacement(**kw, fetcher=fetch)
+    assert proof2["cache_hit"] and proof2["quarantined_rows"] == 1
+    from pathlib import Path
+    Path(proof["quarantine_path"]).write_bytes(b"bad")
+    with pytest.raises(DataFoundationError, match="quarantine cache hash"):
+        fetch_replacement(**kw, fetcher=fetch)
+
+
+def test_policy_revalidation_reuses_raw_bytes_not_old_pass_or_fail(tmp_path):
+    from src.data.broad_coverage import split_coverage_bar_quality
+    f = bars(); f.loc[0, "high"] = 1
+    clean, approved = split_coverage_bar_quality(f)
+    kw = args(tmp_path)
+    kw.update(previous=clean, recent=clean, rules_contract={"policy": "old"})
+    fetch = lambda *_: f.set_index("date").drop(columns=["security_id", "ticker"])
+    with pytest.raises(DataFoundationError, match="without reviewed quarantine"):
+        fetch_replacement(**kw, fetcher=fetch)
+    failure = next(tmp_path.rglob("failure.json"))
+    failure_bytes = failure.read_bytes()
+    def forbidden(*_):
+        pytest.fail("must use the authenticated frozen response")
+    kw.update(approved_quarantine=approved, rules_contract={"policy": "reviewed"}, reuse_frozen_inputs=True)
+    path, proof = fetch_replacement(**kw, fetcher=forbidden)
+    assert len(pd.read_parquet(path)) == 2 and proof["raw_inputs_reused"]
+    assert proof["frozen_source_proof"]["record_path"] == str(failure)
+    assert failure.read_bytes() == failure_bytes
+    _, cached = fetch_replacement(**kw, fetcher=forbidden)
+    assert cached["cache_hit"] and cached["raw_inputs_reused"]
+    kw["rules_contract"] = {"policy": "not_matching"}
+    kw["approved_quarantine"] = approved.assign(volume=12345.)
+    with pytest.raises(DataFoundationError, match="exactly match"):
+        fetch_replacement(**kw, fetcher=forbidden)
+
+
+def test_frozen_raw_reuse_requires_exact_input_contract_and_hash(tmp_path):
+    import json
+    from pathlib import Path
+    kw = args(tmp_path)
+    kw["rules_contract"] = {"policy": "one"}
+    _, proof = fetch_replacement(**kw, fetcher=lambda *_: raw())
+    kw.update(rules_contract={"policy": "two"}, reuse_frozen_inputs=True)
+    calls = []
+    kw["contract"] = {"parent": "different"}
+    fetch_replacement(**kw, fetcher=lambda *a: calls.append(a) or raw())
+    assert len(calls) == 1  # A different parent cannot borrow the frozen source.
+    kw["contract"] = args(tmp_path)["contract"]
+    manifest = Path(proof["manifest_path"])
+    meta = json.loads(manifest.read_text())
+    (manifest.parent / meta["raw_artifacts"][0]["path"]).write_bytes(b"damaged")
+    with pytest.raises(DataFoundationError, match="raw input hash mismatch"):
+        fetch_replacement(**kw, fetcher=lambda *_: pytest.fail("must fail closed"))
+
+
+def test_different_frozen_responses_are_ambiguous_not_silently_selected(tmp_path):
+    f = raw(); f.iloc[0, f.columns.get_loc("high")] = 1
+    kw = args(tmp_path)
+    for volume in [100., 101.]:
+        with pytest.raises(DataFoundationError, match="without reviewed quarantine"):
+            fetch_replacement(**kw, fetcher=lambda *_: f.assign(volume=volume))
+    with pytest.raises(DataFoundationError, match="multiple different frozen"):
+        fetch_replacement(**kw, reuse_frozen_inputs=True, fetcher=lambda *_: pytest.fail("must fail closed"))
+
+
+def test_bounded_query_mapping_preserves_historical_identity(tmp_path):
+    kw = args(tmp_path)
+    kw["symbols"] = pd.DataFrame([
+        {"security_id": "a", "ticker": "OLD", "effective_from": "2024-01-30", "effective_to": "2024-01-31"},
+        {"security_id": "a", "ticker": "A", "effective_from": "2024-02-01", "effective_to": None}])
+    kw["query_mappings"] = [{"security_id": "a", "historical_ticker": "OLD", "query_ticker": "A",
+                             "start": "2024-01-31", "end": "2024-01-31", "next_alias_start": "2024-02-01"}]
+    calls = []
+    def fetch(t, start, end):
+        calls.append((t, start, end)); return raw().loc[start:end]
+    path, proof = fetch_replacement(**kw, fetcher=fetch)
+    assert calls == [("OLD", "2024-01-30", "2024-01-30"), ("A", "2024-01-31", "2024-01-31"),
+                     ("A", "2024-02-01", "2024-02-01")]
+    assert pd.read_parquet(path).ticker.tolist() == ["OLD", "OLD", "A"]
+    kw["symbols"].loc[0, "effective_to"] = "2024-02-01"
+    with pytest.raises(DataFoundationError, match="alias contract drifted"):
+        fetch_replacement(**kw, fetcher=fetch)
 
 
 def test_repaired_history_forces_pit_rebuild_even_without_master_change():
@@ -189,6 +358,7 @@ def test_writer_end_to_end_full_history_or_no_publication(tmp_path, monkeypatch,
                                          max_target_bar_quarantine_ratio=0., min_target_coverage=1.),
                        fmp=NS(bulk_request_interval_seconds=0.)), abs_path=lambda p:p)
     monkeypatch.setattr(writer, "CONFIG", config)
+    monkeypatch.setattr(writer, "load_repair_rules", lambda *a, **kw: ([], None, {"fixture": True}))
     monkeypatch.setattr(writer.SecurityMasterStore, "load_published", lambda _: (generation, {"master": universe, "symbols": symbols}))
     monkeypatch.setattr(writer, "select_coverage_securities", lambda *a, **kw: universe)
     monkeypatch.setattr(writer, "_load_or_fetch_history_delta", lambda **kw: (pd.DataFrame(), [], [], True))
@@ -221,3 +391,30 @@ def test_writer_end_to_end_full_history_or_no_publication(tmp_path, monkeypatch,
     assert result.loc[result.security_id.eq("sec_bbb"), "volume"].tolist() == [1000000.] * 4
     original = BroadCoverageReader(market_reader=MarketDataReader(catalog=catalog)).load_bars(version=parent)
     assert original.volume.eq(1000000).all()
+
+    # The next ordinary update must retain the canonical source without another
+    # full-history repair, while still authenticating the overlap exactly.
+    generation = replace(generation, target_session=date(2024, 2, 5))
+    calls = []
+    def canonical_increment(ticker, start, end):
+        calls.append((ticker, start, end))
+        f = _bars("sec_aaa", ticker, dates + ["2024-02-02", "2024-02-05"])
+        f["volume"] = 800000.
+        f["unadjusted_close"] = f.close
+        f.date = pd.to_datetime(f.date)
+        return f.set_index("date").loc[start:end].drop(columns=["security_id", "ticker"])
+    monkeypatch.setattr(writer, "get_coverage_historical_ohlcv", canonical_increment)
+    args.target_session = "2024-02-05"
+    args.repair_full_history = False
+    updated, code = writer.run(args)
+    assert code == 0 and updated["publication"]["version_id"] != report["publication"]["version_id"]
+    assert calls == [("AAA", "2024-01-31", "2024-02-05")]
+    reader = MarketDataReader(catalog=catalog)
+    manifest = reader.verify_version(catalog.latest_version("US_EQUITY_COVERAGE"))
+    lineage = manifest["quality_lineage"]
+    assert lineage["canonical_history_security_ids"] == ["sec_aaa"]
+    assert lineage["full_security_history_repair"]["security_count"] == 0
+    assert lineage["canonical_overlap_refresh"][0]["bulk_conflict_counts"]["volume"] > 0
+    final = BroadCoverageReader(market_reader=reader).load_bars()
+    assert final.loc[final.security_id.eq("sec_aaa"), "volume"].tolist() == [800000.] * 5
+    assert final.loc[final.security_id.eq("sec_bbb"), "volume"].tolist() == [1000000.] * 5

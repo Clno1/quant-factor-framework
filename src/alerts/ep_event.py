@@ -20,7 +20,9 @@ def _plain(text):
     return re.sub(r"([\\`*_{}\[\]()<>#|~])", r"\\\1", text)
 
 
-def ai_payload(report):
+def ai_payload(report, *, style='annotated'):
+    if style not in {'annotated', 'personal'}:
+        raise ValueError('UNKNOWN_COMMENTARY_STYLE')
     if report.get("security_eligible") is not True:
         raise ValueError("FRESH_STOCK_OR_ADR_IDENTITY_REQUIRED")
     if not report.get("claims"):
@@ -32,13 +34,21 @@ def ai_payload(report):
         raise ValueError("NOT_CURRENT_DISCLOSURE_WINDOW")
     date = report["freshness"].get("announcement", {}).get("date", "日期未核准")
     embeds, included, used = [], [], 0
-    for claim in report["claims"]:
+    claims = report['claims']
+    if style == 'personal':
+        claims = sorted(claims, key=lambda c: c.get('kind') == 'SOURCE_DISCLOSURE')
+    for claim in claims:
         if claim.get("review_status") in {"REJECT", "REVOKE"}:
             continue
-        title = _plain(report["ticker"]) + " | 未核准的 AI 解读"
-        description = _plain(claim["text"]) + "\n\n" + "\n\n".join(
+        title = _plain(report["ticker"]) + (" | 公告财务原文摘录" if claim.get('kind') == 'SOURCE_DISCLOSURE'
+                                          else " | 事件解读" if style == 'personal' else " | 未核准的 AI 解读")
+        lead = ('以下为公告原文，未进行跨期间或会计口径换算。'
+                if style == 'personal' and claim.get('kind') == 'SOURCE_DISCLOSURE' else claim['text'])
+        description = _plain(lead) + "\n\n" + "\n\n".join(
             f"原文 {e['paragraph_id']}：{_plain(e['quote'])}" for e in claim["evidence"])
         footer = f"公告日期 {date}；精确发布时间、价格因果和交易触发未核准。"
+        if style == 'personal':
+            footer = f"公告日期 {date}；不代表已确认价格因果、量能或开盘突破。"
         if boundary:
             footer += "隔夜候选仅由供应商时间定位，公告实际发布时间待核实。"
         size = len(title) + len(description) + len(footer)
@@ -50,10 +60,37 @@ def ai_payload(report):
         used += size
     if not embeds:
         raise ValueError("NO_SENDABLE_PROPOSALS")
+    comparisons = report.get('sections', {}).get('program_comparisons', [])
+    compared = 0
+    for comparison in comparisons:
+        if comparison.get('status') != 'COMPUTED' or not report.get('finance_input_revision'):
+            continue
+        label = '实际值与公告前一致预期' if comparison['relation'] == 'SURPRISE' else '本次指引与先前指引'
+        description = (f"{label}：{comparison['left_value']} / {comparison['right_value']}"
+            f"\n{comparison['metric']}；{comparison['period']}；{comparison['basis']}；{comparison['currency']}"
+            f"\n差额：{comparison['difference']}；变化百分比：{comparison.get('percent') or '不适用'}"
+            '\n证据：' + ', '.join(comparison['evidence_ids']))
+        description = _plain(description)
+        if used + len(description) + 60 > 5400 or len(embeds) >= 9:
+            continue
+        embeds.append({'title': _plain(report['ticker']) + ' | 程序财务比较', 'description': description,
+                       'footer': {'text': '基于绑定输入计算，不是模型生成数字，也不是买入信号。'}})
+        used += len(description) + 60
+        compared += 1
     payload = {"username": "EP AI Research", "allowed_mentions": {"parse": []},
                "content": "未经人工核准的 AI 公告解读。引文位置匹配不等于结论已验证；不是评级、突破确认或买入信号。"
                           + f"\n本条展示 {len(included)}/{len(report['claims'])} 个提案；不代表完整公告覆盖。",
                "embeds": embeds}
+    if report.get('protocol') == 'event-context':
+        payload['content'] += '\n财务数字为原文摘录；程序比较：缺少核准的可比预期，未计算 beat 或指引变化。AI 解读独立标注。'
+    if style == 'personal':
+        payload['content'] = ('公告事件摘要，不是评级、突破确认或买入信号。'
+            + f"\n本条展示 {len(included)}/{len(report['claims'])} 条内容，不代表完整公告覆盖。")
+        if report.get('protocol') == 'event-context':
+            payload['content'] += '\n财务数字见原文；缺少已对齐的公告前比较基准，未计算超预期幅度或指引变化。'
+    if comparisons:
+        payload['content'] = payload['content'].split('\n财务数字')[0] + (
+            f'\n独立程序比较展示 {compared}/{len(comparisons)} 项；其余指标不据此推断超预期或指引变化。')
     return validate_discord_payload(payload), included
 
 
@@ -116,10 +153,13 @@ class EventOutbox:
         finally:
             db.close()
 
-    def enqueue(self, report, route, *, now=None):
+    def enqueue(self, report, route, *, now=None, style='annotated'):
         now = time.time() if now is None else now
-        payload, _ = ai_payload(report)
-        key = digest(["UNVERIFIED_AI_DISCLOSURE_V1", report["document_id"], report["text_revision"]])
+        payload, _ = ai_payload(report, style=style)
+        identity = ['UNVERIFIED_AI_DISCLOSURE_V1', report['document_id'], report['text_revision']]
+        if report.get('sections', {}).get('program_comparisons'):
+            identity.append(report['finance_input_revision'])
+        key = digest(identity)
         with self.connect() as db:
             db.execute("INSERT OR IGNORE INTO ep_ai_outbox VALUES(?,?,?,?,?,?,?,'PENDING',0,?,?,NULL,NULL)",
                        (key, report["ticker"], report["request_key"], route, encode(payload), now, now + 5400, now, now))
@@ -129,7 +169,7 @@ class EventOutbox:
         with self.connect() as db:
             return dict(db.execute("SELECT state, COUNT(*) FROM ep_ai_outbox GROUP BY state").fetchall())
 
-    def deliver(self, sender, route, *, limit=2, now=None, report_loader=None):
+    def deliver(self, sender, route, *, limit=2, now=None, report_loader=None, style='annotated'):
         now = time.time() if now is None else now
         if not 1 <= limit <= 2 or report_loader is None:
             raise ValueError("BOUNDED_DELIVERY_AND_FRESH_REPORT_REQUIRED")
@@ -150,7 +190,7 @@ class EventOutbox:
                 db.execute("UPDATE ep_ai_outbox SET state='SENDING', attempts=attempts+1, updated=? WHERE id=?", (now, row["id"]))
             state, error, message_id, next_attempt = "UNKNOWN", None, None, now
             try:
-                current, _ = ai_payload(report_loader(row["request_key"]))
+                current, _ = ai_payload(report_loader(row["request_key"]), style=style)
                 if encode(current) != row["payload"]:
                     raise ValueError("PAYLOAD_OR_REVIEW_CHANGED")
                 result = sender.send(json.loads(row["payload"]))
@@ -180,25 +220,66 @@ def notifications(config, result, *, sender_factory=None):
     if not config.delivery_enabled:
         return {"status": "DISABLED", "external_requests": 0}
     from src.breakouts.ep.event_worker import private_text
+    from src.breakouts.ep.event_worker import financial_report
     from src.breakouts.ep.event_workflow import EventReviewStore, reviewed_report
     from src.breakouts.ep.store import EpStore
     sender_factory = sender_factory or VerifiedNotifier
     store = EpStore(config.database, read_only=True)
     reviews = EventReviewStore(config.reviews_database)
+    def load_report(key):
+        return financial_report(store, reviewed_report(store, reviews, key), config, datetime.now(timezone.utc))
     outbox = EventOutbox(config.outbox_database)
     route = digest(["discord-channel", config.expected_channel_id])
+    style = getattr(config, 'commentary_style', 'annotated')
     held = []
+    if config.collect_enabled or config.queue_database:
+        from src.breakouts.ep.pipeline import queue_path
+        from src.breakouts.ep.queue import PipelineQueue
+        if Path(queue_path(config)).is_file():
+            queue = PipelineQueue(queue_path(config))
+            queue.recover_delivery_handoffs(datetime.now(timezone.utc))
+            if config.financial_input_path:
+                # New bound inputs can enrich an already analyzed event without
+                # another model call. Each immutable input revision gets one handoff.
+                with queue.connection() as db:
+                    analyses = [dict(r) for r in db.execute('''SELECT * FROM jobs
+                        WHERE stage='ANALYSIS' AND state='COMPLETE' AND expires_at>?
+                        ORDER BY updated_at DESC LIMIT 20''', (datetime.now(timezone.utc).isoformat(),))]
+                for analysis in analyses:
+                    key = json.loads(analysis['result'] or '{}').get('request_key')
+                    if not key:
+                        continue
+                    try:
+                        updated = load_report(key)
+                        if updated.get('sections', {}).get('program_comparisons'):
+                            queue.enqueue('DELIVERY', analysis['ticker'], analysis['document_id'],
+                                analysis['revision_id'] + ':finance:' + updated['finance_input_revision'],
+                                {'request_key': key}, datetime.now(timezone.utc), datetime.fromisoformat(analysis['expires_at']))
+                    except (ValueError, KeyError):
+                        continue
+            for _ in range(20):
+                job = queue.claim('DELIVERY', datetime.now(timezone.utc))
+                if job is None:
+                    break
+                try:
+                    report = load_report(job['payload']['request_key'])
+                    outbox_id = outbox.enqueue(report, route, style=style)
+                    queue.finish(job, 'COMPLETE', 'PERSISTED_TO_DISCORD_OUTBOX_NOT_YET_SENT', datetime.now(timezone.utc),
+                                 result={'outbox_id': outbox_id})
+                except (ValueError, KeyError):
+                    queue.finish(job, 'BLOCKED', 'NO_SENDABLE_CURRENT_DISCLOSURE', datetime.now(timezone.utc))
+                    held.append({'job_id': job['job_id'], 'reason': 'NO_SENDABLE_CURRENT_DISCLOSURE'})
     for item in result["items"]:
         if "report" not in item:
             continue
         try:
-            report = reviewed_report(store, reviews, item["report"]["request_key"])
-            outbox.enqueue(report, route)
+            report = load_report(item['report']['request_key'])
+            outbox.enqueue(report, route, style=style)
         except ValueError:
             held.append({"source_id": item["source_id"], "reason": "NO_SENDABLE_CURRENT_DISCLOSURE"})
     counts = outbox.status()
     if not counts.get("PENDING", 0) and not counts.get("RETRY", 0) and not counts.get("SENDING", 0):
         return {"status": "NO_PENDING_MESSAGES", "outbox": counts, "held": held, "external_requests": 0}
     sender = sender_factory(private_text(config.webhook_file), config.expected_channel_id)
-    sent = outbox.deliver(sender, route, report_loader=lambda key: reviewed_report(store, reviews, key))
+    sent = outbox.deliver(sender, route, report_loader=load_report, style=style)
     return {"status": "PROCESSED", "outbox": outbox.status(), "outcomes": sent, "held": held}

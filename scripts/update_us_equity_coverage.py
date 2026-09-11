@@ -46,7 +46,8 @@ from src.data.fmp import (  # noqa: E402
 )
 from src.data.price_semantics import build_price_semantics_contract  # noqa: E402
 from src.data.broad_history_repair import (  # noqa: E402
-    REPAIR_METHOD, audit_overlap, fetch_replacement, replace_month, verify_repaired_rows,
+    REPAIR_METHOD, audit_overlap, fetch_replacement, replace_month, verify_repaired_rows, load_repair_rules,
+    refresh_canonical_sources,
 )
 from src.data.foundation import (  # noqa: E402
     DataFoundationError,
@@ -100,6 +101,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="audit all continuing securities without building or publishing partitions")
     parser.add_argument("--repair-full-history", action="store_true",
                         help="explicitly refetch and replace entire histories of semantic-drift securities")
+    parser.add_argument("--reuse-frozen-repair-inputs", action="store_true",
+                        help="revalidate hash-bound full raw responses after a reviewed quarantine policy change")
     parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
 
@@ -591,6 +594,8 @@ def _attach_month_end_nominal_close(
 
 def run(args: argparse.Namespace) -> tuple[dict, int]:
     started = time.perf_counter()
+    if getattr(args, "reuse_frozen_repair_inputs", False) and not getattr(args, "repair_full_history", False):
+        raise ValueError("--reuse-frozen-repair-inputs requires --repair-full-history")
     target = (
         pd.Timestamp(args.target_session).normalize()
         if args.target_session
@@ -859,6 +864,14 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
     mapped = _attach_month_end_nominal_close(mapped, after=parent_target, target=target)
     broad_reader = BroadCoverageReader(market_reader=market_reader)
     previous_overlap = broad_reader.load_bars(start=refresh_start, end=parent_target, version=parent)
+    canonical_ids = set(parent_manifest.get("quality_lineage", {}).get("canonical_history_security_ids", []))
+    canonical_ids &= security_id_set
+    mapped, canonical_refresh_proofs = refresh_canonical_sources(
+        mapped=mapped, previous_overlap=previous_overlap, security_ids=canonical_ids,
+        cache_dir=provider_cache_dir, contract=_provider_cache_contract,
+        universe=security_universe, symbols=security_frames["symbols"],
+        refresh_start=refresh_start, target=target, fetcher=get_coverage_historical_ohlcv,
+    )
     adjustment_audit, overlap_failures = audit_overlap(previous_overlap, mapped, parent_presence_ids)
     scope_path = run_dir / "overlap_scope_audit.json"
     scope = {
@@ -887,6 +900,13 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
     repair_contract = {**_provider_cache_contract,
                        "parent_manifest_sha256": parent.manifest_checksum_sha256,
                        "scope_sha256": _sha256(scope_path)}
+    query_mappings, approved_quarantine, rules_contract = (), None, None
+    if overlap_failures:
+        query_mappings, approved_quarantine, rules_contract = load_repair_rules(
+            CONFIG.abs_path("configs/full_history_repair_rules.yaml"),
+            catalog=catalog, market_reader=market_reader,
+        )
+        repair_contract["reviewed_rules"] = rules_contract
     # Sequential per-security downloads and on-disk checkpoints bound memory.
     # A failed security keeps the entire publication closed, not just its rows.
     for index, item in enumerate(overlap_failures):
@@ -899,6 +919,9 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
                 previous=previous, recent=mapped.loc[mapped.security_id.eq(sid)],
                 history_start=str(settings.history_start), target=target,
                 fetcher=get_coverage_historical_ohlcv,
+                query_mappings=query_mappings, approved_quarantine=approved_quarantine,
+                rules_contract=rules_contract,
+                reuse_frozen_inputs=bool(getattr(args, "reuse_frozen_repair_inputs", False)),
             )
             repair_paths.append(path)
             repair_proofs.append({"security_id": sid, "ticker": item["ticker"], **proof})
@@ -918,6 +941,20 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
                           "validated": repair_proofs, "errors": repair_errors}, repair_report_path)
     if repair_errors:
         raise DataFoundationError(f"full-history repair rejected {len(repair_errors)} securities; audit={repair_report_path}")
+    if repair_proofs:
+        inherited = pd.concat([pd.read_parquet(proof["quarantine_path"]) for proof in repair_proofs], ignore_index=True)
+        repair_checks = coverage_bar_quarantine_checks(
+            inherited, source_row_count=sum(proof["rows"] + proof["quarantined_rows"] for proof in repair_proofs),
+            security_universe=security_universe, target_session=target,
+            max_ratio=float(settings.max_bar_quarantine_ratio),
+            max_target_ratio=float(settings.max_target_bar_quarantine_ratio),
+        )
+        if not all(check.passed for check in repair_checks):
+            raise DataFoundationError("full-history inherited quarantine exceeds production quality gates")
+        from dataclasses import replace
+        quarantine_checks.extend(replace(check, name="full_history_" + check.name) for check in repair_checks)
+        quarantine = pd.concat([quarantine, inherited], ignore_index=True)
+        quarantine.to_parquet(quarantine_path, index=False, compression="snappy")
     repair_lineage = {
         "method": REPAIR_METHOD, "security_count": len(repaired_ids),
         "scope_audit_path": str(scope_path), "scope_audit_sha256": _sha256(scope_path),
@@ -964,6 +1001,8 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
         "security_master_rebase": security_master_rebase,
         "price_scale_reconciliation": adjustment_audit,
         "full_security_history_repair": repair_lineage,
+        "canonical_history_security_ids": sorted(canonical_ids | repaired_ids),
+        "canonical_overlap_refresh": canonical_refresh_proofs,
         "explicit_same_session_rebase": same_session_rebase,
         "identity_delta_security_count": len(identity_delta_ids),
         "identity_delta_security_ids": identity_delta_ids,
@@ -1141,6 +1180,8 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
                 },
                 "parent_dataset_version_id": parent.version_id,
                 "full_security_history_repair": repair_lineage,
+                "canonical_history_security_ids": sorted(canonical_ids | repaired_ids),
+                "canonical_overlap_refresh": canonical_refresh_proofs,
                 "price_scale_reconciliation": {
                     "method": "FRESH_OVERLAP_BY_SECURITY_ID_V1",
                     "parent_manifest_sha256": parent.manifest_checksum_sha256,

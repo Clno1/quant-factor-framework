@@ -1297,3 +1297,98 @@ SHA-256=`da8715370ae339dfae52b24f0c3a51ffda85896ebffa69fefe32a246bf929953`；
 再做证据绑定的纠正和同冻结源双重幂等核验；禁止只调整日期来让门禁通过。
 本次仅定位，不改身份政策，不发布候选。本日行情/PIT未执行，旧324只历史恢复阻断仍未解决。
 正式coverage/PIT/因子截至09-04，茶杯柄v3仍0/5；完整运行和监控信息见SG运维47与茶杯柄29。
+
+### 30.4 2026-09-11 受控纠正与完整历史恢复
+
+本轮执行已改变30.3的“仅定位”状态，不能继续将其当作最新修复结论。
+
+1. SEC证据确认HYMCZ是认股权证，BDXA是优先股存托股份，不是HYMC/BDX普通股。
+   见[Hycroft 2021 10-K封面](https://www.sec.gov/Archives/edgar/data/1718405/000171840522000016/hymc-20211231.htm)
+   和[BD 2019 8-K证券类别](https://www.sec.gov/Archives/edgar/data/10795/000114036119009406/nc10002034x1_8k.htm)。
+   `configs/security_master_corrections.yaml`新增两条精确源记录纠正；验证ticker、名称、类别、
+   交易所、CIK、CUSIP、ISIN、上市日及活跃标记后，在身份合并前排除这两个非普通股工具。
+   原始冻结源不改写，审计保留源记录和证据；不按ticker后缀猜测，不移动历史日期。
+2. `configs/full_history_repair_rules.yaml`限定STRR查询映射：只对
+   `sec_9227ef0c29095fddbf7b0a2e9d60d9e0`、2025-08-22至09-04使用STRR向FMP查询，
+   存储的历史ticker仍为HSON，09-05才为STRR。旧STRR属于其他身份，不受该规则影响。
+   依据[2025-09-02 8-K](https://www.sec.gov/Archives/edgar/data/1210708/000121070825000081/hson-20250902.htm)
+   与[合并公告](https://www.sec.gov/Archives/edgar/data/1210708/000119312525185799/d931756dex991.htm)。
+3. ATCX两行、BGLC两行只在身份、日期、ticker、OHLC、adj_close、volume和坏行原因与旧隔离台账
+   完全一致时继承隔离。旧版本、manifest及quarantine哈希均固定；任何新坏行或数值变化仍拒绝。
+   旧台账没有新价格语义合同，所以仅作为“已隔离原始证据”认证，绝不授权旧有效价格参与新计算。
+   新有效数据仍必须满足当前canonical合同；不允许移除上一正式版本中有效的交易日。
+4. 完整恢复方法升级为`FULL_SECURITY_CANONICAL_REPLACEMENT_V2`。修复过的security_id存入
+   发布manifest的`quality_lineage.canonical_history_security_ids`，以后每天用同一单股canonical
+   来源取近期重叠窗口并再次认证，避免次日bulk小数成交量重新污染整数历史。不是每天重取全历史；
+   真正的非一致历史修订仍须显式完整恢复。近期源证明保存在`canonical_overlap_refresh`。
+
+12:23:47 SGT新主表正式发布，target=2026-09-10，quality=PASS：
+generation=`496db448b54e4ae49701512b3acfd64c`，manifest SHA-256=
+`0afd6b0156d2efbf6a41537c0cfad1459c4ee9dc762ff36d6d91815d17c64a49`。
+同一冻结源先构建两次，master/symbols/classifications/identity_keys/history_policy五表精确一致，
+再第三次发布；运行报告在`outputs/data_audits/cup_upstream_repair_20260911/`。
+
+12:26:48启动target=09-10完整行情恢复，run=
+`data/lake/staging/us_equity_coverage_incremental/asof=2026-09-10/run=20260911T042651Z_291b3f89`。
+身份增量43只、36,219行、别名失败0；正在取bulk重叠源与执行整票认证。
+这只是运行进度，不表示coverage/PIT已发布，也不产生茶杯柄合格观察日。
+最终状态见本节后续记录及SG运维48；旧staging、checkpoint、版本和隔离记录均保留。
+
+本次target=09-10重叠审计实际需恢复421只，不能沿用旧target的321/324计数。
+运行发现PROP的2019-01-04、2023-10-16两行坏数据，逐项比对确认与同一旧隔离版本完全一致。
+全421只与旧台账交集共6行、3只证券，已将PROP两行加入精确清单；并非允许任意新坏行。
+12:57的原始取数运行已验证CALC(1478行)、STRR(1927行、零缺日)、ATCX(1861有效行、2隔离行)，
+该轮已记录PROP失败，不会改写该失败为成功。
+
+新增显式`--reuse-frozen-repair-inputs`，只可配合`--repair-full-history`：在审阅隔离政策改变后，
+可重新读取完整且哈希正确的原始响应，创建新规则绑定的验证产物，而不是复用旧PASS/FAIL。
+target、主表、父行情、scope、方法、身份、历史窗口及具体查询映射必须相同；只允许隔离审阅规则
+不同。原始响应不全不复用，哈希变化或多份不同响应均拒绝；每一行重新执行身份、日期、OHLCV、
+完整性和隔离精确匹配。新产物记录原始证据路径/哈希和验证时间，不把重验时间冒充取数时间。
+不同target/主表/coverage的旧checkpoint仍不得恢复。规则变更前另行备份见SG运维48。
+
+#### 本轮生产终态（2026-09-11 13:32 SGT）
+
+- 重验421/421通过、失败0，421份完整原始返回均重新验证，继承隔离6行。
+  `run=20260911T051205Z_f84e5438/audit.json`的所有质量检查通过；93个月分片重建并精确核验。
+- 13:22:38正式coverage发布为`76e68448ccea48f5b5e1dbf871c9f6c9`，target=09-10，
+  10,502,974行、8,012只历史证券，manifest SHA-256=
+  `31d54687942c40bd6f6e15cf2f870afd4c8b9180aad192e10d833713d2a2c97c`。
+  隔离记录共7行：上述6条历史坏行，另有09-03 LPSN bulk非正价格按既有门槛隔离；
+  未把坏价格修成合法价格，target坏行仍为0。quarantine SHA-256=
+  `8a244717ee6309a418c91a5be5997d258b3ac08db7b10aa10546de147ea06d29`。
+- 13:25:28完整PIT重建发布`857031854a554d9bbfee942a6bfc3919`，
+  manifest=`e77623377b5c12a86f1e9d691d1d93415e360a1da78b23d432d6a8b17fd9c68e`，
+  membership=`5407240c1f65ac0eba576583c1b5cb997539993c88760381a395b068d0e075e4`，
+  eligibility=`20999886ffdb35b92237e17735b4548c165145f450c1bf6e637008d21ea44a96`。
+  绑定同一coverage/主表；1681个历史交易日无门槛失败，最差覆盖率99.8484%。
+- STRR映射的九个交易日在新完整历史中仍标为HSON；真实股票代码历史没有被改写。
+- 常态daily pipeline 13:28:25 SUCCESS，三个阶段均认证NOOP复核已发布版本；报告
+  `outputs/data_audits/broad_daily_pipeline/target=2026-09-10/run=20260911T052821Z_4d4b3896.json`。
+- 八因子由既定OnSuccess恢复，generation=`b6108d673ac447dab5e7be88e7f76ca1`，
+  截至13:32为42/648月因子分片，仍在计算，不能标成八因子已发布。
+  茶杯柄候选已经成功，不以八因子完成为前置条件；完整验收见茶杯柄30及SG运维48。
+
+### 30.5 2026-09-11 15:54至16:05 SGT：八因子正式发布验收
+
+本节替代30.4最后的“八因子仍在计算”状态。`quant-broad-factor-data.service`实际于
+13:28:25启动、15:17:46成功退出，历时1小时49分21秒，CPU时间1小时14分10秒，cgroup峰值
+709.1MiB、swap峰值0。run_report的31.708秒是最后一个受控执行段，不能当成整轮耗时。
+
+- generation=`b6108d673ac447dab5e7be88e7f76ca1`，publication_id=
+  `30cfe535-0330-4c09-a5c2-7bdcaee45b11`，manifest SHA-256=
+  `f3e640167f3ab60e7a25116c0307b50f62cf24baf98f923fdcb93ea714059f7b`。
+- target=2026-09-10，648/648月因子分片已发布；绑定30.4修复后的coverage、PIT和Security Master。
+- 15:18:01自动shadow核验成功，检查93个行情子分片、648个因子分片、主表、membership/eligibility
+  哈希及版本绑定，并执行真实截面查询。该日记录是宽基数据验收，不是茶杯柄盘中通过日。
+- 独立HTTP验收覆盖八个因子的完整有效截面：MOM_12M/1M/3M/6M分别2726/2846/2811/2778只，
+  REVERSAL/TURNOVER/VOL_20D/VOL_60D分别2846/2846/2846/2834只。
+  用返回clean乘预设direction，通过pandas重新计算并列最小排名和平均百分位，全部一致；
+  完整截面请求约0.91至0.99秒。此项验证排名口径，不冒充重新计算全部历史raw公式。
+- MDB和AEVA近月历史接口均200、约0.91/0.99秒；全历史分别1681/1643行、14.056/13.790秒，
+  均结束于09-10并绑定新版本。全历史查询仍较慢，是性能余量，不应描述成亚秒全历史体验。
+- readiness仅`PIT_CLASSIFICATION_POLICY`、`PIT_INDUSTRY_COVERAGE`阻断，退出码2为预期。
+  不影响本次FACTOR_DATA发布或茶杯柄候选，不代表正式宽基置信研究已获准。
+
+数据shadow最近连续日期仅09-10（1/5），历史通过日不拼接；原已上线的web默认开关未变。
+茶杯柄v3独立观察仍0/5、发送false。运维旧候选覆盖新正式发布的修复、备份和后续检查时间见SG运维49。

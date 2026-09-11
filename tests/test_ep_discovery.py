@@ -72,6 +72,64 @@ class FakeClient:
     def fetch(self, url):
         return self._fetch(url, "html")
 
+    def fetch_pdf(self, url):
+        return self._fetch(url, "pdf")
+
+
+def test_sec_pdf_is_archived_independently_without_automatic_financial_approval(observed, monkeypatch):
+    from src.breakouts.ep.llm_contract import prepare_request
+    from src.breakouts.ep.models import digest
+    store, report = observed
+    pdf_url = BASE + 'slides.pdf'
+    primary = (b'<table><tr><td>99.1</td><td><a href="release.htm">Results</a></td></tr>'
+               b'<tr><td>99.2</td><td><a href="slides.pdf">Investor presentation</a></td></tr></table>')
+    parsed = {'status': 'EXTRACTED', 'page_count': 2, 'parser_version': 'fixture',
+              'paragraphs': [{'id': 'page001-line0001', 'page': 1, 'text': 'Unbound financial table'}]}
+    parsed['text_revision'] = digest(parsed)
+    monkeypatch.setattr('src.breakouts.ep.pdf_worker.parse_pdf_bounded', lambda _: parsed)
+    http = FakeClient({PRIMARY: primary, pdf_url: b'%PDF-fixture'})
+    resolver = OfficialSourceDiscovery(store, http, REGISTRY, clock=lambda: NOW + timedelta(minutes=10))
+    event = report['candidates'][0]['events'][0]
+    result = resolver.resolve_event(report['run_id'], {'ticker': 'SNOW', 'identity': {}}, event)
+    assert result['status'] == 'DOCUMENT_MATCHED'
+    assert len(result['attachments']) == 1
+    attachment = store.source_detail(result['attachments'][0]['source_id'])
+    assert attachment['result']['status'] == 'OFFICIAL_ATTACHMENT_TEXT_AVAILABLE'
+    assert attachment['result']['attachment_proof']['primary_fetch_id']
+    assert attachment['result']['parent_source_id'] == result['source_id']
+    assert attachment['parsed']['paragraphs'][0]['page'] == 1
+    assert not attachment['result']['eligible_for_rating']
+    with pytest.raises(ValueError, match='ALIGNED_ORIGINAL_TEXT'):
+        prepare_request(attachment)
+    assert 'PDF_EVENT_CONTEXT_NOT_VERIFIED' in result['incomplete_reasons']
+    assert http.requests == 4
+    second = resolver.resolve_event(report['run_id'], {'ticker': 'SNOW', 'identity': {}}, event)
+    assert len(second['attachments']) == 1 and http.requests == 4
+    latest = store.source_report(report['run_id'])
+    assert latest['status'] == 'SOURCE_PASS_COMPLETED'
+    assert len(latest['sources']) == 2
+    assert {r['status'] for r in latest['sources']} == {'DOCUMENT_MATCHED', 'OFFICIAL_ATTACHMENT_TEXT_AVAILABLE'}
+
+
+def test_sec_pdf_failure_and_batch_entry_are_visible(observed):
+    store, report = observed
+    primary = b'<table><tr><td>99.2</td><td><a href="slides.pdf">Slides</a></td></tr></table>'
+    result = run(store, report, FakeClient({PRIMARY: primary, BASE + 'slides.pdf': 'SOURCE_HTTP_403'}))
+    assert result['status'] == 'PARTIAL_SOURCES'
+    attachments = [r for r in result['sources'] if r.get('source_route') == 'SEC_EXHIBIT_PDF']
+    assert len(attachments) == 1 and attachments[0]['status'] == 'SOURCE_HTTP_403'
+
+
+def test_sec_pdf_decode_count_is_bounded_per_event(observed):
+    store, report = observed
+    primary = ('<table>' + ''.join(f'<tr><td>99.{i}</td><td><a href="slides{i}.pdf">Slides</a></td></tr>'
+                                   for i in range(1, 4)) + '</table>').encode()
+    http = FakeClient({PRIMARY: primary})
+    result = run(store, report, http)
+    assert http.requests == 4  # submissions, primary, two failed PDF fetches
+    parent = next(r for r in result['sources'] if r.get('source_route') == 'SEC_AUTO_DISCOVERY')
+    assert 'PDF_ATTACHMENT_BUDGET_EXCEEDED' in parent['incomplete_reasons']
+
 
 def run(store, report, http=None, **options):
     return OfficialSourceDiscovery(store, http or FakeClient(), options.pop("registry", REGISTRY),
@@ -80,7 +138,8 @@ def run(store, report, http=None, **options):
 
 def test_submissions_require_identity_aligned_columns_and_known_asof():
     assert select_filings(submissions(), "SNOW", CIK, "2026-09-02", NOW)[0]["url"] == PRIMARY
-    assert select_filings(submissions(), "SNOW", CIK, "2026-09-03", NOW) == []
+    assert select_filings(submissions(), "SNOW", CIK, "2026-09-03", NOW)[0]['url'] == PRIMARY
+    assert select_filings(submissions(), "SNOW", CIK, "2026-09-04", NOW) == []
     assert select_filings(submissions(), "SNOW", CIK, "2026-09-02", NOW - timedelta(days=2)) == []
     for change in ({"cik": 1}, {"tickers": ["OTHER"]}, {"filings": {}}):
         with pytest.raises(ValueError):

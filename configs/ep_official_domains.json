@@ -1,0 +1,16 @@
+{
+  "version": "ep-official-domains-v1",
+  "issuers": {
+    "DSGX": {"name": "The Descartes Systems Group Inc.", "cik": "0001050140", "root_url": "https://www.descartes.com/", "ir_host": "www.descartes.com", "index_urls": ["https://www.descartes.com/news-events/financial-news"]},
+    "KR": {"name": "The Kroger Co.", "cik": "0000056873", "root_url": "https://www.thekrogerco.com/", "ir_host": "www.thekrogerco.com", "index_urls": ["https://www.thekrogerco.com/", "https://www.thekrogerco.com/newsroom/"]},
+    "MNY": {"name": "MoneyHero Limited", "cik": "0001974044", "root_url": "https://www.moneyherogroup.com/", "ir_host": "investors.moneyherogroup.com", "index_urls": ["https://investors.moneyherogroup.com/"]},
+    "CPRT": {"name": "Copart, Inc.", "cik": "0000900075", "root_url": "https://www.copart.com/", "ir_host": "www.copart.com", "index_urls": ["https://www.copart.com/content/us/en/press-releases/index"]},
+    "AFRM": {"name": "Affirm Holdings, Inc.", "cik": "0001820953", "root_url": "https://www.affirm.com/", "ir_host": "investors.affirm.com", "index_urls": ["https://investors.affirm.com/", "https://investors.affirm.com/financial-information/quarterly-results"]},
+    "ANF": {"name": "Abercrombie & Fitch Co.", "cik": "0001018840", "root_url": "https://corporate.abercrombie.com/about-us/", "ir_host": "corporate.abercrombie.com", "index_urls": ["https://corporate.abercrombie.com/investors/news-and-events/news/"]},
+    "GTLB": {"name": "GitLab Inc.", "cik": "0001653482", "root_url": "https://about.gitlab.com/", "ir_host": "ir.gitlab.com", "index_urls": ["https://ir.gitlab.com/news/default.aspx"]},
+    "NYAX": {"name": "Nayax Ltd.", "cik": "0001901279", "root_url": "https://www.nayax.com/", "ir_host": "ir.nayax.com", "index_urls": ["https://ir.nayax.com/news/default.aspx"]},
+    "PLAB": {"name": "Photronics, Inc.", "cik": "0000810136", "root_url": "https://www.photronics.com/investor-relations/", "ir_host": "photronicsinc.gcs-web.com", "index_urls": ["https://photronicsinc.gcs-web.com/press-releases"]},
+    "SAIC": {"name": "Science Applications International Corporation", "cik": "0001571123", "root_url": "https://www.saic.com/", "ir_host": "investors.saic.com", "index_urls": ["https://investors.saic.com/news-events/news-releases"]},
+    "SNOW": {"name": "Snowflake Inc.", "cik": "0001640147", "root_url": "https://www.snowflake.com/en/", "ir_host": "investors.snowflake.com", "index_urls": ["https://investors.snowflake.com/overview/"]}
+  }
+}

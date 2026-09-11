@@ -13,6 +13,12 @@ from uuid import uuid4
 from .models import ALGORITHM_VERSION, CatalystSnapshot, digest, encode, ticker, timestamp
 
 
+def _source_document_key(row):
+    payload = json.loads(row['payload_json'])
+    attachment = (payload.get('final_url') or row['source_id']) if payload.get('parent_source_id') else ''
+    return row['document_id'], row['revision_id'], attachment
+
+
 class EpStore:
     def __init__(self, path: str | Path, *, read_only: bool = False) -> None:
         self.path = Path(path).resolve()
@@ -452,7 +458,8 @@ class EpStore:
         if self.schema_version < 2:
             return {"status": "NOT_ENRICHED", "sources": []}
         with self.connection() as db:
-            query = "SELECT * FROM ep_source_runs WHERE run_id=?"
+            query = """SELECT * FROM ep_source_runs WHERE run_id=?
+                AND COALESCE(json_extract(config_json, '$.route'), '') != 'OFFICIAL_ATTACHMENT'"""
             args = [run_id]
             if as_of:
                 query += " AND finished_at IS NOT NULL AND finished_at<=?"
@@ -471,7 +478,7 @@ class EpStore:
                 source_args.extend([timestamp(as_of), timestamp(as_of)])
             latest = {}
             for item in db.execute(source_query + " ORDER BY a.observed_at, a.rowid", source_args):
-                latest[(item["document_id"], item["revision_id"])] = item
+                latest[_source_document_key(item)] = item
             result["summary_scope"] = "LATEST_BATCH_ONLY"
             result["sources"] = [{"source_id": item["source_id"], "ticker": item["ticker"],
                                   "source_batch_id": item["batch_id"], "source_finished_at": item["source_finished_at"],
@@ -495,7 +502,7 @@ class EpStore:
             rows = db.execute(query + " ORDER BY a.observed_at DESC, a.rowid DESC", args).fetchall()
         latest = {}
         for row in rows:
-            latest.setdefault((row["document_id"], row["revision_id"]), row["source_id"])
+            latest.setdefault(_source_document_key(row), row["source_id"])
         return [self.source_detail(source_id, as_of=as_of) for source_id in latest.values()]
 
     def source_detail(self, source_id: str, *, as_of: datetime | None = None) -> dict:

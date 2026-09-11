@@ -932,3 +932,72 @@ MDB仍是旧v1零信号/null误报代理，不能渲染为0%误报。
 新日更在SECURITY_MASTER失败：HYMC/HYMCZ、BDX/BDXA区间重叠，publication=null；
 应与昨日US_EQUITY_COVERAGE重叠认证失败分开显示，不能说主表已更新或行情正在计算。
 本次未改快照、历史事件、发送配置或页面代码。冻结报告路径及恢复建议见SG运维47、宽基实施30.3。
+
+## 45. 2026-09-11 恢复任务的状态解读
+
+主表修复于12:23:47成功，target=09-10；此后不能再把早上同target的旧FAILED当作当前主表终态。
+完整行情恢复由独立受控`quant-cup-history-repair-20260911.service`执行，其journal、
+run目录`identity_delta_audit.json`、`overlap_scope_audit.json`、`full_history_repair.json`
+以及最终正式版本才是各阶段的证据，详见SG运维48、宽基实施30.4。
+
+执行中应区分：主表已发布、完整行情仍在恢复、PIT/候选尚待校验、茶杯柄最近完整日仍失败。
+进程activating不代表发布成功，单票validated不代表全池成功；不得手工改运维快照来消除红色状态。
+缺跑交易日继续保留，delivery=false与v3观察门槛不变。本轮不修改页面状态聚合代码；
+独立恢复任务可能暂未体现在日更总报告，应联合journal和正式版本判断，不能只看早上的失败横幅。
+
+13:32收尾复核：新coverage/PIT均已正式发布，今日候选准备SUCCESS；常态daily pipeline
+于13:28:25认证NOOP三阶段并记录SUCCESS，已消除“只有临时任务成功、常态报告仍失败”的状态差。
+八因子已由正常OnSuccess启动，仍在计算；不能因为上游成功而将它也显示成已发布。
+
+运维快照13:30:26仍保留intraday_momentum=DEGRADED，reason明确为最近完整交易日09-08
+的INSUFFICIENT_EVALUABLE_TICKER_COVERAGE、EXCESSIVE_MINUTE_DATA_GAPS，target=09-11。
+这条是应当保留的真实历史失败，不是新行情修复无效；今日候选已准备，但尚未有今日盘中周期。
+v3观察仍0/5、发送关闭。主站200、运维healthz 200，未手工修改快照或历史失败记录。
+最终数据哈希、运行路径、资源和测试结果见SG运维48及宽基实施30.4。
+
+## 46. 2026-09-11 正式发布与早期失败的时间顺序
+
+15:54后的真实核验确认八因子已发布，自动shadow全量哈希检查PASS，详情见宽基实施30.5。
+运维`/api/projects`却仍显示主表overlapping ticker intervals阻断。证据对比表明：
+失败audit生成于04:12:05.790703 UTC，新正式主表创建于04:23:45.989113 UTC；adapter只按
+target匹配候选FAIL，漏掉后来正式重建成功的时间顺序。
+
+修复只影响状态聚合：相同target且当前正式代次创建时间严格晚于audit，旧失败可被正式成功
+取代当前阻断状态；metadata保留候选FAIL、原报告路径、原因和
+`candidate_superseded_by_publication=true`。较晚FAIL或缺乏可靠时间顺序仍阻断，绝不按文件mtime
+把拷贝过的旧文件当作新生产证据；没有改写台账或手工将页面标绿。
+
+本地/SG各65项相关测试通过，覆盖先失败后发布、先发布后失败、同一时刻、跨时区、缺失及
+损坏时间等。备份路径见SG运维49。watchdog于16:05:23 SGT生成的真实API快照：
+主表/coverage/PIT/八因子SUCCESS；宽基数据观察1/5、正式置信研究仅PIT行业两项BLOCKED。
+`/api/jobs/intraday_momentum`仍DEGRADED并保留09-08失败，茶杯柄v3独立0/5，不能混同。
+
+巡检证据还包括八因子完整截面排名复算PASS、MDB/AEVA全历史HTTP200；全历史约14秒而非
+亚秒响应，应作为性能余量记录。运维healthz约7ms、快照新鲜度正常。两个Web均未重启。
+Codex既有sg任务已增加盘前、开盘后和收盘后检查，实际时间及静默通知规则见SG运维49。
+
+18:55实际API复核：healthz 200、快照新鲜；专项前四阶段SUCCESS，茶杯柄任务仍明确保留
+09-08的DEGRADED及v3的0/5。18:30候选timer成功不等于今日盘中通过，未改写旧失败。
+16:05以来相关四项服务无error级journal记录。此轮属于正常盘前等待，不重复通知用户。
+
+22:07开盘后API复核：当前任务RUNNING、heartbeat新鲜，status_reason和独立完整日记录仍保留
+09-08的真实FAIL，不被当前运行覆盖。今日v3截至22:05实际7批/280次、等待277、不可评估3，
+检测错误0；今日WBI唯一缺口2个。API部分质量指标（94.64%可评估覆盖、13个缺口）仍引用
+最近完整日09-08，不是今日指标；解释时必须与今日SQLite按session/algorithm统计分开。
+共享monitor的2次error周期也不是cup的0次检测错误。没有手工改快照或补写当日通过记录。
+本次首次证实真实盘中持续落库，发送仍关闭，v3独立0/5；通知运行恢复并提示WBI未决缺口，
+不宣告整日验收成功。详细证据见茶杯柄32和SG运维49末尾。
+
+## 47. 2026-09-11 22:51：区分盘中统计、历史验收与错误粒度
+
+实际API快照22:51:33显示RUNNING、今日新鲜heartbeat、算法v3，status_reason仍保留09-08
+完整日FAIL，进度0/5。未被SCHEDULED覆盖，也没有复用v2通过日。
+API中的可评估覆盖94.64%、缺口13/5.36%来自09-08；今日22:50一致SQLite快照为15批/600次，
+覆盖96%、唯一缺口8/4%。报告必须注明时间和session，不将两套质量字段混成一个日结。
+建议后续界面将今日和最近完整日指标显式分区，保留旧失败和算法版本；本轮不修改聚合代码或台账。
+
+今日cup错误0，共享monitor两次错误周期，journal无error级条目，三个口径不可相互替代。
+WBI2/UAN6共8个唯一未决缺口不等于14次不可评估，更不能累加observation_count作为唯一缺口数。
+22:50 IBTA零突破成交量已REJECTED、无signal/比例，未发现非正成交量绕过保护。
+healthz 200、快照约25秒新鲜、watchdog成功，盘中持续运行无重启，资源PASS。
+详细门槛、五日排除原因、前八拒绝原因、MDB及v3后验代理缺口见茶杯柄33、SG运维50。

@@ -7,9 +7,11 @@ import re
 import sqlite3
 
 from .llm_event_claims import prepare_atomic_packet, validate_atomic
+from .llm_event_context import prepare_context_packet, validate_context
 from .llm_provider import extract_kimi_response, extract_response
 from .models import digest, timestamp
 from .brief import source_brief
+from .identity import current_profile
 
 
 def call_report(store, request_key):
@@ -20,7 +22,7 @@ def call_report(store, request_key):
     if row is None:
         raise ValueError("EVENT_CALL_NOT_FOUND")
     journal = json.loads(row["request_json"])
-    if journal.get("protocol") != "event-claims":
+    if journal.get("protocol") not in {'event-claims', 'event-context'}:
         raise ValueError("EVENT_CLAIMS_PROTOCOL_REQUIRED")
     base = {"request_key": request_key, "source_id": row["source_id"], "status": row["status"],
             "started_at": row["started_at"], "finished_at": row["finished_at"],
@@ -29,21 +31,23 @@ def call_report(store, request_key):
         return {**base, "claims": [], "rejected": [], "reviewable": False}
     packet = journal["event_packet"]
     source = store.source_detail(row["source_id"])
-    current = prepare_atomic_packet(source, [p["paragraph_id"] for p in packet["request"]["untrusted_blocks"]])
+    contextual = journal['protocol'] == 'event-context'
+    current = (prepare_context_packet if contextual else prepare_atomic_packet)(
+        source, [p['paragraph_id'] for p in packet['request']['untrusted_blocks']])
     if current != packet:
         raise ValueError("EVENT_SOURCE_CHANGED_REVIEW_INVALID")
     body = json.loads(row["response_json"])
     raw, _ = (extract_response if journal["provider"] == "openai" else extract_kimi_response)(body)
-    validation = validate_atomic(packet, raw)
+    validation = (validate_context if contextual else validate_atomic)(packet, raw)
+    if contextual:
+        base.update(protocol='event-context', sections=validation['sections'])
     brief = source_brief(source, datetime.now(timezone.utc))
     profile = store.profiles(datetime.now(timezone.utc)).get(source["ticker"], {})
     identity = profile.get("profile") or {}
-    received = profile.get("observed_at")
-    age = datetime.now(timezone.utc) - datetime.fromisoformat(received) if received else None
     security_eligible = (profile.get("status") == "OK" and identity.get("asset_type") in {"STOCK", "ADR"}
                          and identity.get("exchange") in {"NASDAQ", "NYSE", "AMEX"}
-                         and identity.get("is_actively_trading") is True and age is not None
-                         and timedelta(0) <= age <= timedelta(hours=24))
+                         and identity.get("is_actively_trading") is True
+                         and current_profile(profile, datetime.now(timezone.utc)))
     claims = [{**c, "binding_id": digest({"request_key": request_key, "packet_hash": packet["packet_hash"],
                                          "validator": validation["version"], "claim": c})}
               for c in validation["accepted"]]
@@ -161,7 +165,9 @@ def render_reviewed(result):
             lines.extend([f"引文 {evidence['paragraph_id']}：{plain(evidence['quote'])}",
                           f"完整上下文：{plain(evidence['full_paragraph'])}"])
     for item in result["rejected"]:
-        lines.append("[BLOCKED] " + plain(item["note"]["text"]) + " | " + ", ".join(item["reasons"]))
+        lines.append("[BLOCKED] " + plain(item.get('note', {}).get('text', item.get('disclosure_id', ''))) + " | " + ", ".join(item["reasons"]))
+    if result.get('sections'):
+        lines.append('程序比较：' + ', '.join(result['sections']['comparison_blockers']))
     if result.get("source_url"):
         lines.append("来源：" + result["source_url"])
     return "\n".join(lines)

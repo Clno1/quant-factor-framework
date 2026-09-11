@@ -459,8 +459,21 @@ def test_identity_history_delta_cache_reuses_only_the_exact_binding(tmp_path):
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize(
+    "created_at,generated_at,expected_status",
+    [
+        (None, None, JobStatus.BLOCKED),
+        ("2026-08-13T03:00:00+00:00", "2026-08-13T03:30:00+00:00", JobStatus.BLOCKED),
+        ("2026-08-13T03:30:00+00:00", "2026-08-13T03:30:00+00:00", JobStatus.BLOCKED),
+        ("2026-08-13T03:40:00+00:00", "2026-08-13T03:30:00+00:00", JobStatus.SUCCESS),
+        ("2026-08-13T11:40:00+08:00", "2026-08-13T03:30:00+00:00", JobStatus.SUCCESS),
+        ("2026-08-13T03:40:00+00:00", None, JobStatus.BLOCKED),
+        ("2026-08-13T03:40:00+00:00", "invalid", JobStatus.BLOCKED),
+        ("invalid", "2026-08-13T03:30:00+00:00", JobStatus.BLOCKED),
+    ],
+)
 def test_operations_stage_surfaces_latest_security_master_candidate_failure(
-    monkeypatch,
+    monkeypatch, created_at, generated_at, expected_status,
 ):
     job = JobDefinition(
         job_id="broad_us_pipeline",
@@ -488,6 +501,7 @@ def test_operations_stage_surfaces_latest_security_master_candidate_failure(
                 "target_session": "2026-08-12",
                 "active_count": 5733,
                 "status": "PUBLISHED",
+                "created_at": created_at,
             },
         },
     )
@@ -495,6 +509,7 @@ def test_operations_stage_surfaces_latest_security_master_candidate_failure(
         "src.operations.adapters.broad._latest_security_master_audit",
         lambda: {
             "target_session": "2026-08-12",
+            "generated_at": generated_at,
             "quality": {
                 "status": "FAIL",
                 "identity_security_coverage": 0.9998,
@@ -544,6 +559,16 @@ def test_operations_stage_surfaces_latest_security_master_candidate_failure(
     )
 
     security_stage = result.projects[0].stages[0]
+    assert security_stage["metadata"]["candidate_report_path"] == "/audit/latest.json"
+    assert security_stage["metadata"]["candidate_quality_status"] == "FAIL"
+    assert security_stage["metadata"]["candidate_superseded_by_publication"] == (
+        expected_status == JobStatus.SUCCESS
+    )
+    if expected_status == JobStatus.SUCCESS:
+        assert security_stage["status"] == JobStatus.SUCCESS.value
+        assert "正式代次" in security_stage["detail"]
+        assert "最新证券主表候选未通过质量门禁" not in result.snapshots[0].status_reason
+        return
     assert security_stage["status"] == JobStatus.BLOCKED.value
     assert "10184/10186" in security_stage["detail"]
     assert security_stage["metadata"]["candidate_target_session"] == "2026-08-12"

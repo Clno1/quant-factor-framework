@@ -10,7 +10,7 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from .models import NEW_YORK, digest, ticker, timestamp
 from .sec_source import SEC_PARSER_VERSION, parse_sec_attachment
-from .source_verifier import verify_document
+from .source_verifier import verify_sec_event
 
 
 def load_registry(path: Path) -> dict:
@@ -49,8 +49,13 @@ def select_filings(payload: dict, symbol: str, cik: str, event_day: str, now: da
         raise ValueError("SEC_RECENT_SCHEMA_UNSUPPORTED")
     if len({len(recent[k]) for k in keys}) != 1:
         raise ValueError("SEC_RECENT_COLUMNS_MISALIGNED")
-    start = date.fromisoformat(event_day)
-    end = start + timedelta(days=3)
+    from .catalyst import event_window
+    event_date = date.fromisoformat(event_day)
+    # Include the previous trading session (also across holidays/weekends).
+    # This selects candidates only; document alignment remains mandatory.
+    event_at = datetime.combine(event_date, datetime.min.time(), NEW_YORK)
+    start = event_window(event_at)['start'].astimezone(NEW_YORK).date()
+    end = event_date + timedelta(days=3)
     output = []
     for values in zip(*(recent[k] for k in keys)):
         row = dict(zip(keys, values))
@@ -69,7 +74,7 @@ def select_filings(payload: dict, symbol: str, cik: str, event_day: str, now: da
         accession = row["accessionNumber"].replace("-", "")
         row["url"] = f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{accession}/{row['primaryDocument']}"
         output.append(row)
-    return sorted(output, key=lambda r: (r["filingDate"], r["acceptanceDateTime"], r["accessionNumber"]))
+    return sorted(output, key=lambda r: (r["filingDate"], r["acceptanceDateTime"], r["accessionNumber"]), reverse=True)
 
 
 def exhibit_links(raw: bytes, primary_url: str) -> list[dict]:
@@ -109,6 +114,7 @@ class OfficialSourceDiscovery:
         self.memo = {}
         self.skip_existing = skip_existing
         self.prioritize_current = prioritize_current
+        self.pending_attachments = []
 
     def _fetch(self, batch, url, kind="html"):
         self.client.validate_url(url)
@@ -128,12 +134,51 @@ class OfficialSourceDiscovery:
                 fetch_id = self.store.save_fetch(batch, url, result, self.clock())
                 self.memo[key] = (result, cached["raw"], fetch_id)
                 return self.memo[key]
-        fetched = self.client.fetch_json(url) if kind == "json" else self.client.fetch(url)
+        fetch = {"json": self.client.fetch_json, "html": self.client.fetch}
+        fetched = self.client.fetch_pdf(url) if kind == "pdf" else fetch[kind](url)
         raw = fetched.pop(kind, None)
         result = {**fetched, "kind": kind, "cache_used": False}
         fetch_id = self.store.save_fetch(batch, url, result, self.clock(), raw=raw)
         self.memo[key] = (result, raw, fetch_id)
         return self.memo[key]
+
+    def _save_attachments(self, run_id, candidate, event, parent_source_id):
+        attachments = []
+        for meta, body, parsed, url in self.pending_attachments:
+            meta = {**meta, 'parent_source_id': parent_source_id,
+                    'llm': 'NOT_CONFIGURED', 'delivery': 'DISABLED_SHADOW_ONLY'}
+            # One attempt per event per batch; the parent run must already be finished.
+            batch = self.store.start_source_run(run_id, {'parent_source_id': parent_source_id,
+                'route': 'OFFICIAL_ATTACHMENT'}, self.clock())
+            aid = self.store.save_source_attempt(batch, candidate['ticker'], event, meta,
+                                                self.clock(), raw=body, parsed=parsed)
+            self.store.finish_source_run(batch, {'status': meta['status']}, self.clock())
+            attachments.append({'source_id': aid, 'status': meta['status'], 'url': url})
+        self.pending_attachments = []
+        return attachments
+
+    def _pdf_attachment(self, batch, base, filing, link, primary_fetch_id, primary_sha256):
+        from .pdf_worker import parse_pdf_bounded
+        result, raw, fid = self._fetch(batch, link['url'], 'pdf')
+        parsed = parse_pdf_bounded(raw) if result['status'] == 'FETCHED' else None
+        status = result['status']
+        if parsed:
+            status = ('OFFICIAL_ATTACHMENT_TEXT_AVAILABLE' if parsed['status'] == 'EXTRACTED'
+                      else parsed['status'])
+        meta = {**base, 'source_route': 'SEC_EXHIBIT_PDF', 'status': status,
+                'final_url': result.get('final_url'), 'retrieved_at': result['received_at'],
+                'raw_sha256': result.get('raw_sha256'), 'fetch_id': fid,
+                'relationship': 'SAME_CIK_ACCESSION_EXHIBIT_LINK',
+                'attachment_proof': {'primary_url': filing['url'], 'primary_fetch_id': primary_fetch_id,
+                    'primary_sha256': primary_sha256, 'exhibit_label': link['label'],
+                    'accepted_at': filing['acceptanceDateTime'], 'accession': filing['accessionNumber']},
+                'analysis_blockers': ['ATTACHMENT_EVENT_CONTEXT_NOT_VERIFIED', 'TABLE_LAYOUT_NOT_RECONSTRUCTED'],
+                'financial_facts_verified': False, 'eligible_for_rating': False}
+        if parsed:
+            meta.update(text_revision=parsed.get('text_revision'), parser_version=parsed.get('parser_version'))
+        self.pending_attachments.append((meta, raw, parsed, link['url']))
+        return {'stage': 'EXHIBIT_PDF', **link, 'status': status, 'fetch_id': fid,
+                'page_count': (parsed or {}).get('page_count')}
 
     def _resolve(self, batch, candidate, event):
         row = self.registry["issuers"][candidate["ticker"]]
@@ -152,7 +197,7 @@ class OfficialSourceDiscovery:
             return {**base, "status": "SEC_SUBMISSIONS_UNVERIFIED"}, None, None
         base["issuer_linkage"] = "REGISTERED_CIK_AND_CURRENT_SEC_TICKER_MATCH"
         base["filings_in_window"] = len(filings)
-        base["window_calendar_days"] = 3
+        base['window_policy'] = 'PREVIOUS_SESSION_DATE_THROUGH_NEWS_PLUS_3_DAYS_ASOF_CAPPED'
         if len(filings) > self.max_filings:
             incomplete.append("FILING_BUDGET_EXCEEDED")
         for filing in filings[:self.max_filings]:
@@ -173,8 +218,15 @@ class OfficialSourceDiscovery:
                 incomplete.append("EXHIBIT_BUDGET_EXCEEDED")
             for link in links[:self.max_exhibits]:
                 if link["url"].lower().endswith(".pdf"):
-                    trace.append({"stage": "EXHIBIT", **link, "status": "PDF_REQUIRES_SEPARATE_WORKER"})
-                    incomplete.append("PDF_REQUIRES_SEPARATE_WORKER")
+                    if len(self.pending_attachments) >= 2:
+                        trace.append({'stage': 'EXHIBIT_PDF', **link, 'status': 'PDF_ATTACHMENT_BUDGET_EXCEEDED'})
+                        incomplete.append('PDF_ATTACHMENT_BUDGET_EXCEEDED')
+                        continue
+                    step = self._pdf_attachment(batch, {k: v for k, v in base.items() if k != 'discovery_steps'},
+                                                filing, link, fid, result.get('raw_sha256'))
+                    trace.append(step)
+                    incomplete.append('PDF_EVENT_CONTEXT_NOT_VERIFIED' if step['status'] ==
+                                      'OFFICIAL_ATTACHMENT_TEXT_AVAILABLE' else step['status'])
                     continue
                 response, body, eid = self._fetch(batch, link["url"])
                 step = {"stage": "EXHIBIT", "fetch_id": eid, **link, "status": response["status"]}
@@ -184,7 +236,7 @@ class OfficialSourceDiscovery:
                     continue
                 try:
                     parsed = parse_sec_attachment(body, link["url"])
-                    verification = verify_document(event, parsed, candidate["identity"])
+                    verification = verify_sec_event(event, parsed, candidate['identity'], candidate['ticker'], link['label'])
                     step.update(parse_status=parsed["status"], verification=verification, title=parsed["title"])
                 except (ValueError, TypeError):
                     step["parse_status"] = "UNSUPPORTED_SEC_ATTACHMENT"
@@ -194,13 +246,35 @@ class OfficialSourceDiscovery:
                     incomplete.append(parsed["status"])
                 if verification["status"] == "DOCUMENT_MATCHED":
                     if not any(match[0] == link["url"] for match in matches):
-                        matches.append((link["url"], body, parsed, verification, response, eid))
+                        matches.append((link["url"], body, parsed, verification, response, eid, filing, link))
         base["incomplete_reasons"] = sorted(set(incomplete))
         if len(matches) > 1:
-            return {**base, "status": "AMBIGUOUS_MATCH_REVIEW_REQUIRED"}, None, None
+            releases = [m for m in matches if re.search(r'\b(?:joint )?press release\b', m[7]['label'], re.I)]
+            supports = [m for m in matches if m not in releases and re.search(
+                r'\b(?:investor )?presentation\b|shareholder letter', m[7]['label'], re.I)]
+            if (len(releases) != 1 or len(supports) != len(matches) - 1 or
+                    len({m[6]['accessionNumber'] for m in matches}) != 1):
+                return {**base, 'status': 'AMBIGUOUS_MATCH_REVIEW_REQUIRED'}, None, None
+            # Both documents individually matched this event. Keep supporting
+            # evidence, but do not silently treat slides as another catalyst.
+            base['supporting_documents'] = [
+                {'url': m[0], 'fetch_id': m[5], 'text_revision': m[2]['text_revision'],
+                 'raw_sha256': m[4]['raw_sha256'], 'role': 'SUPPORTING_DOCUMENT',
+                 'accession': m[6]['accessionNumber'], 'label': m[7]['label']}
+                for m in supports]
+            matches = releases
+            for m in supports:
+                meta = {k: v for k, v in base.items() if k != 'discovery_steps'}
+                meta.update(status='OFFICIAL_SUPPORTING_TEXT_AVAILABLE', final_url=m[0], fetch_id=m[5],
+                    source_route='SEC_SUPPORTING_DOCUMENT', retrieved_at=m[4]['received_at'],
+                    raw_sha256=m[4]['raw_sha256'], verification=m[3], text_revision=m[2]['text_revision'],
+                    parser_version=SEC_PARSER_VERSION, financial_facts_verified=False, eligible_for_rating=False)
+                self.pending_attachments.append((meta, m[1], m[2], m[0]))
         if len(matches) == 1:
-            url, raw, parsed, verification, response, eid = matches[0]
+            url, raw, parsed, verification, response, eid, filing, link = matches[0]
             return {**base, "status": "DOCUMENT_MATCHED", "verification": verification, "final_url": url,
+                    'filing_accepted_at': filing['acceptanceDateTime'], 'accession': filing['accessionNumber'],
+                    'exhibit_label': link['label'],
                     "retrieved_at": response["received_at"], "raw_sha256": response["raw_sha256"],
                     "fetch_id": eid, "body_characters": parsed["characters"], "paragraph_count": len(parsed["paragraphs"]),
                     "text_revision": parsed["text_revision"], "parser_version": SEC_PARSER_VERSION,
@@ -216,6 +290,32 @@ class OfficialSourceDiscovery:
             raise ValueError("Discovery requires writable EP evidence store")
         with file_lock(self.store.path.with_suffix(".sources.lock")):
             return self._run(run_id, symbol)
+
+    def resolve_event(self, run_id, candidate, event):
+        """Resolve one durable queue item, retaining the existing source audit contract."""
+        from src.utils.file_lock import file_lock
+        if self.store.read_only:
+            raise ValueError('Discovery requires writable EP evidence store')
+        with file_lock(self.store.path.with_suffix('.sources.lock')):
+            batch = self.store.start_source_run(run_id, {'version': 'ep-queued-source-v1',
+                'ticker_scope': candidate['ticker'], 'registry_revision': digest(self.registry)}, self.clock())
+            self.memo = {}
+            self.pending_attachments = []
+            try:
+                if candidate['ticker'] not in self.registry['issuers']:
+                    result, raw, parsed = {'status': 'ISSUER_NOT_REGISTERED'}, None, None
+                else:
+                    result, raw, parsed = self._resolve(batch, candidate, event)
+                result.update(original_url=event['evidence']['url'], llm='NOT_CONFIGURED', delivery='DISABLED_SHADOW_ONLY')
+                source_id = self.store.save_source_attempt(batch, candidate['ticker'], event, result,
+                                                          self.clock(), raw=raw, parsed=parsed)
+                self.store.finish_source_run(batch, {'status': 'SOURCE_PASS_COMPLETED',
+                    'counts': {result['status']: 1}, 'completeness_claimed': False}, self.clock())
+                attachments = self._save_attachments(run_id, candidate, event, source_id)
+                return {**result, 'source_id': source_id, 'attachments': attachments}
+            except Exception as exc:
+                self.store.finish_source_run(batch, {'status': 'FAILED', 'error_code': type(exc).__name__}, self.clock())
+                raise
 
     def _run(self, run_id, symbol):
         report = self.store.report(run_id)
@@ -259,6 +359,7 @@ class OfficialSourceDiscovery:
                         last_attempt.get(candidate["ticker"], ""), -latest, candidate["ticker"])
             candidates = sorted(candidates, key=queue_key)
         attempted_symbols = set()
+        attachment_groups = []
         try:
             for candidate in candidates:
                 if symbol and candidate["ticker"] != symbol:
@@ -273,6 +374,7 @@ class OfficialSourceDiscovery:
                         count["EXISTING_VERIFIED_SOURCE"] += 1
                         continue
                     raw, parsed = None, None
+                    self.pending_attachments = []
                     if candidate["status"] == "EXCLUDED" or event["event_type_hint"] == "LEGAL_NOTICE":
                         result = {"status": "EXCLUDED_FROM_SOURCE_QUEUE"}
                     elif self.prioritize_current and candidate.get("identity") is None:
@@ -290,7 +392,8 @@ class OfficialSourceDiscovery:
                         attempted_symbols.add(candidate["ticker"])
                         result, raw, parsed = self._resolve(batch, candidate, event)
                     result.update(original_url=event["evidence"]["url"], llm="NOT_CONFIGURED", delivery="DISABLED_SHADOW_ONLY")
-                    self.store.save_source_attempt(batch, candidate["ticker"], event, result, self.clock(), raw=raw, parsed=parsed)
+                    source_id = self.store.save_source_attempt(batch, candidate["ticker"], event, result, self.clock(), raw=raw, parsed=parsed)
+                    attachment_groups.append((candidate, event, source_id, self.pending_attachments))
                     count[result["status"]] += 1
             status = "SOURCE_PASS_COMPLETED" if count and set(count) <= {"DOCUMENT_MATCHED", "EXCLUDED_FROM_SOURCE_QUEUE", "EXISTING_VERIFIED_SOURCE"} else (
                 "PARTIAL_SOURCES" if count else "NO_SOURCE_TARGETS")
@@ -302,4 +405,7 @@ class OfficialSourceDiscovery:
         except Exception as exc:
             self.store.finish_source_run(batch, {"status": "FAILED", "error_code": type(exc).__name__}, self.clock())
             raise
+        for candidate, event, source_id, pending in attachment_groups:
+            self.pending_attachments = pending
+            self._save_attachments(report['run_id'], candidate, event, source_id)
         return self.store.source_report(report["run_id"])

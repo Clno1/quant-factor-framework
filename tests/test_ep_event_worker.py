@@ -99,6 +99,28 @@ def test_budget_stop_happens_before_key_read(tmp_path, observed):
     assert result["external_requests"] == 0
 
 
+def test_collect_cli_never_calls_model_or_delivery(tmp_path, observed, monkeypatch):
+    import importlib.util
+    import sys
+    store, _, sid = seeded(observed)
+    cfg = config(tmp_path, store, sid).model_copy(update={'jobs': [], 'collect_enabled': True})
+    path = tmp_path / 'worker.json'
+    path.write_text(cfg.model_dump_json())
+    spec = importlib.util.spec_from_file_location('test_ep_collect_cli',
+        Path(__file__).resolve().parents[1] / 'scripts/run_ep_event_worker.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module, 'cycle', lambda *a, **kw: pytest.fail('collection called model cycle'))
+    monkeypatch.setattr(module, 'notifications', lambda *a, **kw: pytest.fail('collection sent Discord'))
+    monkeypatch.setattr('src.breakouts.ep.event_ingest.ingest', lambda cfg: {'candidate_count': 31})
+    monkeypatch.setattr(sys, 'argv', ['worker', '--config', str(path), 'collect', '--execute'])
+    assert module.main() == 0
+    result = json.loads((Path(cfg.output_directory) / 'collection-latest.json').read_text())
+    assert result['llm_requests'] == result['discord_messages'] == 0
+    assert result['ingestion']['candidate_count'] == 31
+    assert result['elapsed_seconds'] >= 0
+
+
 def test_failed_source_receipts_cannot_crowd_matched_original_out_of_queue(tmp_path, observed, monkeypatch):
     store, report, sid = seeded(observed)
     job = config(tmp_path, store, sid).model_copy(update={"jobs": []})

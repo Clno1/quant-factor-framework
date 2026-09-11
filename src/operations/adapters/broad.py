@@ -13,6 +13,7 @@ from src.operations.evidence import (
     expected_target_session,
     iso_utc,
     load_json,
+    parse_datetime,
     safe_text,
     schedule_bounds,
     session_delay,
@@ -327,12 +328,21 @@ def collect_broad_evidence(
         "; ".join(candidate_failures),
         limit=360,
     )
-    if candidate_target == expected:
+    candidate_superseded = False
+    if security_status == JobStatus.SUCCESS and candidate_target == expected:
+        try:
+            built_at = parse_datetime((security or {}).get("created_at"))
+            audited_at = parse_datetime((security_candidate or {}).get("generated_at"))
+            candidate_superseded = bool(
+                built_at and audited_at and built_at > audited_at
+            )
+        except (TypeError, ValueError, OverflowError):
+            # Missing or invalid ordering evidence must not hide a failure.
+            candidate_superseded = False
+    if candidate_target == expected and not candidate_superseded:
         if candidate_quality_status == "FAIL":
-            # The newest audit for a target session supersedes an older formal
-            # publication for rollout-readiness purposes.  Keep the published
-            # generation as evidence, but do not let it mask a newly discovered
-            # identity or interval-contract failure.
+            # A failure still blocks an older publication. A later successful
+            # rebuild can supersede it without deleting the failed audit.
             security_status = JobStatus.BLOCKED
         elif (
             candidate_quality_status == "PASS"
@@ -520,6 +530,7 @@ def collect_broad_evidence(
             ),
             candidate_failures=candidate_failures,
             candidate_report_path=(security_candidate or {}).get("_report_path"),
+            candidate_superseded_by_publication=candidate_superseded,
         ),
         _stage(
             "全美行情覆盖",

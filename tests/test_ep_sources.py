@@ -127,6 +127,29 @@ def test_timed_out_robots_is_not_retried_for_every_article():
     assert transport.call_count == 1
 
 
+@pytest.mark.parametrize('failure,status', [
+    (subprocess.TimeoutExpired('dns', 2), 'SOURCE_DNS_TIMEOUT'),
+    (subprocess.CalledProcessError(1, 'dns'), 'SOURCE_DNS_UNAVAILABLE'),
+])
+def test_dns_is_bounded_and_failure_is_explicit(failure, status):
+    http = client(resolver=None, timeout_seconds=2)
+    with patch('src.data.public_articles.subprocess.run', side_effect=failure) as run:
+        assert http.fetch(URL)['status'] == status
+        assert http.fetch(URL + '/other')['status'] == status
+        run.assert_called_once()
+        assert run.call_args.kwargs['timeout'] == 2
+        assert run.call_args.args[0][1:3] == ['-I', '-c']
+    assert not http.test_calls
+
+
+def test_validated_dns_is_reused_only_within_client():
+    resolver = Mock(return_value=[(2, 1, 6, '', ('93.184.216.34', 443))])
+    http = client(resolver=resolver)
+    assert http.fetch(URL)['status'] == 'FETCHED'
+    assert http.fetch(URL + '/other')['status'] == 'FETCHED'
+    resolver.assert_called_once()
+
+
 @pytest.mark.parametrize("status", [401, 403, 429])
 def test_refusal_stops_host_for_batch(status):
     http = client({"/SNOW/results": HttpPage(status, {}, b"private refusal details")})

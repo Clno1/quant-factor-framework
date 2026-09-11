@@ -6,10 +6,13 @@ from datetime import datetime, timezone
 import hashlib
 import http.client
 import ipaddress
+import json
 import math
 import re
 import socket
 import ssl
+import subprocess
+import sys
 import time
 from typing import Callable
 from urllib.parse import parse_qsl, urljoin, urlsplit, urlunsplit
@@ -21,6 +24,21 @@ DEFAULT_ARTICLE_HOSTS = frozenset({"www.prnewswire.com", "www.globenewswire.com"
 
 class SourceAccessError(Exception):
     """Public error codes only; never persist remote error pages or credentials."""
+
+
+def _resolve_public_host(host: str, timeout: float):
+    # OS DNS resolution has no portable timeout. A bounded child can be reaped,
+    # unlike a stuck resolver thread that survives the source worker's deadline.
+    code = ('import json,socket,sys; '
+            'print(json.dumps(socket.getaddrinfo(sys.argv[1],443,type=socket.SOCK_STREAM)))')
+    try:
+        result = subprocess.run([sys.executable, '-I', '-c', code, host],
+                                capture_output=True, text=True, timeout=timeout, check=True)
+        return json.loads(result.stdout)
+    except subprocess.TimeoutExpired:
+        raise SourceAccessError('SOURCE_DNS_TIMEOUT') from None
+    except (subprocess.CalledProcessError, ValueError, OSError):
+        raise SourceAccessError('SOURCE_DNS_UNAVAILABLE') from None
 
 
 @dataclass(frozen=True)
@@ -90,7 +108,8 @@ class PublicArticleClient:
         self.timeout, self.agent = timeout_seconds, user_agent
         self.clock, self.pause = monotonic, pause
         self.ends_at = self.clock() + deadline_seconds
-        self.transport, self.resolver = transport, resolver or socket.getaddrinfo
+        self.transport, self.resolver = transport, resolver
+        self.addresses: dict[str, list[str]] = {}
         self.requests = 0
         self.robots: dict[str, RobotFileParser] = {}
         self.blocked: dict[str, str] = {}
@@ -122,10 +141,17 @@ class PublicArticleClient:
             raise SourceAccessError("SOURCE_TIME_BUDGET_EXCEEDED")
         if self.requests >= self.max_requests:
             raise SourceAccessError("SOURCE_REQUEST_BUDGET_EXCEEDED")
-        addresses = self.resolver(host, 443, type=socket.SOCK_STREAM)
-        ips = sorted({item[4][0] for item in addresses})
-        if not ips or any(not ipaddress.ip_address(ip).is_global for ip in ips):
-            raise SourceAccessError("NON_PUBLIC_ADDRESS_REJECTED")
+        if host not in self.addresses:
+            try:
+                addresses = (self.resolver(host, 443, type=socket.SOCK_STREAM) if self.resolver
+                             else _resolve_public_host(host, min(remaining, self.timeout)))
+            except socket.gaierror:
+                raise SourceAccessError('SOURCE_DNS_UNAVAILABLE') from None
+            ips = sorted({item[4][0] for item in addresses})
+            if not ips or any(not ipaddress.ip_address(ip).is_global for ip in ips):
+                raise SourceAccessError("NON_PUBLIC_ADDRESS_REJECTED")
+            self.addresses[host] = ips
+        ips = self.addresses[host]
         delay = max(1, (self.robots[host].crawl_delay(self.agent) or 0) if host in self.robots else 0)
         rate = self.robots[host].request_rate(self.agent) if host in self.robots else None
         if rate and rate.requests > 0:
@@ -180,13 +206,20 @@ class PublicArticleClient:
         """Return bounded JSON bytes; callers validate its schema before using it."""
         return self._fetch(url, kind="json")
 
-    def _fetch(self, url: str, *, kind: str) -> dict:
+    def fetch_same_host(self, url: str, *, kind: str = 'html') -> dict:
+        if kind not in {'html', 'pdf'}:
+            raise ValueError('INVALID_ISSUER_SOURCE_KIND')
+        return self._fetch(url, kind=kind, same_host=True)
+
+    def _fetch(self, url: str, *, kind: str, same_host: bool = False) -> dict:
         trace_start = len(self.trace)
         current = None
         try:
             current = self.validate_url(url)
             visited = set()
             for _ in range(4):
+                if same_host and urlsplit(current).netloc != urlsplit(url).netloc:
+                    raise SourceAccessError('ISSUER_REDIRECT_OUTSIDE_HOST')
                 if current in visited:
                     raise SourceAccessError("REDIRECT_LOOP")
                 visited.add(current)

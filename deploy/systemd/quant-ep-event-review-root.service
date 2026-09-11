@@ -1,5 +1,5 @@
 [Unit]
-Description=Quant EP cited AI disclosure commentary (explicitly unverified)
+Description=Quant EP cited event digest
 Wants=network-online.target
 After=network-online.target
 
@@ -28,3 +28,5 @@ ReadWritePaths=-/home/projects/quant/runlog
 MemoryMax=512M
 CPUQuota=50%
 TasksMax=32
+MemoryAccounting=true
+CPUAccounting=true

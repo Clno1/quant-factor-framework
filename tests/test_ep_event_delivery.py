@@ -46,6 +46,31 @@ def test_unknown_security_or_etf_is_not_sendable():
         ai_payload(item)
 
 
+def test_personal_style_preserves_evidence_and_uncertainty_without_banner(tmp_path):
+    item = report()
+    item['protocol'] = 'event-context'
+    payload, _ = ai_payload(item, style='personal')
+    assert '未核准' not in str(payload) and '未经人工' not in str(payload)
+    assert '缺少已对齐' in payload['content'] and '不是评级' in payload['content']
+    assert item['claims'][0]['evidence'][0]['quote'] in payload['embeds'][0]['description']
+    outbox = EventOutbox(tmp_path / 'outbox.sqlite3')
+    key = outbox.enqueue(item, 'route', now=100, style='personal')
+    sender = Sender()
+    assert outbox.deliver(sender, 'route', now=101, style='personal', report_loader=lambda k: item)[0]['state'] == 'SENT'
+    assert outbox.enqueue(item, 'route', now=102, style='annotated') == key
+    assert outbox.deliver(sender, 'route', now=103, report_loader=lambda k: item) == []
+
+
+def test_personal_style_does_not_relax_rejection_or_boundary_checks():
+    item = report()
+    item['freshness'].update(status='BOUNDARY_RELEASE_TIME_UNVERIFIED', provider_time_in_window=True)
+    payload, _ = ai_payload(item, style='personal')
+    assert '实际发布时间待核实' in payload['embeds'][0]['footer']['text']
+    item['claims'][0]['review_status'] = 'REJECT'
+    with pytest.raises(ValueError, match='NO_SENDABLE'):
+        ai_payload(item, style='personal')
+
+
 @pytest.mark.parametrize("freshness", ["STALE_FOR_CURRENT_EVENT_WINDOW", "ANNOUNCEMENT_DATE_UNVERIFIED", "BOUNDARY_RELEASE_TIME_UNVERIFIED"])
 def test_stale_or_uncertain_announcement_is_not_sent(freshness):
     item = report()

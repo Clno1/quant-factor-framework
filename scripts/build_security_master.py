@@ -313,6 +313,23 @@ def load_security_master_corrections(
             )
         identifiers.add(correction_id)
         continuity_pairs.add((old_ticker, new_ticker))
+    instruments = payload.get("reviewed_excluded_instruments", [])
+    if not isinstance(instruments, list):
+        raise ValueError("reviewed_excluded_instruments must be a list")
+    for item in instruments:
+        if not isinstance(item, dict) or not item.get("id") or item["id"] in identifiers:
+            raise ValueError("instrument correction IDs must be unique")
+        expected = item.get("profile", {})
+        required = {"name_contains", "asset_type", "exchange", "cik", "cusip", "isin", "listing_date", "is_active"}
+        if not required.issubset(expected) or not item.get("ticker"):
+            raise ValueError("instrument correction requires exact provider identity")
+        if item.get("actual_asset_type") not in {"WARRANT", "PREFERRED", "UNIT", "RIGHT", "NOTE"}:
+            raise ValueError("instrument correction must exclude a non-common instrument")
+        if not item.get("reason") or not item.get("sources") or not all(
+            str(url).startswith("https://www.sec.gov/Archives/edgar/") for url in item["sources"]
+        ):
+            raise ValueError("instrument correction requires primary SEC evidence")
+        identifiers.add(item["id"])
     return payload, resolved, _file_sha256(resolved)
 
 
@@ -384,6 +401,27 @@ def _verify_reviewed_profile(
                 f"{correction_id}: {ticker} provider listing_date drifted"
             )
     return row
+
+
+def apply_reviewed_instrument_exclusions(profiles, changes, delisted, registry):
+    """Remove evidenced non-common issues before shared-ID grouping; preserve raw sources."""
+    audit = []
+    excluded = set()
+    for item in registry.get("reviewed_excluded_instruments", []):
+        ticker = item["ticker"]
+        if not profiles.ticker.eq(ticker).any():
+            # A delisted/event-only row could otherwise resurrect the excluded issue.
+            if delisted.ticker.eq(ticker).any() or changes.new_ticker.eq(ticker).any():
+                raise ValueError(f"{item['id']}: missing provider profile for exclusion")
+            continue
+        row = _verify_reviewed_profile(profiles, ticker=ticker,
+                                      expectation=item["profile"], correction_id=item["id"])
+        excluded.add(ticker)
+        audit.append({**item, "action": "EXCLUDED_NON_COMMON_INSTRUMENT",
+                      "provider_profile": json.loads(row.to_json(date_format="iso"))})
+    return (profiles.loc[~profiles.ticker.isin(excluded)].copy(),
+            changes.loc[~changes.old_ticker.isin(excluded) & ~changes.new_ticker.isin(excluded)].copy(),
+            delisted.loc[~delisted.ticker.isin(excluded)].copy(), audit)
 
 
 def apply_reviewed_provider_identifier_conflicts(
@@ -1094,6 +1132,9 @@ def run_build(
         correction_registry,
         target_session=target_session,
     )
+    profiles, changes, delisted, instrument_audit = apply_reviewed_instrument_exclusions(
+        profiles, changes, delisted, correction_registry,
+    )
     profiles, changes, scope_diagnostics = _prepare_research_scope(
         profiles,
         changes,
@@ -1138,6 +1179,7 @@ def run_build(
         ]
         candidate.quality["status"] = "FAIL"
     candidate.quality["reviewed_symbol_transitions"] = correction_audit
+    candidate.quality["reviewed_excluded_instruments"] = instrument_audit
     candidate.quality["reviewed_provider_identifier_conflicts"] = (
         identifier_conflict_audit
     )
@@ -1171,7 +1213,8 @@ def run_build(
             "reviewed_provider_identifier_conflicts": (
                 identifier_conflict_audit
             ),
-            "applied": [*correction_audit, *identifier_conflict_audit],
+            "reviewed_excluded_instruments": instrument_audit,
+            "applied": [*correction_audit, *identifier_conflict_audit, *instrument_audit],
         },
         "research_history_policy": {
             "registry_path": str(resolved_history_policy_path),

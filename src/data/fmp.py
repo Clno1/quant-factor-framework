@@ -274,10 +274,29 @@ def get_ep_security_profile(symbol: str, *, timeout: float = 10) -> dict[str, An
             raise ValueError("EP profile identity flags incomplete")
         flags[field] = value in {"true", "1"}
     return {"ticker": symbol, "name": str(row.get("companyName") or ""),
+            "cik": str(row['cik']).zfill(10) if re.fullmatch(r'[0-9]{1,10}', str(row.get('cik', ''))) and int(row['cik']) > 0 else None,
             "exchange": str(row.get("exchangeShortName") or row.get("exchange") or "").upper(),
             "is_actively_trading": flags["isActivelyTrading"],
             "asset_type": infer_us_security_asset_type(ticker=symbol, name=row.get("companyName"),
                 is_etf=flags["isEtf"], is_fund=flags["isFund"], is_adr=flags["isAdr"])}
+
+
+def get_ep_extended_batch(symbols: list[str], *, kind: str = 'trade', timeout: float = 10) -> list[dict[str, Any]]:
+    if kind not in {'trade', 'quote'} or not 1 <= len(symbols) <= 100:
+        raise ValueError('INVALID_EP_EXTENDED_BATCH')
+    normalized = [_normalize_us_ticker(s) for s in symbols]
+    if any(not re.fullmatch(r'[A-Z0-9][A-Z0-9-]{0,19}', s) for s in normalized):
+        raise ValueError('INVALID_EP_TICKER')
+    # Trade size and quote size are not session volume. Preserve raw fields.
+    return _ep_records('/batch-aftermarket-' + kind, {'symbols': ','.join(dict.fromkeys(normalized))}, timeout=timeout)
+
+
+def get_ep_minute_day(symbol: str, day: str, *, timeout: float = 10) -> list[dict[str, Any]]:
+    from datetime import date
+    symbol = _normalize_us_ticker(symbol)
+    if not re.fullmatch(r'[A-Z0-9][A-Z0-9-]{0,19}', symbol) or date.fromisoformat(day).isoformat() != day:
+        raise ValueError('INVALID_EP_MINUTE_REQUEST')
+    return _ep_records('/historical-chart/1min', {'symbol': symbol, 'from': day, 'to': day}, timeout=timeout)
 
 
 def _records_frame(payload: Any, *, endpoint: str) -> pd.DataFrame:

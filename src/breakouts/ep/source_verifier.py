@@ -124,3 +124,25 @@ def verify_document(event: dict[str, Any], parsed: dict[str, Any], identity: dic
             "historical_availability_verified": False,
             "limitations": ["TITLE_SIMILARITY_IS_NOT_PROOF", "NO_GAAP_OR_ESTIMATE_BASIS_VERIFICATION",
                             "NO_EVENT_MATERIALITY_OR_MARKET_CONFIRMATION"]}
+
+
+def verify_sec_event(event, parsed, identity, symbol, label):
+    """Called only after the registered CIK/ticker/accession chain is checked."""
+    from .event_identity import earnings_period
+    from .sec_source import clean_text
+    result = verify_document(event, parsed, identity)
+    title = event['evidence']['title']
+    expected = earnings_period(title, event['evidence'].get('text', '')[:1500])
+    actual = earnings_period(parsed['title'], clean_text(label))
+    issuer = re.search(r'\b' + re.escape(symbol) + r'\b',
+                       ' '.join(p['text'] for p in parsed['paragraphs'][:15]), re.I)
+    earnings = re.search(r'earnings|financial results|quarter.*results|results.*quarter', title, re.I) or re.search(
+        r'reported .*quarter.*results', event['evidence'].get('text', '')[:1500], re.I)
+    if result['status'] != 'DOCUMENT_MATCHED' and expected and expected == actual and issuer and earnings:
+        if parsed['status'] == 'EXTRACTED':
+            result.update(status='DOCUMENT_MATCHED', alignment_method='SEC_ISSUER_AND_FISCAL_PERIOD',
+                          fiscal_period=list(actual))
+    # Matching a headline is not allowed to override an explicit period conflict.
+    if expected and actual and expected != actual:
+        result.update(status='DOCUMENT_UNVERIFIED', period_conflict=True)
+    return result

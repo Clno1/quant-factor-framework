@@ -2,11 +2,16 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from urllib.parse import urlsplit
 
 from .models import digest
 
-SEC_PARSER_VERSION = "ep-sec-exhibit-v2"
+SEC_PARSER_VERSION = "ep-sec-exhibit-v3"
+
+
+def clean_text(value):
+    return ' '.join(''.join(c for c in value if unicodedata.category(c) != 'Cf').split())
 
 
 def parse_sec_attachment(raw: bytes, url: str) -> dict:
@@ -30,13 +35,13 @@ def parse_sec_attachment(raw: bytes, url: str) -> dict:
     for node in body.xpath('.//script|.//style|.//nav|.//footer|.//input|.//button|.//textarea|.//*[@hidden or @aria-hidden="true"]'):
         node.drop_tree()
     images = len(body.xpath(".//img"))
-    nodes = body.xpath('.//p|.//tr[not(.//tr)]|.//div[not(.//p or .//tr or .//div)]')
+    nodes = body.xpath('.//p|.//h1|.//h2|.//h3|.//tr[not(.//tr)]|.//div[not(.//p or .//tr or .//div or .//h1 or .//h2 or .//h3)]')
     selected = set(nodes)
     paragraphs = []
     for node in nodes:
         if any(parent in selected for parent in node.iterancestors()):
             continue
-        value = " ".join(" ".join(node.itertext()).split())
+        value = clean_text(' '.join(node.itertext()))
         if value:
             paragraphs.append({"id": f"p{len(paragraphs) + 1:04d}", "text": value})
     total = sum(len(p["text"]) for p in paragraphs)
@@ -44,8 +49,12 @@ def parse_sec_attachment(raw: bytes, url: str) -> dict:
         raise ValueError("SEC extracted body too large")
     status = "EXTRACTED" if total >= 300 and len(paragraphs) >= 2 else (
         "IMAGE_ONLY_OCR_REQUIRED" if images else "BODY_NOT_ESTABLISHED")
-    heading = next((p["text"] for p in paragraphs[:3]
-                    if not re.fullmatch(r"(?:Exhibit\s+|EX-)99(?:\.[0-9]+)?", p["text"], re.I)), "")
+    headings = [p['text'] for p in paragraphs[:12] if 5 <= len(p['text']) <= 250
+                and re.search(r'[A-Za-z]', p['text']) and not re.fullmatch(
+                    r'(?:Exhibit\s+|EX-)99(?:\.[0-9]+)?', p['text'], re.I)]
+    heading = next((h for h in headings if re.search(
+        r'\b(?:announces?|reports?|results|to acquire|acquisition|shareholder letter)\b', h, re.I)),
+        headings[0] if headings else '')
     result = {"parser_version": SEC_PARSER_VERSION, "status": status,
               "title": heading if len(heading) <= 250 else "",
               "paragraphs": paragraphs, "characters": total, "image_count": images,

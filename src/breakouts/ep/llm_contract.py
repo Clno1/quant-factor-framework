@@ -98,11 +98,12 @@ def prepare_request(source: dict, *, max_chars=60000, max_paragraphs=500, batch=
     if parsed.get("status") != "EXTRACTED" or result.get("verification", {}).get("status") != "DOCUMENT_MATCHED":
         raise ValueError("ALIGNED_ORIGINAL_TEXT_REQUIRED")
     url = urlsplit(result.get("final_url", ""))
-    # v1 network egress is confined to verified SEC original sources, not vendor news/transcripts.
-    if (url.scheme != "https" or url.netloc != "www.sec.gov" or url.query or url.fragment or
+    from .official_sources import trusted_ir_source
+    ir_source = trusted_ir_source(source)
+    if not ir_source and (url.scheme != "https" or url.netloc != "www.sec.gov" or url.query or url.fragment or
             not re.fullmatch(r"/Archives/edgar/data/\d+/\d{18}/[A-Za-z0-9_-]+\.(?:htm|html)", url.path)):
         raise ValueError("SEC_ORIGINAL_SOURCE_REQUIRED_FOR_LLM")
-    if result.get("issuer_linkage") != "REGISTERED_CIK_AND_CURRENT_SEC_TICKER_MATCH":
+    if not ir_source and result.get("issuer_linkage") != "REGISTERED_CIK_AND_CURRENT_SEC_TICKER_MATCH":
         raise ValueError("SEC_ISSUER_LINKAGE_REQUIRED")
     if type(max_chars) is not int or not 1000 <= max_chars <= 60000 or type(max_paragraphs) is not int or not 1 <= max_paragraphs <= 500:
         raise ValueError("INVALID_SOURCE_BUDGET")

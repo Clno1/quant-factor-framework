@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from scripts.build_security_master import (
+    apply_reviewed_instrument_exclusions,
     apply_reviewed_provider_identifier_conflicts,
     apply_reviewed_symbol_transitions,
     _load_delisted_history,
@@ -65,6 +66,30 @@ def test_asset_type_recognizes_compact_nasdaq_preferred_suffix():
         ticker="GMTA",
         name="GATX Corporation SR NT 2066",
     ) == "NOTE"
+
+
+def test_reviewed_non_common_exclusion_keeps_raw_and_never_guesses_suffixes():
+    registry, _, _ = load_security_master_corrections("configs/security_master_corrections.yaml")
+    entries = registry["reviewed_excluded_instruments"]
+    profiles = pd.DataFrame([{**entry["profile"], "ticker": entry["ticker"],
+                              "name": entry["profile"]["name_contains"]} for entry in entries])
+    changes = pd.DataFrame([{"old_ticker": "BCTTP", "new_ticker": "BDXA"}])
+    delisted = pd.DataFrame({"ticker": ["BDXA", "HYMCZ"]})
+    kept, events, retired, audit = apply_reviewed_instrument_exclusions(profiles, changes, delisted, registry)
+    assert kept.empty and events.empty and retired.empty and len(audit) == 2
+    assert len(profiles) == 2 and profiles.asset_type.eq("STOCK").all()
+    assert {r["actual_asset_type"] for r in audit} == {"WARRANT", "PREFERRED"}
+    profiles.loc[0, "cusip"] = "new-identifier"
+    with pytest.raises(ValueError, match="drifted"):
+        apply_reviewed_instrument_exclusions(profiles, changes, delisted, registry)
+
+
+def test_instrument_correction_missing_profile_fails_closed():
+    registry, _, _ = load_security_master_corrections("configs/security_master_corrections.yaml")
+    with pytest.raises(ValueError, match="missing provider profile"):
+        apply_reviewed_instrument_exclusions(pd.DataFrame(columns=["ticker"]),
+            pd.DataFrame(columns=["old_ticker", "new_ticker"]),
+            pd.DataFrame({"ticker": ["HYMCZ"]}), registry)
     assert infer_us_security_asset_type(
         ticker="INBKL",
         name="First Internet Bancorp SB NT FXD FLG MA",
