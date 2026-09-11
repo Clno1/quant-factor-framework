@@ -1,4 +1,5 @@
 from copy import deepcopy
+import hashlib
 import json
 from pathlib import Path
 import socket
@@ -67,9 +68,13 @@ def test_no_annotations_never_implies_complete_evidence(cases):
 
 
 def test_checked_in_audit_reproduces_from_raw_responses(cases):
-    report = json.loads((Path(__file__).parents[1] / "reviews" / "2026-09-10-ep-span-selection" / "event_audit.json").read_text())
-    for row in report["records"]:
-        assert row["audit"] == audit_event(*cases[row["ticker"]])
+    # Fixed digests of the reviewed full audit, independent of local generated files.
+    expected = json.loads((FIXTURES / "ep_event_audit_sha256_20260910.json").read_text())
+    assert set(expected) == set(cases)
+    for ticker, inputs in cases.items():
+        canonical = json.dumps(audit_event(*inputs), sort_keys=True, ensure_ascii=True,
+                               separators=(",", ":")).encode()
+        assert hashlib.sha256(canonical).hexdigest() == expected[ticker], ticker
 
 
 @pytest.mark.parametrize("mutation,error", [
