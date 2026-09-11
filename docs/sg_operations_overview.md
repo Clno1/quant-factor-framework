@@ -1286,3 +1286,21 @@ ATCX/BGLC 精确旧隔离台账承接；新 target/主表/源缓存绑定变化�
 候选和盘中 service 保留昨日 exit-code，今日 timer 18:30/21:20，未人工重启。
 watchdog SUCCESS，约 111.5 MiB、零 swap；运维网页 active，49.7 MiB、零 swap。
 运维站保留最近完整日失败与版本；本轮只读巡检和文档同步，没有放宽门槛或开启发送。
+
+## 47. 2026-09-11 11:48 SGT：主表区间冲突与茶杯柄缺跑
+
+今日宽基service 11:30:58启动、11:36:28失败，CPU 206.329秒、cgroup峰值560.4MiB、swap=0。
+失败阶段为SECURITY_MASTER，target=09-10，publication=null，错误overlapping ticker intervals，
+涉及HYMC/HYMCZ及BDX/BDXA。不是昨日324只行情重叠认证的再次执行；今日尚未进入行情步骤。
+冻结报告：outputs/data_audits/security_master_candidates/asof=2026-09-10/run=20260911T033059Z_2f6b28ee/audit.json。
+流水报告：outputs/data_audits/broad_daily_pipeline/target=2026-09-10/run=20260911T033059Z_e3f1553a.json。
+11:46 service为auto-restart，不代表恢复成功。正式coverage/PIT/八因子仍截至09-04，版本同第46节。
+
+09-10候选18:30失败，盘中21:36最后一次启动后21:38达到重试限制，均因coverage日期09-04
+落后于expected09-09。没有实际v3评估，0/5、发送关闭。今日候选/盘中timer仍安排18:30/21:20。
+watchdog于11:47:43 SUCCESS，111.4MiB峰值、零swap；运维网页active，约49.7MiB、零swap。
+四表/status/运维快照检查详见茶杯柄29；候选及盘中已结束进程MemoryPeak当前不可用，不当作零。
+
+修复顺序：先核实两组身份的证券类别与主表合并依据，凭冻结源和权威证据修正并做双重幂等验证；
+再完成STRR受控查询和旧隔离台账承接，恢复完整历史与PIT/候选链。未修改主表或行情、重启服务、
+补记失败日或开启发送，本次仅巡检并同步文档。

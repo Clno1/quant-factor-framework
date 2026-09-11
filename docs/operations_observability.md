@@ -921,3 +921,14 @@ stage=waiting_for_open 是 09-09 旧心跳，不是当前进程存活证据。me
 正式 coverage/PIT/因子仍是 09-04。11:46 systemd auto-restart 是失败重试等待，不表示修复成功。
 凌晨 target=09-08 恢复 318/321 是另一份报告，两者必须保留各自 target 和输入版本。
 MDB 旧回放仍无可用误报率，本轮没有生成新标签或改写失败记录。详情见 SG 运维 46 和茶杯柄 28。
+
+## 44. 2026-09-11 11:48 SGT 快照核验
+
+运维快照intraday_momentum=STALE，原因“收盘后仍没有当日盘中监控完整性记录”。
+metrics保留daily-cup-5m-handle-shadow-v3、0/5、最近完整09-08 FAIL及09-10缺跑；
+后续定时等待未覆盖失败。四张SQLite表均无09-10记录，旧waiting_for_open心跳不代表活跃进程。
+MDB仍是旧v1零信号/null误报代理，不能渲染为0%误报。
+
+新日更在SECURITY_MASTER失败：HYMC/HYMCZ、BDX/BDXA区间重叠，publication=null；
+应与昨日US_EQUITY_COVERAGE重叠认证失败分开显示，不能说主表已更新或行情正在计算。
+本次未改快照、历史事件、发送配置或页面代码。冻结报告路径及恢复建议见SG运维47、宽基实施30.3。
