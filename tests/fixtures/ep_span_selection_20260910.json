@@ -1,0 +1,333 @@
+{
+  "version": "ep-span-reference-fixture-v1",
+  "records": [
+    {
+      "request_key": "d1bf56afbba87f4dc4939fc16ca0f71cf7f5e6bdf94ca9889ef1a35ffb25fa66",
+      "prepared": {
+        "version": "ep-llm-batches-v3",
+        "batch": {
+          "citations_per_claim": 4,
+          "claim_limit": 4,
+          "context_evidence_version": "ep-field-evidence-v1",
+          "focus": "Reported issuer revenue/net sales. Prefer the latest reported period, then its comparable prior period. Exclude guidance.",
+          "metrics": [
+            "REVENUE"
+          ],
+          "name": "revenue",
+          "quote_char_limit": 1200,
+          "value_kinds": [
+            "ACTUAL"
+          ],
+          "version": "ep-llm-batches-v3"
+        },
+        "document_id": "564633d6a5f2639a9805405961a10a8de004efb4671c4a5d12745f9937fc77ad",
+        "text_revision": "6127bbac28b0855b86e63c292862dac6f997b6d9a60fc774ffa036ca9de8720d",
+        "ticker": "GTLB",
+        "untrusted_paragraphs": [
+          {
+            "id": "p0007",
+            "text": "San Francisco (September 1, 2026) -All-Remote- GitLab Inc. (NASDAQ: GTLB), the intelligent orchestration platform for DevSecOps, today reported financial results for its second quarter fiscal year 2027, ended July 31, 2026."
+          },
+          {
+            "id": "p0018",
+            "text": "Second Quarter Fiscal Year 2027 Financial Highlights ( in millions, except per share data and percentages):"
+          },
+          {
+            "id": "p0019",
+            "text": "Q2 FY 2027 Q2 FY 2026 Y/Y Change"
+          },
+          {
+            "id": "p0020",
+            "text": "Revenue $ 286.3 $ 236.0 21 %"
+          },
+          {
+            "id": "p0127",
+            "text": "GitLab Inc."
+          },
+          {
+            "id": "p0129",
+            "text": "(in thousands, except per share data)"
+          },
+          {
+            "id": "p0131",
+            "text": "Three Months Ended July 31, Six Months Ended July 31,"
+          },
+          {
+            "id": "p0132",
+            "text": "2026 2025 2026 2025"
+          },
+          {
+            "id": "p0136",
+            "text": "Total revenue 286,254 235,960 550,412 450,469"
+          }
+        ],
+        "coverage": {
+          "included": 9,
+          "total": 283,
+          "included_chars": 555,
+          "complete": false
+        },
+        "request_id": "376129b5d354ac8a292d0d15006fcdc4951b4c062d83746c39f44bd2438efa16"
+      },
+      "parent_request_id": "689dc0be3942a94c61941ca281110d0bfda53fd241e7e977de7d87758124e93e",
+      "subset_fixture": true,
+      "original_rejection_reasons": [
+        [
+          "METRIC_VALUE_MUST_SHARE_EVIDENCE"
+        ],
+        [
+          "METRIC_TEXT_NOT_GROUNDED",
+          "METRIC_VALUE_MUST_SHARE_EVIDENCE"
+        ],
+        [
+          "CONTEXT_QUOTE_NOT_IN_SOURCE",
+          "METRIC_VALUE_MUST_SHARE_EVIDENCE",
+          "PERIOD_TEXT_CONTEXT_ANCHOR_REQUIRED",
+          "PERIOD_TEXT_NOT_GROUNDED",
+          "UNIT_TEXT_CONTEXT_ANCHOR_REQUIRED",
+          "UNIT_TEXT_NOT_GROUNDED"
+        ],
+        [
+          "CONTEXT_QUOTE_NOT_IN_SOURCE",
+          "METRIC_VALUE_MUST_SHARE_EVIDENCE",
+          "PERIOD_TEXT_CONTEXT_ANCHOR_REQUIRED",
+          "PERIOD_TEXT_NOT_GROUNDED",
+          "UNIT_TEXT_CONTEXT_ANCHOR_REQUIRED",
+          "UNIT_TEXT_NOT_GROUNDED"
+        ]
+      ]
+    },
+    {
+      "request_key": "c433a0e8ed1649e27d03a2aaf09326a230029ac4a93901a58d290835a8fde9e9",
+      "prepared": {
+        "version": "ep-llm-batches-v3",
+        "batch": {
+          "citations_per_claim": 4,
+          "claim_limit": 4,
+          "context_evidence_version": "ep-field-evidence-v1",
+          "focus": "Explicit quantified exceptional tax benefits, refunds, gains or charges. Do not classify routine compensation/amortization as one-time just because excluded from non-GAAP. No unsupported absence claims.",
+          "metrics": [
+            "SPECIAL_ITEM"
+          ],
+          "name": "special_items",
+          "quote_char_limit": 1200,
+          "value_kinds": [
+            "SPECIAL_ITEM_IMPACT",
+            "ACTUAL"
+          ],
+          "version": "ep-llm-batches-v3"
+        },
+        "document_id": "ba9a177cbc76e06d67f69b35e9a1c7307fd30a8b64f7045e22c48c0a7869747c",
+        "text_revision": "69be1a665ee4e1c27a61433bb8a43072a26fc700199674f65f700fe0efbc1619",
+        "ticker": "ANF",
+        "untrusted_paragraphs": [
+          {
+            "id": "p0005",
+            "text": "• Operating margin of 20%, and earnings per diluted share of $4.17, both above outlook in excess of IEEPA tariff refund benefit of approximately $100 million on a pre-tax basis and $1.75 per diluted share; impact presented in table below"
+          },
+          {
+            "id": "p0009",
+            "text": "New Albany, Ohio, August 26, 2026: Abercrombie & Fitch Co. (NYSE: ANF) today announced results for the second quarter ended August 1, 2026. These compare to results for the second quarter ended August 2, 2025. Descriptions of the use of non-GAAP financial measures and reconciliations of GAAP and non-GAAP financial measures accompany this release."
+          },
+          {
+            "id": "p0176",
+            "text": "Abercrombie & Fitch Co."
+          },
+          {
+            "id": "p0178",
+            "text": "Thirteen Weeks Ended August 2, 2025"
+          },
+          {
+            "id": "p0179",
+            "text": "(in thousands, except per share data)"
+          },
+          {
+            "id": "p0182",
+            "text": "Litigation settlement (2) $ (38,574) $ (38,574) $ —"
+          },
+          {
+            "id": "p0193",
+            "text": "Abercrombie & Fitch Co."
+          },
+          {
+            "id": "p0195",
+            "text": "Twenty-Six Weeks Ended August 2, 2025"
+          },
+          {
+            "id": "p0196",
+            "text": "(in thousands, except per share data)"
+          },
+          {
+            "id": "p0199",
+            "text": "Litigation settlement (2) $ (38,574) $ (38,574) $ —"
+          }
+        ],
+        "coverage": {
+          "included": 10,
+          "total": 343,
+          "included_chars": 879,
+          "complete": false
+        },
+        "request_id": "dc1e40931f53fd9a5f9dbde856d7134038a58b92e569dc8e5faf719ca23eb8ff"
+      },
+      "parent_request_id": "cac853f9b0878fca611097bece4dcad7ed9d168857065ae7bc1b0fc9c03e8306",
+      "subset_fixture": true,
+      "original_rejection_reasons": [
+        [
+          "CONTEXT_QUOTE_NOT_IN_SOURCE",
+          "METRIC_TEXT_NOT_GROUNDED",
+          "METRIC_VALUE_MUST_SHARE_EVIDENCE",
+          "QUOTE_NOT_IN_SOURCE",
+          "SUBJECT_TEXT_CONTEXT_ANCHOR_REQUIRED",
+          "UNIT_SCALE_TEXT_CONTEXT_ANCHOR_REQUIRED"
+        ],
+        [
+          "CONTEXT_QUOTE_NOT_IN_SOURCE",
+          "QUOTE_NOT_IN_SOURCE",
+          "SUBJECT_TEXT_CONTEXT_ANCHOR_REQUIRED"
+        ],
+        [
+          "METRIC_TEXT_NOT_GROUNDED",
+          "METRIC_VALUE_MUST_SHARE_EVIDENCE",
+          "VALUE_TEXT_NOT_GROUNDED"
+        ],
+        [
+          "METRIC_TEXT_NOT_GROUNDED",
+          "METRIC_VALUE_MUST_SHARE_EVIDENCE",
+          "VALUE_TEXT_NOT_GROUNDED"
+        ]
+      ]
+    },
+    {
+      "request_key": "2350a55ad66451216f116e2174135e105869a828d293938f9981639bcdf7ed28",
+      "prepared": {
+        "version": "ep-llm-batches-v3",
+        "batch": {
+          "citations_per_claim": 4,
+          "claim_limit": 4,
+          "context_evidence_version": "ep-field-evidence-v1",
+          "focus": "Reported issuer EPS. Prefer latest-period GAAP and non-GAAP diluted EPS. Keep accounting bases separate. Exclude guidance.",
+          "metrics": [
+            "EPS"
+          ],
+          "name": "eps",
+          "quote_char_limit": 1200,
+          "value_kinds": [
+            "ACTUAL"
+          ],
+          "version": "ep-llm-batches-v3"
+        },
+        "document_id": "f1300dc4f3a1cd97066a8d4bbb1665a512f880d950bdccdcd69d7d5dba9c0582",
+        "text_revision": "705945b480298212633076632e53722097ced9305870c9d54d92e9fcce0ca1b0",
+        "ticker": "PLAB",
+        "untrusted_paragraphs": [
+          {
+            "id": "p0002",
+            "text": "BROOKFIELD, Conn. August 26, 2026 (GLOBE NEWSWIRE) — Photronics, Inc. (NASDAQ:PLAB), a worldwide leader in photomask technologies and solutions, today reported financial results for its third quarter of fiscal year 2026 ended August 2, 2026."
+          },
+          {
+            "id": "p0008",
+            "text": "GAAP Net income attributable to Photronics, Inc. shareholders was $28.9 million, or $0.49 per diluted share, compared with $22.9 million, or $0.39 per diluted share, in the third quarter of 2025 and $31.4 million, or $0.54 per diluted share, in the second quarter of 2026."
+          },
+          {
+            "id": "p0010",
+            "text": "Non-GAAP Net income attributable to Photronics, Inc. shareholders was $29.4 million, or $0.50 per diluted share, compared with $29.4 million, or $0.51 per diluted share in the third quarter of 2025 and $24.9 million, or $0.42 per diluted share, in the second quarter of 2026."
+          }
+        ],
+        "coverage": {
+          "included": 3,
+          "total": 157,
+          "included_chars": 788,
+          "complete": false
+        },
+        "request_id": "c94d13b90a63c06f15cebf21643e1e304a1c38d885d1c703298916bf58d46e57"
+      },
+      "parent_request_id": "1c2f6c9a59a6615a4066f3d37929dc5dc7903e0536c4f68ec32d1df9dcc20459",
+      "subset_fixture": true,
+      "original_rejection_reasons": [
+        [
+          "ACCOUNTING_BASIS_CONTEXT_CONTRADICTION",
+          "BASIS_TEXT_NOT_GROUNDED",
+          "CONTEXT_QUOTE_NOT_IN_SOURCE",
+          "METRIC_TEXT_NOT_GROUNDED",
+          "METRIC_VALUE_MUST_SHARE_EVIDENCE",
+          "PERIOD_TEXT_CONTEXT_ANCHOR_REQUIRED",
+          "PERIOD_TEXT_NOT_GROUNDED"
+        ],
+        [
+          "METRIC_TEXT_NOT_GROUNDED",
+          "METRIC_VALUE_MUST_SHARE_EVIDENCE",
+          "PERIOD_TEXT_CONTEXT_ANCHOR_REQUIRED",
+          "PERIOD_TEXT_NOT_GROUNDED",
+          "VALUE_TEXT_NOT_GROUNDED"
+        ],
+        [
+          "METRIC_TEXT_NOT_GROUNDED",
+          "METRIC_VALUE_MUST_SHARE_EVIDENCE",
+          "PERIOD_TEXT_CONTEXT_ANCHOR_REQUIRED",
+          "PERIOD_TEXT_NOT_GROUNDED",
+          "VALUE_TEXT_NOT_GROUNDED"
+        ],
+        [
+          "ACCOUNTING_BASIS_CONTEXT_CONTRADICTION",
+          "CONTEXT_QUOTE_NOT_IN_SOURCE",
+          "METRIC_VALUE_MUST_SHARE_EVIDENCE",
+          "PERIOD_TEXT_CONTEXT_ANCHOR_REQUIRED",
+          "PERIOD_TEXT_NOT_GROUNDED",
+          "SUBJECT_TEXT_CONTEXT_ANCHOR_REQUIRED"
+        ]
+      ]
+    },
+    {
+      "request_key": "d0996deecfa193fce6825ed26f24b86463eacb63738e3cf63005163770b54aaf",
+      "prepared": {
+        "version": "ep-llm-batches-v3",
+        "batch": {
+          "citations_per_claim": 4,
+          "claim_limit": 4,
+          "context_evidence_version": "ep-field-evidence-v1",
+          "focus": "Reported issuer revenue/net sales. Prefer the latest reported period, then its comparable prior period. Exclude guidance.",
+          "metrics": [
+            "REVENUE"
+          ],
+          "name": "revenue",
+          "quote_char_limit": 1200,
+          "value_kinds": [
+            "ACTUAL"
+          ],
+          "version": "ep-llm-batches-v3"
+        },
+        "document_id": "efda415d5ed706e6de5c80db190e5a5ddad0caccc2793f2020c0c4c05dc5f101",
+        "text_revision": "e46de6b080936795a9c7ffd7e70b313014d4e7a336c6ab4986288ced3be8b409",
+        "ticker": "NYAX",
+        "untrusted_paragraphs": [
+          {
+            "id": "p0005",
+            "text": "HERZLIYA, Israel, Aug. 25, 2026 (GLOBE NEWSWIRE) -- Nayax Ltd. (Nasdaq: NYAX; TASE: NYAX), a global commerce enablement, payments and loyalty platform, today announced a definitive agreement to acquire IPS Group, Inc. (“IPS”) from Windjammer Capital Investors in an all-cash transaction for a total consideration of $350 million."
+          },
+          {
+            "id": "p0015",
+            "text": "· IPS’s financial performance includes estimated revenue for FY 2026 of over $90 million with more than 60% recurring revenue, representing approximately 20% strong organic revenue growth compared to FY 2025 and an Adjusted EBITDA of approximately $21 million, alongside with strong free cash flow generation and around 80% conversion."
+          }
+        ],
+        "coverage": {
+          "included": 2,
+          "total": 41,
+          "included_chars": 664,
+          "complete": false
+        },
+        "request_id": "e339cc90c33554e17b8a5ed5af18f04f82aa9c5a452e15b4751e876f6440dbbc"
+      },
+      "parent_request_id": "1ec8db6d2eb0e37987580765f940f5adcb4d6087975bd9009fdb08e7ca29183c",
+      "subset_fixture": true,
+      "original_rejection_reasons": []
+    }
+  ],
+  "budget": {
+    "calls": 13,
+    "reserved_microusd": 1996705
+  },
+  "source": "SG archived ep-llm-batches-v3 requests; explicit paragraph subsets, not complete releases",
+  "reference_type": "HUMAN_SELECTED_IDS",
+  "external_requests": 0
+}

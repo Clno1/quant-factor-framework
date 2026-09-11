@@ -65,3 +65,18 @@ outputs/
 /reviews/**/*.sqlite3
 /reviews/*-ep-*/evidence/
 /reviews/*-ep-*/**/*.json
+
+# Generated EP review outputs (source scripts and sanitized test fixtures remain tracked)
+/reviews/2026-09-10-ep-span-selection/brief-review*/
+/reviews/2026-09-10-ep-span-selection/observation-review/
+/reviews/2026-09-10-ep-span-selection/event_audit.md
+/reviews/2026-09-10-ep-span-selection/event_live_readable.md
+
+# Server-local deployment state and scratch artifacts
+/.deploy-commit
+/.deploy-manifest.json
+/.operations-backup-latest
+/ep-event-current
+/releases/
+/tmp/
+/data/locks/

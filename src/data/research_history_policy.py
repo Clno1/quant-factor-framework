@@ -144,7 +144,9 @@ def apply_research_history_policy(
             )
         policy = str(item["policy"]).upper()
         effective = pd.Timestamp(item["effective_from"]).normalize()
-        if effective > target:
+        # A provider may advertise a new listing before trading starts. Keep
+        # its future boundary; coverage excludes it until that session arrives.
+        if effective > target and policy != PROSPECTIVE_ONLY:
             raise ValueError(
                 f"{security_id}: policy effective_from exceeds target_session"
             )
@@ -177,7 +179,7 @@ def apply_research_history_policy(
             "reason_codes": ",".join(
                 sorted({str(value).strip().upper() for value in item["reason_codes"]})
             ),
-            "decision_source": decision_source,
+            "decision_source": str(item.get("decision_basis") or decision_source),
         })
     ledger = pd.DataFrame(ledger_rows, columns=POLICY_COLUMNS)
     return result.reset_index(drop=True), ledger.sort_values(

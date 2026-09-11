@@ -98,7 +98,7 @@ def _availability_at(
         "America/New_York",
         ambiguous="raise",
         nonexistent="raise",
-    ).tz_convert("UTC")
+    ).tz_convert("UTC").as_unit("us")
 
 
 def _utc_timestamp(value: datetime | pd.Timestamp | None = None) -> pd.Timestamp:

@@ -292,6 +292,36 @@ def test_history_delta_fetches_every_dated_alias_and_preserves_identity():
     assert fallbacks == []
 
 
+def test_future_prospective_security_is_not_fetched_before_admission():
+    policy = pd.DataFrame([{
+        "security_id": "sec_aaa", "policy": "PROSPECTIVE_ONLY",
+        "effective_from": "2020-04-01",
+    }])
+    selected = select_coverage_securities(
+        _universe(), history_start="2019-01-01", target_session="2020-03-31",
+        history_policy=policy,
+    )
+    assert "sec_aaa" not in set(selected.security_id)
+    admitted = select_coverage_securities(
+        _universe(), history_start="2019-01-01", target_session="2020-04-01",
+        history_policy=policy,
+    )
+    row = admitted.set_index("security_id").loc["sec_aaa"]
+    assert row.coverage_start == pd.Timestamp("2020-04-01")
+    symbols = pd.DataFrame([{
+        "security_id": "sec_aaa", "ticker": "AAA",
+        "effective_from": "2020-04-01", "effective_to": None,
+    }])
+    # An identity admitted today still needs no backfill through yesterday.
+    def unexpected_fetch(*args):
+        pytest.fail("future admission leaked into historical fetch")
+    bars, failures, fallbacks = fetch_coverage_history_delta(
+        admitted, symbols, security_ids=["sec_aaa"], history_start="2019-01-01",
+        target_session="2020-03-31", fetcher=unexpected_fetch,
+    )
+    assert bars.empty and not failures and not fallbacks
+
+
 def test_history_policy_excludes_unverifiable_and_clips_prospective_start():
     master = _universe().copy()
     policy = pd.DataFrame([

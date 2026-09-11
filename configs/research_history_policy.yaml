@@ -7,11 +7,35 @@ decision:
   basis: FMP cannot prove complete pre-activation history for these securities; unresolved history must
     not enter broad research.
 revisions:
+- revised_at: '2026-09-09'
+  approved_by: project_owner
+  basis: Authorized evidence-based RML history review and recovery. Admit Nasdaq RML prospectively
+    from its announced 2026-09-09 commencement; unverified OTC ADR and foreign ordinary-share history
+    must not be substituted. Preserve the original provider listing_date and earlier policy entries.
 - revised_at: '2026-08-20'
   approved_by: project_owner
   basis: NUR first appeared in dated FMP bulk data on 2026-08-10 while both canonical historical endpoints
     returned no pre-overlap history; admit it prospectively from the existing policy activation session.
 entries:
+- security_id: sec_d396285ca3c35145a5b3b250472e40d0
+  current_ticker: RML
+  name: Resolution Minerals Ltd. Sponsored ADR
+  trading_status: ACTIVE
+  policy: PROSPECTIVE_ONLY
+  effective_from: '2026-09-09'
+  reason_codes:
+  - VERIFIED_NASDAQ_COMMENCEMENT_BOUNDARY
+  - FMP_PRE_COMMENCEMENT_HISTORY_UNVERIFIABLE
+  decision_basis: Issuer announcement dates Nasdaq RML ADS commencement to 2026-09-09.
+    Citi identifies prior OTC RSMIY as ADR CUSIP 76091K105 / ISIN US76091K1051.
+    FMP advertises RML with a 2003-11-28 listing date but returns only a non-XNYS
+    2026-09-07 bar before commencement; RSMIY history is empty. No OTC or ASX history
+    is inferred. This is a research admission boundary, not a rewrite of legal issue inception.
+  sources:
+  - https://resolutionminerals.com/investor-centre/nasdaq-trading-to-commence/
+  - https://depositaryreceipts.citi.com/adr/notices/pgm_dispCA.aspx?cusip=76091K105&pageId=15&subpageID=112
+  - https://www.nasdaqtrader.com/Trader.aspx?id=nasdaq-security-status-updates
+  evidence_path: outputs/data_audits/rml_identity/20260909T155422Z/manifest.json
 - security_id: sec_080b09b0774a56ce85e2ba0154eb3887
   current_ticker: CTRA
   name: Coterra Energy Inc.

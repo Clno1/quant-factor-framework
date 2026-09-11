@@ -966,6 +966,7 @@ class BroadCoverageStore:
         run_id: str | None = None,
         bar_quarantine_path: str | Path | None = None,
         quality_lineage: dict[str, Any] | None = None,
+        expected_current_version_id: str | None = None,
     ) -> CoveragePublication:
         """Authenticate, freeze and atomically publish one coverage version."""
         if security_master.status != "PUBLISHED":
@@ -1317,6 +1318,13 @@ class BroadCoverageStore:
         )
         self.catalog.initialize()
         with file_lock(self.catalog.writer_lock_path):
+            if expected_current_version_id is not None:
+                current = self.catalog.latest_version(US_EQUITY_COVERAGE)
+                if current is None or current.version_id != expected_current_version_id:
+                    raise DataFoundationError(
+                        "coverage parent changed during candidate construction; "
+                        "retain candidate and rerun against the new parent"
+                    )
             self.catalog.start_run(
                 run_id=run_id,
                 universe=US_EQUITY_COVERAGE,

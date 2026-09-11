@@ -45,6 +45,9 @@ from src.data.fmp import (  # noqa: E402
     get_coverage_historical_ohlcv, get_eod_bulk, get_unadjusted_historical_close,
 )
 from src.data.price_semantics import build_price_semantics_contract  # noqa: E402
+from src.data.broad_history_repair import (  # noqa: E402
+    REPAIR_METHOD, audit_overlap, fetch_replacement, replace_month, verify_repaired_rows,
+)
 from src.data.foundation import (  # noqa: E402
     DataFoundationError,
     MarketDataCatalog,
@@ -93,6 +96,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument("--publish", action="store_true")
+    parser.add_argument("--audit-overlap-only", action="store_true",
+                        help="audit all continuing securities without building or publishing partitions")
+    parser.add_argument("--repair-full-history", action="store_true",
+                        help="explicitly refetch and replace entire histories of semantic-drift securities")
     parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
 
@@ -852,9 +859,72 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
     mapped = _attach_month_end_nominal_close(mapped, after=parent_target, target=target)
     broad_reader = BroadCoverageReader(market_reader=market_reader)
     previous_overlap = broad_reader.load_bars(start=refresh_start, end=parent_target, version=parent)
-    adjustment_audit = _coverage_rebase_audit(
-        previous_overlap, mapped, parent_security_ids=parent_presence_ids,
-    )
+    adjustment_audit, overlap_failures = audit_overlap(previous_overlap, mapped, parent_presence_ids)
+    scope_path = run_dir / "overlap_scope_audit.json"
+    scope = {
+        "parent_dataset_version_id": parent.version_id,
+        "parent_manifest_sha256": parent.manifest_checksum_sha256,
+        "security_master_generation_id": security_generation.generation_id,
+        "security_master_manifest_sha256": security_generation.manifest_sha256,
+        "provider_cache_binding": provider_cache_binding,
+        "authenticated_count": len(adjustment_audit),
+        "affected_count": len(overlap_failures), "failures": overlap_failures,
+    }
+    atomic_save_json(scope, scope_path)
+    if getattr(args, "audit_overlap_only", False):
+        return {"status": "AUDITED", "report_path": str(scope_path),
+                "affected_count": len(overlap_failures)}, 2 if overlap_failures else 0
+    if overlap_failures and (not getattr(args, "repair_full_history", False)
+                             or any(not row["recoverable"] for row in overlap_failures)):
+        raise DataFoundationError(
+            f"{len(overlap_failures)} securities failed overlap authentication; "
+            f"audit={scope_path}; explicit full-security history repair required; "
+            f"first_error={overlap_failures[0]['error']}"
+        )
+    repair_paths, repair_proofs, repair_errors = [], [], []
+    repaired_ids = {row["security_id"] for row in overlap_failures}
+    repair_report_path = run_dir / "full_history_repair.json"
+    repair_contract = {**_provider_cache_contract,
+                       "parent_manifest_sha256": parent.manifest_checksum_sha256,
+                       "scope_sha256": _sha256(scope_path)}
+    # Sequential per-security downloads and on-disk checkpoints bound memory.
+    # A failed security keeps the entire publication closed, not just its rows.
+    for index, item in enumerate(overlap_failures):
+        sid = item["security_id"]
+        try:
+            previous = broad_reader.load_bars(security_ids=[sid], version=parent)
+            path, proof = fetch_replacement(
+                cache_dir=provider_cache_dir, contract=repair_contract, security_id=sid,
+                universe=security_universe, symbols=security_frames["symbols"],
+                previous=previous, recent=mapped.loc[mapped.security_id.eq(sid)],
+                history_start=str(settings.history_start), target=target,
+                fetcher=get_coverage_historical_ohlcv,
+            )
+            repair_paths.append(path)
+            repair_proofs.append({"security_id": sid, "ticker": item["ticker"], **proof})
+        except DataFoundationError as exc:
+            repair_errors.append({"security_id": sid, "ticker": item["ticker"], "error": str(exc)})
+        atomic_save_json({"method": REPAIR_METHOD, "contract": repair_contract,
+                          "total": len(repaired_ids), "completed": index + 1,
+                          "status": "RUNNING", "validated": repair_proofs,
+                          "errors": repair_errors}, repair_report_path)
+        print(f"Full-history repair {index + 1}/{len(repaired_ids)}: "
+              f"{item['ticker']}; validated={len(repair_proofs)} failed={len(repair_errors)}",
+              file=sys.stderr, flush=True)
+    if repaired_ids:
+        atomic_save_json({"method": REPAIR_METHOD, "contract": repair_contract,
+                          "total": len(repaired_ids), "completed": len(overlap_failures),
+                          "status": "FAIL" if repair_errors else "VALIDATED",
+                          "validated": repair_proofs, "errors": repair_errors}, repair_report_path)
+    if repair_errors:
+        raise DataFoundationError(f"full-history repair rejected {len(repair_errors)} securities; audit={repair_report_path}")
+    repair_lineage = {
+        "method": REPAIR_METHOD, "security_count": len(repaired_ids),
+        "scope_audit_path": str(scope_path), "scope_audit_sha256": _sha256(scope_path),
+        "report_path": str(repair_report_path) if repaired_ids else None,
+        "report_sha256": _sha256(repair_report_path) if repaired_ids else None,
+        "securities": repair_proofs,
+    }
     changed_scales = [row for row in adjustment_audit if any(
         not np.isclose(value, 1., rtol=1e-12, atol=0.) for value in row["scales"].values()
     )]
@@ -865,13 +935,16 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
     affected_months.update(
         mapped["date"].dt.to_period("M").astype(str).unique().tolist()
     )
-    if security_master_rebase or changed_scales:
+    if security_master_rebase or changed_scales or repaired_ids:
         affected_months.update({
             f"{int(entry['year']):04d}-{int(entry['month']):02d}"
             for entry in json.loads(
                 Path(parent.bars_path).read_text(encoding="utf-8")
             )["partitions"]
         })
+    for path in repair_paths:
+        dates = pd.read_parquet(path, columns=["date"])["date"]
+        affected_months.update(dates.dt.to_period("M").astype(str).unique())
     unchanged_paths, _replaced_paths, rebuild_months = _parent_partition_paths(
         parent, affected_months=affected_months
     )
@@ -890,6 +963,7 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
         ),
         "security_master_rebase": security_master_rebase,
         "price_scale_reconciliation": adjustment_audit,
+        "full_security_history_repair": repair_lineage,
         "explicit_same_session_rebase": same_session_rebase,
         "identity_delta_security_count": len(identity_delta_ids),
         "identity_delta_security_ids": identity_delta_ids,
@@ -944,9 +1018,21 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
             delta = mapped.loc[
                 mapped["date"].dt.to_period("M").eq(period)
             ].copy()
-            if old.empty and delta.empty:
+            replacement = pd.DataFrame(columns=mapped.columns)
+            if repair_paths:
+                connection = catalog._connect(read_only=True)
+                try:
+                    connection.execute("SET threads = 1")
+                    connection.execute("SET memory_limit = '320MB'")
+                    replacement = connection.execute(
+                        "SELECT * FROM read_parquet(?, hive_partitioning=false) WHERE date >= ? AND date <= ?",
+                        [[str(p) for p in repair_paths], period.start_time.date(), period_end.date()],
+                    ).fetchdf()
+                finally:
+                    connection.close()
+            combined = replace_month(old, delta, replacement, repaired_ids)
+            if combined.empty:
                 continue
-            combined = pd.concat([old, delta], ignore_index=True)
             # EOD overlap may not include the independently sourced nominal
             # field. Preserve it from the same historical date/security key.
             if "unadjusted_close" in combined.columns:
@@ -966,6 +1052,8 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
             )
             path.parent.mkdir(parents=True, exist_ok=True)
             combined.to_parquet(path, index=False, compression="snappy")
+            if repaired_ids:
+                verify_repaired_rows(pd.read_parquet(path), replacement, repaired_ids)
             rebuilt_paths.append(path)
             checkpoint["periods"][period_text] = {
                 "status": "SUCCESS",
@@ -1039,6 +1127,7 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
                 history_mode="INCREMENTAL_FROM_AUTHENTICATED_PARENT",
             ),
             price_semantics_parent_version_id=parent.version_id,
+            expected_current_version_id=parent.version_id,
             min_target_coverage=float(settings.min_target_coverage),
             external_checks=[presence_check, identity_delta_check, *quarantine_checks],
             run_id=run_id,
@@ -1051,6 +1140,7 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
                     "scope": "new_completed_month_ends_and_identity_delta_history",
                 },
                 "parent_dataset_version_id": parent.version_id,
+                "full_security_history_repair": repair_lineage,
                 "price_scale_reconciliation": {
                     "method": "FRESH_OVERLAP_BY_SECURITY_ID_V1",
                     "parent_manifest_sha256": parent.manifest_checksum_sha256,

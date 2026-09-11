@@ -99,7 +99,7 @@ def exhibit_links(raw: bytes, primary_url: str) -> list[dict]:
 
 class OfficialSourceDiscovery:
     def __init__(self, store, client, registry: dict, *, max_documents=10, max_filings=3, max_exhibits=3,
-                 clock=lambda: datetime.now(timezone.utc)):
+                 clock=lambda: datetime.now(timezone.utc), skip_existing=False, prioritize_current=False):
         for value in (max_documents, max_filings, max_exhibits):
             if type(value) is not int or not 1 <= value <= 20:
                 raise ValueError("Discovery limits must be integers between 1 and 20")
@@ -107,6 +107,8 @@ class OfficialSourceDiscovery:
         self.max_documents, self.max_filings, self.max_exhibits = max_documents, max_filings, max_exhibits
         self.clock = clock
         self.memo = {}
+        self.skip_existing = skip_existing
+        self.prioritize_current = prioritize_current
 
     def _fetch(self, batch, url, kind="html"):
         self.client.validate_url(url)
@@ -224,31 +226,73 @@ class OfficialSourceDiscovery:
                   "max_documents": self.max_documents, "max_filings": self.max_filings, "max_exhibits": self.max_exhibits,
                   "max_http_requests": self.client.max_requests, "ticker_scope": symbol,
                   "mode": "SHADOW", "delivery": "DISABLED_SHADOW_ONLY", "llm": "NOT_CONFIGURED"}
+        config["prioritize_current"] = self.prioritize_current
         batch = self.store.start_source_run(report["run_id"], config, self.clock())
         count, attempted, initial = Counter(), 0, self.client.requests
+        existing = set()
+        if self.skip_existing:
+            with self.store.connection() as db:
+                existing = {tuple(row) for row in db.execute("""SELECT DISTINCT a.document_id, a.revision_id
+                    FROM ep_source_attempts a JOIN ep_source_runs r USING(batch_id)
+                    JOIN ep_observations o ON o.document_id=a.document_id AND o.revision_id=a.revision_id
+                    WHERE o.run_id=? AND r.finished_at IS NOT NULL AND r.finished_at<=? AND a.observed_at<=?
+                    AND json_extract(a.payload_json,'$.status')='DOCUMENT_MATCHED'
+                    AND json_extract(a.payload_json,'$.issuer_linkage')='REGISTERED_CIK_AND_CURRENT_SEC_TICKER_MATCH'""",
+                    (report["run_id"], timestamp(self.clock()), timestamp(self.clock())))}
+        candidates = report["candidates"]
+        window_start = None
+        if self.prioritize_current:
+            from .catalyst import event_window
+            window_start = event_window(self.clock())["start"]
+            with self.store.connection() as db:
+                last_attempt = dict(db.execute("""SELECT a.ticker, MAX(a.observed_at)
+                    FROM ep_source_attempts a JOIN ep_source_runs r USING(batch_id)
+                    WHERE r.finished_at IS NOT NULL AND a.observed_at>=? AND a.observed_at<=?
+                    AND json_extract(a.payload_json,'$.discovery_steps') IS NOT NULL
+                    GROUP BY a.ticker""", (timestamp(window_start), timestamp(self.clock()))))
+            def queue_key(candidate):
+                events = [e for e in candidate["events"] if "url" in e["evidence"]]
+                hints = [e for e in events if e["event_type_hint"] not in {"UNKNOWN", "LEGAL_NOTICE"}]
+                latest = max((datetime.fromisoformat(e["published_at"]).timestamp() for e in hints or events
+                              if e.get("published_at")), default=0)
+                return (candidate.get("identity") is None, not bool(hints),
+                        last_attempt.get(candidate["ticker"], ""), -latest, candidate["ticker"])
+            candidates = sorted(candidates, key=queue_key)
+        attempted_symbols = set()
         try:
-            for candidate in report["candidates"]:
+            for candidate in candidates:
                 if symbol and candidate["ticker"] != symbol:
                     continue
                 seen = set()
-                for event in candidate["events"]:
+                events = sorted(candidate["events"], key=lambda e: e["published_at"] or "", reverse=True) if self.prioritize_current else candidate["events"]
+                for event in events:
                     if "url" not in event["evidence"] or (event["document_id"], event["revision_id"]) in seen:
                         continue
                     seen.add((event["document_id"], event["revision_id"]))
+                    if (event["document_id"], event["revision_id"]) in existing:
+                        count["EXISTING_VERIFIED_SOURCE"] += 1
+                        continue
                     raw, parsed = None, None
                     if candidate["status"] == "EXCLUDED" or event["event_type_hint"] == "LEGAL_NOTICE":
                         result = {"status": "EXCLUDED_FROM_SOURCE_QUEUE"}
+                    elif self.prioritize_current and candidate.get("identity") is None:
+                        result = {"status": "SECURITY_IDENTITY_PENDING"}
+                    elif window_start is not None and (not event.get("published_at") or not window_start < datetime.fromisoformat(event["published_at"]) <= self.clock()):
+                        result = {"status": "OUTSIDE_CURRENT_PROVIDER_WINDOW"}
                     elif candidate["ticker"] not in self.registry["issuers"]:
                         result = {"status": "ISSUER_NOT_REGISTERED"}
+                    elif self.prioritize_current and candidate["ticker"] in attempted_symbols:
+                        result = {"status": "ISSUER_CAPACITY_DEFERRED"}
                     elif attempted >= self.max_documents:
                         result = {"status": "SOURCE_DOCUMENT_BUDGET_EXCEEDED"}
                     else:
                         attempted += 1
+                        attempted_symbols.add(candidate["ticker"])
                         result, raw, parsed = self._resolve(batch, candidate, event)
                     result.update(original_url=event["evidence"]["url"], llm="NOT_CONFIGURED", delivery="DISABLED_SHADOW_ONLY")
                     self.store.save_source_attempt(batch, candidate["ticker"], event, result, self.clock(), raw=raw, parsed=parsed)
                     count[result["status"]] += 1
-            status = "SOURCE_PASS_COMPLETED" if count and set(count) <= {"DOCUMENT_MATCHED", "EXCLUDED_FROM_SOURCE_QUEUE"} else (
+            status = "SOURCE_PASS_COMPLETED" if count and set(count) <= {"DOCUMENT_MATCHED", "EXCLUDED_FROM_SOURCE_QUEUE", "EXISTING_VERIFIED_SOURCE"} else (
                 "PARTIAL_SOURCES" if count else "NO_SOURCE_TARGETS")
             self.store.finish_source_run(batch, {"status": status, "counts": dict(count), "attempted_documents": attempted,
                 "http_requests": self.client.requests - initial, "ratings_enabled": False,

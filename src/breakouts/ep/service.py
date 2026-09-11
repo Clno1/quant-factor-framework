@@ -46,12 +46,14 @@ class CollectionBudget:
 class EpRadar:
     def __init__(self, store: EpStore, provider: EpProvider, settings: EpSettings | None = None,
                  *, clock: Callable[[], datetime] | None = None,
-                 monotonic: Callable[[], float] = time.monotonic) -> None:
+                 monotonic: Callable[[], float] = time.monotonic,
+                 priority_symbols: set[str] | None = None) -> None:
         self.store = store
         self.provider = provider
         self.settings = settings or EpSettings()
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.monotonic = monotonic
+        self.priority_symbols = priority_symbols
 
     def collect(self, start: str, end: str) -> dict[str, Any]:
         if self.store.read_only:
@@ -106,7 +108,11 @@ class EpRadar:
                 return 2
 
             ordered = sorted(grouped, key=lambda symbol: (
+                symbol not in self.priority_symbols if self.priority_symbols is not None else False,
                 priority(symbol),
+                -max((datetime.fromisoformat(d["published_at"]).timestamp() for d in grouped[symbol]
+                      if d.get("published_at")), default=0)
+                    if self.priority_symbols is not None else 0,
                 identities.get(symbol, {}).get("observed_at", ""), symbol))
             for symbol in ordered:
                 cached = identities.get(symbol)

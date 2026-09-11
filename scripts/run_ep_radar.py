@@ -60,13 +60,16 @@ def main() -> int:
             command.add_argument("--provider", choices=("openai", "kimi-cn", "kimi-intl"))
         if name == "llm-extract":
             command.add_argument("--execute", action="store_true", help="Explicitly authorize one paid source extraction")
-    for name in ("report", "explain", "sources", "source", "review-template", "reviews", "dossier", "fetches", "analyze", "analyses"):
+    for name in ("report", "explain", "sources", "source", "review-template", "reviews", "dossier", "fetches", "analyze", "analyses", "brief"):
         command = sub.add_parser(name, help="Offline, read-only inspection")
-        if name in {"report", "explain", "sources", "dossier", "fetches", "analyze", "analyses"}:
+        if name in {"report", "explain", "sources", "dossier", "fetches", "analyze", "analyses", "brief"}:
             command.add_argument("--run-id")
         command.add_argument("--as-of", help="Timezone-aware timestamp; gates actual receipt/run completion")
-        if name in {"explain", "dossier", "analyze", "analyses"}:
+        if name in {"explain", "dossier", "analyze", "analyses", "brief"}:
             command.add_argument("ticker")
+        if name == "brief":
+            command.add_argument("--format", choices=("json", "text"), default="text")
+            command.add_argument("--max-sources", type=int, default=5)
         if name == "analyze":
             command.add_argument("--persist", action="store_true", help="Append an offline analysis snapshot to the EP database")
         if name in {"source", "review-template", "reviews"}:
@@ -148,7 +151,10 @@ def main() -> int:
             if persist and not args.db.is_file():
                 raise FileNotFoundError("Collect and enrich EP evidence before saving analysis")
             store = EpStore(args.db, read_only=not persist)
-            if args.command == "analyze":
+            if args.command == "brief":
+                from src.breakouts.ep.brief import candidate_brief
+                result = candidate_brief(store, args.ticker, as_of=as_of, run_id=args.run_id, max_sources=args.max_sources)
+            elif args.command == "analyze":
                 from src.breakouts.ep.analysis import analyze_candidate
                 result = store.analyze_and_save(args.ticker, datetime.now(timezone.utc), as_of=as_of, run_id=args.run_id) if persist else analyze_candidate(
                     store, args.ticker, as_of=as_of, run_id=args.run_id)
@@ -181,7 +187,11 @@ def main() -> int:
                     result = sources
                 else:
                     result["source_enrichment"] = sources
-        print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
+        if args.command == "brief" and args.format == "text":
+            from src.breakouts.ep.brief import render_brief
+            print(render_brief(result))
+        else:
+            print(json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False))
         if args.command == "collect" and result["status"] != "COMPLETE_OBSERVATION":
             return 2
         if args.command in {"enrich", "discover"} and result["status"] != "SOURCE_PASS_COMPLETED":

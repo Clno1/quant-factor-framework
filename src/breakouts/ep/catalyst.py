@@ -23,7 +23,7 @@ def release_date(source):
     for paragraph in source["parsed"]["paragraphs"][:15]:
         text = paragraph["text"]
         issuer = attribution.search(text)
-        if not issuer or not re.search(r"\btoday (?:announced|reported)\b", text[issuer.end():], re.I):
+        if not issuer or not re.search(r"\btoday (?:announced|reported|released)\b", text[issuer.end():], re.I):
             continue
         dates = list(DATE.finditer(text[:issuer.start()]))
         if len(dates) != 1:
@@ -51,6 +51,13 @@ def event_window(as_of, calendar=None):
     previous = calendar.previous_session(session)
     return {"session": session.strftime("%Y-%m-%d"),
             "start": calendar.session_close(previous).to_pydatetime(), "end": as_of}
+
+
+def current_commentary_window(value):
+    """Timing eligibility for explicitly unverified commentary, not a verified catalyst."""
+    return value.get("status") == "CURRENT_WINDOW_DATE_ONLY" or (
+        value.get("status") == "BOUNDARY_RELEASE_TIME_UNVERIFIED"
+        and value.get("provider_time_in_window") is True)
 
 
 def freshness(source, as_of, calendar=None):

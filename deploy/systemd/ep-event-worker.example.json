@@ -1,0 +1,18 @@
+{
+  "database": "/home/projects/quant/tmp/ep-llm-trial-20260909/data/ep/llm_trial_20260909.sqlite3",
+  "reviews_database": "/home/projects/quant/data/ep/event_reviews.sqlite3",
+  "output_directory": "/home/projects/quant/data/ep/event_reports",
+  "key_file": "/etc/quant/ep-llm-trial-kimi-cn.key",
+  "enabled": false,
+  "collect_enabled": false,
+  "max_calls": 2,
+  "max_sources": 3,
+  "deadline_seconds": 300,
+  "source_age_hours": 36,
+  "jobs": [],
+  "delivery_enabled": false,
+  "allow_unreviewed_ai": true,
+  "outbox_database": "/home/projects/quant/data/ep/event_outbox.sqlite3",
+  "webhook_file": "/etc/quant/ep-event-discord.key",
+  "expected_channel_id": ""
+}

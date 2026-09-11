@@ -123,7 +123,7 @@ def _normalize_membership(
     if out["date"].gt(pd.Timestamp(target_session)).any():
         raise DataFoundationError(f"[{universe}] membership contains future dates")
     for column in ("security_id", "ticker", "reason_codes", "snapshot_type"):
-        out[column] = out[column].fillna("").astype(str).str.strip()
+        out[column] = out[column].astype(object).fillna("").astype(str).str.strip()
     out["ticker"] = out["ticker"].str.upper().str.replace(".", "-", regex=False)
     out["active"] = out["active"].fillna(False).astype(bool)
     for column in ("asset_type_pass", "price_pass", "liquidity_pass"):
@@ -181,13 +181,13 @@ def _normalize_eligibility(
         raise DataFoundationError(
             f"[{universe}] eligibility audit contains invalid or future dates"
         )
-    out["security_id"] = out["security_id"].fillna("").astype(str).str.strip()
+    out["security_id"] = out["security_id"].astype(object).fillna("").astype(str).str.strip()
     out["ticker"] = (
-        out["ticker"].fillna("").astype(str).str.strip().str.upper()
+        out["ticker"].astype(object).fillna("").astype(str).str.strip().str.upper()
         .str.replace(".", "-", regex=False)
     )
     out["eligible"] = out["eligible"].fillna(False).astype(bool)
-    out["reason_codes"] = out["reason_codes"].fillna("").astype(str)
+    out["reason_codes"] = out["reason_codes"].astype(object).fillna("").astype(str)
     if out.duplicated(["date", "security_id"]).any():
         raise DataFoundationError(
             f"[{universe}] eligibility audit has duplicate date/security rows"

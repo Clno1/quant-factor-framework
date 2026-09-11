@@ -1094,3 +1094,185 @@ coverage/PIT 自动改绑。09-08 茶杯柄候选的旧不可变合同本次重�
 做有界纠正规则并同冻结源双重幂等验证；如果历史仍无法证明，则需正式审阅排除/向未来摄取政策，
 不能擅自追加到原 66 条 PROSPECTIVE_ONLY 台账。新 coverage、PIT 发布并核验后才可重建候选。
 本次没有修改身份规则、历史排除、门槛、生产数据或服务开关，也没有把失败日补记为 shadow 通过。
+
+## 29. 2026-09-10 RML 证据化向未来摄取与恢复
+
+第 28 节记录的是排查当时状态；项目负责人随后授权核实 RML 并执行有证据的修正/历史排除。
+本次没有把 FMP 的 listing_date 直接改成推测日期，也没有拼接其他市场行情。
+
+证据链：
+
+- [发行人 2026-09-09 公告](https://resolutionminerals.com/investor-centre/nasdaq-trading-to-commence/)
+  明确将 Nasdaq RML ADS 交易开始日定为 2026-09-09。
+- [Citi 存托凭证目录](https://depositaryreceipts.citi.com/adr/notices/pgm_dispCA.aspx?cusip=76091K105&pageId=15&subpageID=112)
+  将 CUSIP 76091K105、ISIN US76091K1051 对应到 OTC ADR RSMIY，比例 200 普通股:1 ADR。
+- [Nasdaq 状态目录](https://www.nasdaqtrader.com/Trader.aspx?id=nasdaq-security-status-updates)
+  的 09-08 RML 行是 Anticipated Security Additions，不能当成历史首次成交日。
+- SG 有界请求 RML/RSMIY/RLMLF 的 full 与 dividend-adjusted 两端点，区间 2019-01-02..2026-09-08，
+  六次均 HTTP 200。RML 两端点各仅一条 09-07 记录（XNYS 休市日），另两个代码均空数组。
+  因此不是本次请求超时，且响应不能证明可用的上市前美国交易历史。09-04 截止日原任务无数据
+  与此一致。缺失不允许由 ASX 普通股、OTC 普通股或无证据 ADR 历史替代。
+
+原始响应及 SHA-256 在 `outputs/data_audits/rml_identity/20260909T155422Z/manifest.json`；
+三个主来源网页均 HTTP 200，另存 `primary_sources_manifest.json`，没有保存 API 密钥。
+
+实现：对精确 security_id `sec_d396285ca3c35145a5b3b250472e40d0`、ticker、name、ACTIVE 状态
+增加 PROSPECTIVE_ONLY，research effective_from=2026-09-09，附来源、原因和逐票 decision_basis。
+原主表 listing_date=2003-11-28 及 CUSIP/ISIN 保持原样；这是研究准入边界，不宣称法律发行日。
+原 67 条政策原样保留，现共 68 条（32 prospective、36 excluded），没有移除任何排除台账。
+
+代码允许已批准的 PROSPECTIVE_ONLY 起始日晚于构建 target；别名仍从未来生效日开始，coverage
+选择器在生效日前排除该身份。未来 EXCLUDED 策略仍拒绝。新增测试覆盖生效日前不纳入、不请求
+历史、生效日裁剪、原字段保留、同输入五表精确幂等。身份覆盖率 100%、历史覆盖、价格与哈希门禁
+均未降低。不能通过把 effective_from 提前到 09-08 来绕过校验。
+
+本地完整测试 1,048 passed、6 skipped；SG 定向测试 57 passed。部署前四个文件逐个与本地
+基线哈希一致，备份为 `/home/projects/quant-backups/rml-prospective-20260909T235646CST`。
+冻结源为 `outputs/data_audits/security_master_candidates/asof=2026-09-08/run=20260909T033104Z_d458b9f3/provider_sources`。
+恢复执行采用单线程 BLAS、flock、MemoryHigh=700M、MemoryMax=900M，先双候选校验，再发布、
+重跑 coverage/PIT 并核验候选。最终生产结果见本节后续验收记录；未完成步骤不得据此视为已恢复。
+
+### 本轮真实验收结果
+
+两次冻结源候选分别位于 `outputs/data_audits/rml_recovery/security_master_candidates/asof=2026-09-08/`
+下的 `run=20260909T155749Z_73937ecf`、`run=20260909T160144Z_fdcfa93c`；五表精确比较报告为
+`outputs/data_audits/rml_recovery/double_frozen_verification.json`，PASS。均为 10,646 个身份、
+5,353 活跃普通股，身份覆盖 100%，零身份冲突。不是放松校验或手工改成功标志。
+
+正式 Security Master 已发布 `65fc7779e7524461810d10633db63dd4`，target 09-08，manifest SHA-256
+`ea1c07820fa3ccf922300451599fadc2f9f77629dd8b98c3a24b5080375e7fd1`。正式五表哈希再次核验，
+与两份候选完全一致。发布构建耗时 196.445 秒，systemd 峰值 247.0 MiB、swap 0（进程报告的
+peak RSS 为 365.961 MiB，和 cgroup 计量口径不同，不混用）。
+
+随后 `quant-rml-data-recovery.service` 执行真实日更，报告为
+`outputs/data_audits/broad_daily_pipeline/target=2026-09-08/run=20260909T161013Z_04583bcb.json`。
+RML 阻断已消除：增量身份 16 -> 15，取得 13,126 行历史，alias_failures=[]、alias_fallbacks=[]。
+17 个近期 XNYS 交易日批量响应均完成并保存有哈希缓存，未恢复旧输入 checkpoint。
+但在后续重叠窗口认证时出现新的独立 blocker，整链最终 FAILED，耗时 282.362 秒，systemd
+峰值 444.9 MiB、swap 0。PIT 和候选没有启动，不能宣称恢复成功。
+
+新 blocker 是 CALC（`sec_00603104b02855dca5bb210569c75e16`）的 volume 非统一比例差异，
+max_relative_deviation=1.93013e-05，超过现有 1e-5 门槛。定点对比发现单股 full 端点当前仍返回
+与旧版本相同的整数成交量，而 eod-bulk 返回小数，例如：
+
+| 日期 | 旧版本及当前 full | 新 eod-bulk |
+| --- | ---: | ---: |
+| 2026-08-18 | 20724 | 20723.6 |
+| 2026-08-19 | 84730 | 84729.6 |
+| 2026-08-24 | 50239 | 50238.8 |
+| 2026-08-25 | 44153 | 44153.2 |
+| 2026-08-28 | 135205 | 135205.2 |
+
+已证实端点成交量精度不一致，不能把该错误简单称为公司行动、网络故障或已确定的真实历史修订。
+也不能仅凭差异小就调大容差或四舍五入全部行情。逐日证据为
+`outputs/data_audits/rml_recovery/calc_overlap_diagnostic.json`；当前 full 原始响应为
+`calc_current_full_response.json`，SHA-256
+`fe1422169540143ba3c87883306a42a2ed681b76538ed1cb25397c6787e4fe27`。
+
+现有宽基 writer 对这类差异只能严格停止，尚无逐证券完整历史重建与原子替换路径。下一步需先在
+冻结重叠窗口审计所有受影响身份，再实现有界、版本绑定的规范单股全历史重取、与批量数据的冲突
+认证和不可变分片替换；不能只覆盖短期窗口留下历史口径断点，也不能假设修复 CALC 后无其他冲突。
+完成回归和候选验证后才可再次发布 coverage/PIT，随后恢复候选及盘中评估。此次保留全部响应、
+旧发布与失败记录，没有放宽容差、强行启动依赖过期行情的候选或补记 shadow 日。
+
+## 30. 2026-09-10 全证券范围审计与整票历史恢复
+
+对 2026-09-08 的冻结 EOD 缓存和父版本 `562967c01bb54e2ab39454804cc4ac73`
+进行完整重叠认证，5,437 只通过，321 只失败。按每票首先触发的失败字段统计：volume 194、
+adj_close 56、open 18、high 17、low 8、close 4、零成交量不一致 24。
+这是首次失败字段分类，不代表同一证券只有一个字段不同，也不能将全部 321 只解释为精度误差。
+正式审计：SG `outputs/data_audits/rml_recovery/full_overlap_scope_audit.json`；
+本地副本 `outputs/data_audits/full_security_history_repair/sg_frozen_overlap_scope_20260910.json`。
+
+新增 `src/data/broad_history_repair.py`，方法 `FULL_SECURITY_CANONICAL_REPLACEMENT_V1`。
+恢复是显式运维操作，普通日更仍严格拒绝无法认证的增量，不会自动开启大量全历史下载。
+
+1. `update_us_equity_coverage.py --audit-overlap-only` 扫描所有继续存在的身份，输出
+   `overlap_scope_audit.json`，不构建或发布分片。认证容差仍为 `1e-5`。
+2. `--repair-full-history` 对审计确认的语义漂移逐票重取整个允许历史区间，遵守正式
+   Security Master 的历史 ticker 区间和 PROSPECTIVE_ONLY 起点，不做当前 ticker 回退。
+3. 全历史使用 canonical full OHLCV、dividend-adjusted adj_close、独立 non-split-adjusted
+   nominal close。旧前缀、旧 nominal close、新 bulk 重叠和新增日都不能混入被修复证券。
+   所有 bulk/full 字段冲突计数入审计；选择 full 是明确的整票来源合同，不是数值容差豁免。
+4. 每票缓存绑定父版本及 manifest、Security Master 及 manifest、目标日、方法、全范围审计、
+   历史区间和别名。逐别名接口返回帧、验证后帧和 manifest 各有哈希；只有完整成功缓存可以复用。
+   失败 attempt 保留返回帧与 failure.json。这些 Parquet 是 FMP 适配器的返回帧，不等同于三路
+   HTTP 原始响应字节。返回空、日期越界、重复、坏价格、非法成交量、
+   nominal close 缺失或已有有效日期丢失，一律不允许替换；不会填充未证明的交易日。
+5. 按月重建所有涉及历史的分片，先移除被修复证券的全部旧行/bulk 行，再插入完整新历史。
+   新写入的每个月从磁盘读回，与对应 canonical 数据逐行精确比对；其他身份继续走原有认证。
+6. 全池质量门禁通过后，原子登记新 immutable version 并更新指针。发布前在 catalog 写锁内
+   检查父指针未被其他 writer 推进；失败不切换指针，不删除旧版本或 staging。
+
+进度证据为本次 run 下的 `full_history_repair.json`（total/completed/validated/errors）及
+`journalctl -u quant-full-history-repair.service`；成功缓存存于原 provider cache 的
+`full_security_repair/<security_id>/<binding>/`。该临时恢复服务不等于日常 timer 已修复。
+
+部署前备份：`/home/projects/quant-backups/full-security-history-repair-20260910T004154CST`。
+本地 `python -m pytest -q tests`：1,077 passed、6 skipped；SG 恢复/覆盖/运维专项测试：60 passed。
+直接在根目录执行 pytest 会收集嵌套 `quant-factor-framework/tests` 同名模块而冲突，
+本项目回归明确指定 `tests`，未删除用户的嵌套目录。
+00:45 SGT 已启动真实恢复，MemoryHigh=700M、MemoryMax=900M、单线程 BLAS、90 分钟超时、
+生产 flock 互斥；该时刻尚未发布新 coverage，不代表 PIT、候选或 shadow 已恢复。
+
+### 30.1 首次全范围执行结果与尚未接入的特殊情况
+
+2026-09-10 00:45:13 至 01:11:05 SGT，321/321 全部处理完毕，318 只验证通过，累计
+323,492 行完整历史进入已认证缓存；3 只拒绝。历时 25 分 52 秒，CPU 6 分 8.354 秒，
+cgroup 峰值 702.0 MiB、swap 0。服务以数据校验失败退出 1；SSH 等待连接曾断开，
+但服务已独立完成，journal 和终态 JSON 证明这不是服务器中断。
+
+| 证券 | 完整历史校验问题 | 核验后的性质 |
+| --- | --- | --- |
+| STRR | 缺少 2025-08-22 至 09-04 的 9 个有效交易日 | FMP 查询代码与真实交易代码的切换窗口不一致 |
+| ATCX | 2019-11-22、2020-04-03 的 open > high | 与原始正式隔离台账的坏行完全相同，父有效行情中不存在 |
+| BGLC | 2022-07-26、2023-04-06 的 open > high | 与原始正式隔离台账的坏行完全相同，父有效行情中不存在 |
+
+STRR 的正式身份仍是 HSON 至 2025-09-04、STRR 自 09-05；
+[发行人更名公告](https://www.starequity.com/node/19281)及
+[SEC 8-K](https://www.sec.gov/Archives/edgar/data/1210708/000121070825000081/hson-20250902.htm)
+支持该边界。合并在 08-22 完成，但
+[合并公告](https://www.sec.gov/Archives/edgar/data/1210708/000119312525185799/d931756dex991.htm)
+明确 HSON 继续交易，不能将这 9 天伪称停牌或把真实换码日改成 08-22。
+本轮另取 08-15 至 09-10 的三类原始 HTTP 响应：HSON 的三类接口均不含这 9 日，
+STRR 的 full/dividend-adjusted/non-split-adjusted 均包含全部 9 日。
+证据保存为 `outputs/data_audits/full_security_history_repair/strr_window_probe_20260910/manifest.json`。
+这证明需要专门的、有身份/日期/证据约束的 provider 查询映射，不能对整个旧历史盲用 STRR。
+本轮只做诊断，没有将这些响应直接拼入正式数据或修改身份登记。
+
+四条坏行已与版本 `ad5de5cfd10d47e2ae21364f1808248d` 的正式隔离文件逐值核对，原 manifest
+SHA 为 `6fbe3bc28ac4e477b782fa9cc337a3618a75875b4c3f31bf6676d9b481c8b7c0`，隔离文件
+SHA 为 `081f7e715620f7e71a52102a96451d25843b91113b65fe2ed2a6f24b7b719255`，均验证一致。
+证据为 `outputs/data_audits/full_security_history_repair/prior_quarantine_evidence.json`。
+**ATCX/BGLC 不是新增的历史丢失：是新整票恢复分支尚未接入已认证隔离台账，当前默认零坏条而拒绝。**
+下一步应只让与认证台账精确匹配的坏行沿用有审计的隔离，保持全池隔离比例/目标日门槛，
+且不能因此删除父版本原本有效的日期；不能简单改 open/high、放宽价格规则或吞掉新坏行。
+
+本轮恢复主干已实现，但上述两类特殊接入仍未实现，不能宣称生产恢复完成。未发布新 coverage，
+旧版本仍 `562967c01bb54e2ab39454804cc4ac73`（09-04），PIT 仍
+`c1329fcd14dd4521911976b21fa6be22`。未运行后续 PIT/候选，未补记 shadow 或打开发送。
+318 份成功缓存可在完全相同输入合同下复用；变更特殊票的查询/隔离合同必须重新认证对应缓存。
+
+终态及明细：原 run 的 `full_history_repair.json`、`failure_diagnostics.json`；本地同名副本在
+`outputs/data_audits/full_security_history_repair/`。后续又部署了按月查询 threads=1/memory_limit=320MB、
+供应商 ValueError 留存为数据合同失败、缓存采集时间记录，以及发现当前 coverage 整票修复时
+PIT 禁止增量沿用旧月度资格的保护。对应备份
+`/home/projects/quant-backups/full-history-repair-hardening-20260910T012835CST` 保留首次实跑代码。
+最终本地全套 1,079 passed / 6 skipped；SG 覆盖/恢复/运维/PIT 专项 73 passed。
+这些补强通过代码测试，但并未把首次失败运行改写成成功；PIT 生产验收仍需等待修复完成。
+
+### 30.2 2026-09-10 日更的新 target 审计
+
+11:32 至 11:43:55 SGT 自动日更 target=2026-09-09 失败。主表已正式发布
+`c8f5a40065914b83b68a87ecb0012b59`，manifest SHA-256
+`bee69d816c3eb7ae882208de961e9c20813d51c7967c0c12f13e8bfea985d739`。
+覆盖审计 5,433 只通过、324 只失败，首例 CALC 非均匀 volume 差异 1.93013e-05。
+审计路径 `data/lake/staging/us_equity_coverage_incremental/asof=2026-09-09/run=20260910T033726Z_b076440e/overlap_scope_audit.json`，
+provider_cache_binding=`50bfbac91b6d6543862afc3e50d5c756826a860a21ba9247419c9c0d4d7a98a0`。
+其 target、主表和源绑定不同于 30.1 的 321 只，不能直接使用旧恢复结果作为本日发布证明，
+也不能仅凭计数差断言“新增恰好三只问题证券”。未执行本日完整历史恢复。
+
+正式行情 `562967c01bb54e2ab39454804cc4ac73`、PIT `c1329fcd14dd4521911976b21fa6be22`
+和因子 `037d9d2783f0467b90679e0df1af0c3a` 仍截至 09-04。先完成 30.1 两类适配，
+再按选定完整冻结合同恢复和全链验收；不得因日更重试自动绕过显式恢复授权与数据门槛。
+茶杯柄无新 v3 合格日，0/5、发送关闭。资源与运行报告见 SG 运维 46。

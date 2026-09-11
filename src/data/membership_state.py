@@ -48,15 +48,15 @@ def normalize_membership_events(
     frame["date"] = pd.to_datetime(
         frame["date"], errors="coerce"
     ).dt.normalize()
-    frame[key_column] = frame[key_column].fillna("").astype(str).str.strip()
+    frame[key_column] = frame[key_column].astype(object).fillna("").astype(str).str.strip()
     frame["active"] = frame["active"].fillna(False).astype(bool)
     if value_column:
         frame[value_column] = (
-            frame[value_column].fillna("").astype(str).str.strip()
+            frame[value_column].astype(object).fillna("").astype(str).str.strip()
         )
     if "snapshot_type" in frame.columns:
         frame["snapshot_type"] = (
-            frame["snapshot_type"].fillna("").astype(str).str.strip().str.upper()
+            frame["snapshot_type"].astype(object).fillna("").astype(str).str.strip().str.upper()
         )
     else:
         frame["snapshot_type"] = ""
@@ -162,10 +162,10 @@ def resolve_membership_asof(
     frame["date"] = pd.to_datetime(
         frame["date"], errors="coerce"
     ).dt.normalize()
-    frame["security_id"] = frame["security_id"].fillna("").astype(str)
+    frame["security_id"] = frame["security_id"].astype(object).fillna("").astype(str)
     frame["active"] = frame["active"].fillna(False).astype(bool)
     frame["snapshot_type"] = (
-        frame["snapshot_type"].fillna("").astype(str).str.upper()
+        frame["snapshot_type"].astype(object).fillna("").astype(str).str.upper()
         if "snapshot_type" in frame.columns
         else ""
     )

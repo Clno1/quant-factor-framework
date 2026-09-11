@@ -1,0 +1,273 @@
+{
+  "PLAB": {
+    "packet_hash": "29f2de3938a05bed7ad09ec0d57075e72ce9cbc0420372a861d054a0fd0e20f6",
+    "origin": "LOCAL_SOURCE_REVIEW",
+    "notes": [
+      {
+        "index": 1,
+        "original_note": {
+          "kind": "EVENT",
+          "text": "公司同时提供GAAP与Non-GAAP净利润数据。Non-GAAP净利润同比持平，环比上升；GAAP净利润同比上升、环比下降。IC与FPD两大业务板块呈现相反走势，IC增长而FPD下滑。",
+          "paragraph_ids": [
+            "p0008",
+            "p0010",
+            "p0012"
+          ]
+        },
+        "claims": [
+          {
+            "text": "公司同时提供GAAP与Non-GAAP净利润数据",
+            "evidence": [
+              {
+                "paragraph_id": "p0008",
+                "quote": "GAAP Net income attributable to Photronics, Inc. shareholders was $28.9 million, or $0.49 per diluted share, compared with $22.9 million, or $0.39 per diluted share, in the third quarter of 2025 and $31.4 million, or $0.54 per diluted share, in the second quarter of 2026."
+              },
+              {
+                "paragraph_id": "p0010",
+                "quote": "Non-GAAP Net income attributable to Photronics, Inc. shareholders was $29.4 million, or $0.50 per diluted share, compared with $29.4 million, or $0.51 per diluted share in the third quarter of 2025 and $24.9 million, or $0.42 per diluted share, in the second quarter of 2026."
+              }
+            ]
+          },
+          {
+            "text": "Non-GAAP净利润同比持平",
+            "evidence": [
+              {
+                "paragraph_id": "p0010",
+                "quote": "Non-GAAP Net income attributable to Photronics, Inc. shareholders was $29.4 million, or $0.50 per diluted share, compared with $29.4 million, or $0.51 per diluted share in the third quarter of 2025 and $24.9 million, or $0.42 per diluted share, in the second quarter of 2026."
+              }
+            ]
+          },
+          {
+            "text": "环比上升",
+            "evidence": [
+              {
+                "paragraph_id": "p0010",
+                "quote": "Non-GAAP Net income attributable to Photronics, Inc. shareholders was $29.4 million, or $0.50 per diluted share, compared with $29.4 million, or $0.51 per diluted share in the third quarter of 2025 and $24.9 million, or $0.42 per diluted share, in the second quarter of 2026."
+              }
+            ]
+          },
+          {
+            "text": "GAAP净利润同比上升",
+            "evidence": [
+              {
+                "paragraph_id": "p0008",
+                "quote": "GAAP Net income attributable to Photronics, Inc. shareholders was $28.9 million, or $0.49 per diluted share, compared with $22.9 million, or $0.39 per diluted share, in the third quarter of 2025 and $31.4 million, or $0.54 per diluted share, in the second quarter of 2026."
+              }
+            ]
+          },
+          {
+            "text": "环比下降",
+            "evidence": [
+              {
+                "paragraph_id": "p0008",
+                "quote": "GAAP Net income attributable to Photronics, Inc. shareholders was $28.9 million, or $0.49 per diluted share, compared with $22.9 million, or $0.39 per diluted share, in the third quarter of 2025 and $31.4 million, or $0.54 per diluted share, in the second quarter of 2026."
+              }
+            ]
+          },
+          {
+            "text": "IC与FPD两大业务板块呈现相反走势",
+            "evidence": [
+              {
+                "paragraph_id": "p0012",
+                "quote": "IC revenue was $154.7 million, an increase of 5% both year-over-year and sequentially."
+              },
+              {
+                "paragraph_id": "p0014",
+                "quote": "FPD revenue was $61.4 million, a decrease of 2% both year-over-year and sequentially."
+              }
+            ]
+          },
+          {
+            "text": "IC增长而FPD下滑",
+            "evidence": [
+              {
+                "paragraph_id": "p0012",
+                "quote": "IC revenue was $154.7 million, an increase of 5% both year-over-year and sequentially."
+              },
+              {
+                "paragraph_id": "p0014",
+                "quote": "FPD revenue was $61.4 million, a decrease of 2% both year-over-year and sequentially."
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "NYAX": {
+    "packet_hash": "b35f18c7a93710d67aa6d8e22dd3dc5f6c73a2bff3a299077fb738005c923f19",
+    "origin": "LOCAL_SOURCE_REVIEW",
+    "notes": [
+      {
+        "index": 0,
+        "original_note": {
+          "kind": "EVENT",
+          "text": "Nayax（纳斯达克/TASE：NYAX）与Windjammer Capital Investors签署确定性协议，拟以全现金方式收购IPS Group。IPS是智能停车技术提供商，拥有超过二十万处停车位的部署基础。Nayax定位为全球商务赋能、支付及忠诚度平台，此次收购旨在将IPS的停车硬件与软件整合至其现有业务体系。",
+          "paragraph_ids": [
+            "p0002",
+            "p0005",
+            "p0006"
+          ]
+        },
+        "claims": [
+          {
+            "text": "Nayax（纳斯达克/TASE：NYAX）与Windjammer Capital Investors签署确定性协议",
+            "evidence": [
+              {
+                "paragraph_id": "p0005",
+                "quote": "HERZLIYA, Israel, Aug. 25, 2026 (GLOBE NEWSWIRE) -- Nayax Ltd. (Nasdaq: NYAX; TASE: NYAX), a global commerce enablement, payments and loyalty platform, today announced a definitive agreement to acquire IPS Group, Inc. (“IPS”) from Windjammer Capital Investors in an all-cash transaction for a total consideration of $350 million."
+              }
+            ]
+          },
+          {
+            "text": "拟以全现金方式收购IPS Group",
+            "evidence": [
+              {
+                "paragraph_id": "p0005",
+                "quote": "HERZLIYA, Israel, Aug. 25, 2026 (GLOBE NEWSWIRE) -- Nayax Ltd. (Nasdaq: NYAX; TASE: NYAX), a global commerce enablement, payments and loyalty platform, today announced a definitive agreement to acquire IPS Group, Inc. (“IPS”) from Windjammer Capital Investors in an all-cash transaction for a total consideration of $350 million."
+              }
+            ]
+          },
+          {
+            "text": "IPS是智能停车技术提供商",
+            "evidence": [
+              {
+                "paragraph_id": "p0002",
+                "quote": "Nayax Enters into Definitive Agreement to Acquire IPS Group, a Leading Smart Parking Technology Provider"
+              },
+              {
+                "paragraph_id": "p0006",
+                "quote": "Together, Nayax and IPS will bring together complementary capabilities in unattended commerce, pairing Nayax’s payments infrastructure and global distribution network with IPS’s purpose-built smart parking hardware and software. IPS’s two decades of field-proven technology and established base of more than 250,000 parking spaces, combined with Nayax’s reach across more than 120 countries, will accelerate IPS’s expansion into new markets, starting with Continental Europe, while giving Nayax’s existing customers access to a leading parking and curb management solution. The combination offers cross-sell opportunities and expands Nayax’s addressable cashless opportunity. It is the same playbook of land and expand Nayax has used in previous acquisitions: acquire a trusted solution provider in a vertical, then seamlessly integrate with Nayax’s own payments infrastructure to better serve our customers."
+              }
+            ]
+          },
+          {
+            "text": "拥有超过二十万处停车位的部署基础",
+            "evidence": [
+              {
+                "paragraph_id": "p0006",
+                "quote": "Together, Nayax and IPS will bring together complementary capabilities in unattended commerce, pairing Nayax’s payments infrastructure and global distribution network with IPS’s purpose-built smart parking hardware and software. IPS’s two decades of field-proven technology and established base of more than 250,000 parking spaces, combined with Nayax’s reach across more than 120 countries, will accelerate IPS’s expansion into new markets, starting with Continental Europe, while giving Nayax’s existing customers access to a leading parking and curb management solution. The combination offers cross-sell opportunities and expands Nayax’s addressable cashless opportunity. It is the same playbook of land and expand Nayax has used in previous acquisitions: acquire a trusted solution provider in a vertical, then seamlessly integrate with Nayax’s own payments infrastructure to better serve our customers."
+              }
+            ]
+          },
+          {
+            "text": "Nayax定位为全球商务赋能、支付及忠诚度平台",
+            "evidence": [
+              {
+                "paragraph_id": "p0005",
+                "quote": "HERZLIYA, Israel, Aug. 25, 2026 (GLOBE NEWSWIRE) -- Nayax Ltd. (Nasdaq: NYAX; TASE: NYAX), a global commerce enablement, payments and loyalty platform, today announced a definitive agreement to acquire IPS Group, Inc. (“IPS”) from Windjammer Capital Investors in an all-cash transaction for a total consideration of $350 million."
+              }
+            ]
+          },
+          {
+            "text": "此次收购旨在将IPS的停车硬件与软件整合至其现有业务体系",
+            "evidence": [
+              {
+                "paragraph_id": "p0006",
+                "quote": "Together, Nayax and IPS will bring together complementary capabilities in unattended commerce, pairing Nayax’s payments infrastructure and global distribution network with IPS’s purpose-built smart parking hardware and software. IPS’s two decades of field-proven technology and established base of more than 250,000 parking spaces, combined with Nayax’s reach across more than 120 countries, will accelerate IPS’s expansion into new markets, starting with Continental Europe, while giving Nayax’s existing customers access to a leading parking and curb management solution. The combination offers cross-sell opportunities and expands Nayax’s addressable cashless opportunity. It is the same playbook of land and expand Nayax has used in previous acquisitions: acquire a trusted solution provider in a vertical, then seamlessly integrate with Nayax’s own payments infrastructure to better serve our customers."
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "index": 1,
+        "original_note": {
+          "kind": "INTERPRETATION",
+          "text": "公司表示该交易将Nayax的支付基础设施与全球分销网络，同IPS的专用智能停车软硬件相结合，可能加速IPS向欧洲大陆等新市场扩张，并为Nayax现有客户提供停车及路侧管理解决方案。公司还提及存在交叉销售机会，并拟沿用此前收购中\"获取-整合-扩展\"的策略模式。",
+          "paragraph_ids": [
+            "p0006"
+          ]
+        },
+        "claims": [
+          {
+            "text": "公司表示该交易将Nayax的支付基础设施与全球分销网络，同IPS的专用智能停车软硬件相结合",
+            "evidence": [
+              {
+                "paragraph_id": "p0006",
+                "quote": "Together, Nayax and IPS will bring together complementary capabilities in unattended commerce, pairing Nayax’s payments infrastructure and global distribution network with IPS’s purpose-built smart parking hardware and software. IPS’s two decades of field-proven technology and established base of more than 250,000 parking spaces, combined with Nayax’s reach across more than 120 countries, will accelerate IPS’s expansion into new markets, starting with Continental Europe, while giving Nayax’s existing customers access to a leading parking and curb management solution. The combination offers cross-sell opportunities and expands Nayax’s addressable cashless opportunity. It is the same playbook of land and expand Nayax has used in previous acquisitions: acquire a trusted solution provider in a vertical, then seamlessly integrate with Nayax’s own payments infrastructure to better serve our customers."
+              }
+            ]
+          },
+          {
+            "text": "可能加速IPS向欧洲大陆等新市场扩张",
+            "evidence": [
+              {
+                "paragraph_id": "p0006",
+                "quote": "Together, Nayax and IPS will bring together complementary capabilities in unattended commerce, pairing Nayax’s payments infrastructure and global distribution network with IPS’s purpose-built smart parking hardware and software. IPS’s two decades of field-proven technology and established base of more than 250,000 parking spaces, combined with Nayax’s reach across more than 120 countries, will accelerate IPS’s expansion into new markets, starting with Continental Europe, while giving Nayax’s existing customers access to a leading parking and curb management solution. The combination offers cross-sell opportunities and expands Nayax’s addressable cashless opportunity. It is the same playbook of land and expand Nayax has used in previous acquisitions: acquire a trusted solution provider in a vertical, then seamlessly integrate with Nayax’s own payments infrastructure to better serve our customers."
+              }
+            ]
+          },
+          {
+            "text": "并为Nayax现有客户提供停车及路侧管理解决方案",
+            "evidence": [
+              {
+                "paragraph_id": "p0006",
+                "quote": "Together, Nayax and IPS will bring together complementary capabilities in unattended commerce, pairing Nayax’s payments infrastructure and global distribution network with IPS’s purpose-built smart parking hardware and software. IPS’s two decades of field-proven technology and established base of more than 250,000 parking spaces, combined with Nayax’s reach across more than 120 countries, will accelerate IPS’s expansion into new markets, starting with Continental Europe, while giving Nayax’s existing customers access to a leading parking and curb management solution. The combination offers cross-sell opportunities and expands Nayax’s addressable cashless opportunity. It is the same playbook of land and expand Nayax has used in previous acquisitions: acquire a trusted solution provider in a vertical, then seamlessly integrate with Nayax’s own payments infrastructure to better serve our customers."
+              }
+            ]
+          },
+          {
+            "text": "公司还提及存在交叉销售机会",
+            "evidence": [
+              {
+                "paragraph_id": "p0006",
+                "quote": "Together, Nayax and IPS will bring together complementary capabilities in unattended commerce, pairing Nayax’s payments infrastructure and global distribution network with IPS’s purpose-built smart parking hardware and software. IPS’s two decades of field-proven technology and established base of more than 250,000 parking spaces, combined with Nayax’s reach across more than 120 countries, will accelerate IPS’s expansion into new markets, starting with Continental Europe, while giving Nayax’s existing customers access to a leading parking and curb management solution. The combination offers cross-sell opportunities and expands Nayax’s addressable cashless opportunity. It is the same playbook of land and expand Nayax has used in previous acquisitions: acquire a trusted solution provider in a vertical, then seamlessly integrate with Nayax’s own payments infrastructure to better serve our customers."
+              }
+            ]
+          },
+          {
+            "text": "并拟沿用此前收购中\"获取-整合-扩展\"的策略模式",
+            "evidence": [
+              {
+                "paragraph_id": "p0006",
+                "quote": "Together, Nayax and IPS will bring together complementary capabilities in unattended commerce, pairing Nayax’s payments infrastructure and global distribution network with IPS’s purpose-built smart parking hardware and software. IPS’s two decades of field-proven technology and established base of more than 250,000 parking spaces, combined with Nayax’s reach across more than 120 countries, will accelerate IPS’s expansion into new markets, starting with Continental Europe, while giving Nayax’s existing customers access to a leading parking and curb management solution. The combination offers cross-sell opportunities and expands Nayax’s addressable cashless opportunity. It is the same playbook of land and expand Nayax has used in previous acquisitions: acquire a trusted solution provider in a vertical, then seamlessly integrate with Nayax’s own payments infrastructure to better serve our customers."
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "index": 2,
+        "original_note": {
+          "kind": "UNCERTAINTY",
+          "text": "交易预计于二零二六年第四季度完成，但须获得监管批准并满足常规交割条件。由于存在审批及交割条件未满足的可能性，收购能否如期完成尚不确定。此外，提供段落未包含整合计划细节、融资来源或协同效应的具体实现路径。",
+          "paragraph_ids": [
+            "p0020",
+            "p0005",
+            "p0006"
+          ]
+        },
+        "claims": [
+          {
+            "text": "交易预计于二零二六年第四季度完成",
+            "evidence": [
+              {
+                "paragraph_id": "p0020",
+                "quote": "· Closing expected in Q4 2026, subject to regulatory approvals and customary closing conditions."
+              }
+            ]
+          },
+          {
+            "text": "但须获得监管批准并满足常规交割条件",
+            "evidence": [
+              {
+                "paragraph_id": "p0020",
+                "quote": "· Closing expected in Q4 2026, subject to regulatory approvals and customary closing conditions."
+              }
+            ]
+          },
+          {
+            "text": "由于存在审批及交割条件未满足的可能性，收购能否如期完成尚不确定",
+            "evidence": [
+              {
+                "paragraph_id": "p0020",
+                "quote": "· Closing expected in Q4 2026, subject to regulatory approvals and customary closing conditions."
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

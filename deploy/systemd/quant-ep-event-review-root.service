@@ -1,0 +1,30 @@
+[Unit]
+Description=Quant EP cited AI disclosure commentary (explicitly unverified)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/home/projects/quant/ep-event-current
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=OPENBLAS_NUM_THREADS=1
+Environment=OMP_NUM_THREADS=1
+Environment=MKL_NUM_THREADS=1
+Environment=NUMEXPR_MAX_THREADS=1
+EnvironmentFile=/etc/quant/market-data.env
+EnvironmentFile=/etc/quant/ep-event-worker.env
+ExecStart=/home/projects/quant/.venv/bin/python /home/projects/quant/ep-event-current/scripts/run_ep_event_worker.py --config /etc/quant/ep-event-worker.json run --execute
+TimeoutStartSec=12min
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/projects/quant/data/ep /home/projects/quant/tmp/ep-llm-trial-20260909/data/ep
+ReadWritePaths=-/home/projects/quant/runlog
+MemoryMax=512M
+CPUQuota=50%
+TasksMax=32

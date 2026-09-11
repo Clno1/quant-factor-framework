@@ -38,8 +38,15 @@ def _stage(message: str) -> None:
     print(f"[PIT_STAGE] {message}", file=sys.stderr, flush=True)
 
 
-def _incremental_inputs_match(previous: object, security_generation: object) -> bool:
-    """Allow roll-forward only when the identity authority is unchanged."""
+def _incremental_inputs_match(
+    previous: object, security_generation: object, coverage_manifest: dict | None = None,
+) -> bool:
+    """Changed full histories invalidate old monthly eligibility, even with the same master."""
+    repair = ((coverage_manifest or {}).get("quality_lineage") or {}).get(
+        "full_security_history_repair"
+    ) or {}
+    if int(repair.get("security_count", 0)) > 0:
+        return False
     return (
         getattr(previous, "security_master_generation_id", None)
         == getattr(security_generation, "generation_id", None)
@@ -178,7 +185,7 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
             }, 0
     identity_compatible = bool(
         previous is not None
-        and _incremental_inputs_match(previous, security_generation)
+        and _incremental_inputs_match(previous, security_generation, parent_manifest)
         and previous.methodology_version == str(settings.methodology_version)
     )
     incremental = (
@@ -192,6 +199,9 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
         if args.full_rebuild
         else "NO_PREVIOUS_PUBLICATION"
         if previous is None
+        else "FULL_SECURITY_HISTORY_REPAIRED"
+        if int(((parent_manifest.get("quality_lineage") or {}).get(
+            "full_security_history_repair") or {}).get("security_count", 0)) > 0
         else "SECURITY_MASTER_CHANGED"
         if previous.target_session < parent.target_session and not identity_compatible
         else "INCREMENTAL_INPUTS_MATCH"

@@ -148,6 +148,31 @@ class EpStore:
                 """)
                 self.schema_version = 6
 
+    def preview_llm_call(self, request_key, reserve, settings, now):
+        """Consistent read-only snapshot, not a reservation or execution guarantee."""
+        from datetime import timezone
+        if self.schema_version < 6:
+            return {"status": "JOURNAL_UPGRADE_REQUIRED", "would_reserve_microusd": 0}
+        if type(reserve) is not int or reserve <= 0:
+            raise ValueError("INVALID_LLM_RESERVATION")
+        utc = now.astimezone(timezone.utc)
+        day, month = utc.strftime("%Y-%m-%d"), utc.strftime("%Y-%m")
+        with self.connection() as db:
+            db.execute("BEGIN")
+            row = db.execute("SELECT status FROM ep_llm_calls WHERE request_key=?", (request_key,)).fetchone()
+            review = db.execute("SELECT 1 FROM ep_llm_calls WHERE status='BILLING_REVIEW_REQUIRED' LIMIT 1").fetchone()
+            totals = db.execute("""SELECT COALESCE(SUM(CASE WHEN budget_day=? THEN reserved_microusd ELSE 0 END),0),
+                COALESCE(SUM(CASE WHEN budget_month=? THEN reserved_microusd ELSE 0 END),0),
+                COALESCE(SUM(reserved_microusd),0) FROM ep_llm_calls""", (day, month)).fetchone()
+        limits = (settings.daily_microusd, settings.monthly_microusd, settings.total_microusd)
+        exhausted = any(used + reserve > limit for used, limit in zip(totals, limits))
+        status = row["status"] if row else "BILLING_REVIEW_REQUIRED" if review else "BUDGET_EXHAUSTED" if exhausted else "READY"
+        return {"status": status, "existing_request": row is not None,
+                "would_reserve_microusd": reserve if status == "READY" else 0,
+                "used_microusd": dict(zip(("daily", "monthly", "total"), totals)),
+                "limits_microusd": dict(zip(("daily", "monthly", "total"), limits)),
+                "execution_must_recheck": True}
+
     def reserve_llm_call(self, request_key, source_id, request, reserve, settings, now):
         from datetime import timezone
         if self.read_only or self.schema_version < 6:
@@ -163,6 +188,25 @@ class EpStore:
             if row:
                 return {"reserved": False, "status": row["status"],
                         "result": json.loads(row["result_json"]) if row["result_json"] else None}
+            if request.get("retry_of") is not None:
+                parent = db.execute("SELECT * FROM ep_llm_calls WHERE request_key=?", (request["retry_of"],)).fetchone()
+                if not parent or parent["status"] != "FAILED" or parent["source_id"] != source_id:
+                    raise ValueError("LLM_RETRY_REQUIRES_FAILED_PARENT")
+                previous = json.loads(parent["request_json"])
+                failure = json.loads(parent["result_json"])["error"]
+                retryable = {"LLM_TRANSPORT_FAILED", "LLM_CONNECT_TIMEOUT", "LLM_READ_TIMEOUT", "LLM_TIMEOUT",
+                    "LLM_TLS_FAILED", "LLM_CONNECTION_FAILED", "LLM_ELAPSED_LIMIT_EXCEEDED", "LLM_HTTP_429",
+                    "LLM_HTTP_500", "LLM_HTTP_502", "LLM_HTTP_503", "LLM_HTTP_504"}
+                if failure not in retryable:
+                    raise ValueError("LLM_FAILURE_NOT_RETRYABLE")
+                logical_key = previous.get("logical_request_key", parent["request_key"])
+                if (request.get("logical_request_key") != logical_key
+                        or any(previous.get(k) != request.get(k) for k in ("source_request", "provider", "model"))
+                        or request_key != digest({"logical_request_key": logical_key, "retry_of": parent["request_key"]})):
+                    raise ValueError("LLM_RETRY_PAYLOAD_MISMATCH")
+                request = {**request, "retry_number": previous.get("retry_number", 0) + 1}
+                if request["retry_number"] > 2:
+                    raise ValueError("LLM_MANUAL_RETRY_LIMIT")
             if db.execute("SELECT 1 FROM ep_llm_calls WHERE status='BILLING_REVIEW_REQUIRED' LIMIT 1").fetchone():
                 return {"reserved": False, "status": "BILLING_REVIEW_REQUIRED", "result": None}
             daily = db.execute("SELECT COALESCE(SUM(reserved_microusd),0) FROM ep_llm_calls WHERE budget_day=?", (day,)).fetchone()[0]

@@ -336,7 +336,8 @@ def test_shared_issue_identifiers_without_a_date_fail_closed_on_overlap():
     ]
 
 
-def test_approved_prospective_policy_replaces_unverifiable_history():
+@pytest.mark.parametrize("effective_from", ["2026-08-11", "2026-08-12"])
+def test_approved_prospective_policy_replaces_unverifiable_history(effective_from):
     profiles = _profiles().loc[
         lambda frame: frame["ticker"].isin(["OLD", "NEW"])
     ].copy()
@@ -362,8 +363,9 @@ def test_approved_prospective_policy_replaces_unverifiable_history():
                 "name": "Renamed Software",
                 "trading_status": "ACTIVE",
                 "policy": "PROSPECTIVE_ONLY",
-                "effective_from": "2026-08-11",
+                "effective_from": effective_from,
                 "reason_codes": ["OVERLAPPING_TICKER_INTERVALS"],
+                "decision_basis": "verified future trading boundary",
             }],
         },
     )
@@ -376,6 +378,24 @@ def test_approved_prospective_policy_replaces_unverifiable_history():
         "event_type": "PROSPECTIVE_ONLY_START",
     }]
     assert candidate.history_policy.iloc[0]["security_id"] == security_id
+    assert candidate.symbols.iloc[0]["effective_from"] == pd.Timestamp(effective_from)
+    assert candidate.history_policy.iloc[0]["decision_source"] == "verified future trading boundary"
+    assert candidate.master.iloc[0]["listing_date"] == failed.master.iloc[0]["listing_date"]
+
+    repeated = build_security_master_candidate(
+        profiles,
+        symbol_changes=pd.DataFrame(),
+        delisted_companies=pd.DataFrame(),
+        target_session="2026-08-11",
+        minimum_active_stocks=1,
+        research_history_policy={
+            "decision": {"basis": "verified future trading boundary"},
+            "entries": [{**candidate.history_policy.iloc[0].to_dict(),
+                         "reason_codes": ["OVERLAPPING_TICKER_INTERVALS"]}],
+        },
+    )
+    for name in ("master", "symbols", "identity_keys", "classifications", "history_policy"):
+        pd.testing.assert_frame_equal(getattr(candidate, name), getattr(repeated, name))
 
 
 def test_inactive_security_missing_from_provider_is_carried_forward_for_policy():

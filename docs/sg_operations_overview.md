@@ -1184,3 +1184,105 @@ watchdog 正常（峰值约 111.5 MiB），operations-web active（当前约 42.
 swap 0），healthz 返回 200，快照年龄约 56 秒。运维 API 同时保留 09-08 v3 FAIL、当日服务失败、
 当日心跳中断，未被 SCHEDULED 覆盖。没有把旧动量 PASS 当作茶杯柄 PASS；MDB 旧回放和两条
 SHADOW 信号均不能证明误报率为零。本次仅核验和同步文档，没有盲目重启服务或改写发布版本。
+
+## 44. 2026-09-10 RML 已修复，恢复链遇到 CALC 端点差异
+
+负责人授权后，已完成 RML 的原始接口复查和主来源证据核实。Nasdaq RML ADS 公告起始日是 09-09，
+同 CUSIP/ISIN 的旧 OTC ADR 代码为 RSMIY；FMP 对 RML 上市前仅返回 09-07 休市日零成交量一行。
+已部署精确 RML 身份的 PROSPECTIVE_ONLY 09-09 准入边界，未猜测或拼接 OTC/ASX 历史，也未改写
+原 listing_date。政策当前 68 条，原 67 条原样保留。来源与原始响应见宽基实施文档第 29 节。
+
+备份为 `/home/projects/quant-backups/rml-prospective-20260909T235646CST`（含代码、配置、测试及
+四份运维文档）。本地 1,048 passed、6 skipped，SG 定向 57 passed；部署文件逐一哈希一致。
+两次真实冻结源五表精确幂等通过，正式发布 target 09-08 主表
+`65fc7779e7524461810d10633db63dd4`，manifest SHA-256
+`ea1c07820fa3ccf922300451599fadc2f9f77629dd8b98c3a24b5080375e7fd1`，正式文件与两候选哈希相同。
+
+执行链与结果：
+
+| 步骤 | 实际状态 |
+| --- | --- |
+| RML 主表政策与双候选验证 | PASS，原始身份字段不变 |
+| 主表正式发布 | PASS，3 分 16 秒，systemd 峰值 247.0 MiB、无 swap |
+| 增量历史身份补齐 | PASS，15 个身份、13,126 行，零 alias failure/fallback |
+| 17 个近期交易日批量下载 | 完成，有绑定输入的哈希缓存 |
+| 历史重叠窗口认证 | FAILED：CALC 单股 full 整数成交量与批量小数成交量不一致 |
+| coverage 新发布 / PIT / 候选 | 未完成 / 未运行 / 未运行 |
+
+临时恢复 unit `quant-rml-data-recovery.service` 最终退出 1，282.362 秒，systemd 峰值 444.9 MiB、
+swap 0；不是 OOM。真实报告：
+`outputs/data_audits/broad_daily_pipeline/target=2026-09-08/run=20260909T161013Z_04583bcb.json`。
+CALC 08-18 旧版本/当前 full=20724，eod-bulk=20723.6；最大相对比例偏差 1.93013e-05，
+超过原 1e-5 门槛。未修改容差、未把小数批量取整，未手工移动 coverage/PIT 指针。
+
+因此 RML 修复完成不等于整条生产链恢复。coverage 仍为 `562967c01bb54e2ab39454804cc4ac73`、
+PIT 仍为 `c1329fcd14dd4521911976b21fa6be22`，目标 09-04。新主表与旧 coverage 各有独立版本绑定，
+不强行混用。需要补齐按证券完整历史重建与冲突认证能力后再恢复下游。候选/盘中 service 未盲目
+重启；日常 timer 未修改。茶杯柄 v3 仍 0/5，发送 false，09-09 漏掉的周期不得补记成合格日。
+
+## 45. 2026-09-10 整票历史恢复操作
+
+已批准实现并部署 `FULL_SECURITY_CANONICAL_REPLACEMENT_V1`。冻结审计不是只有 CALC：
+5,437 只通过，321 只需要完整重取。首次失败字段包括 volume 194、adj_close 56、
+OHLC 合计 47、零成交量不一致 24。证据见宽基实施文档第 30 节。
+
+备份：`/home/projects/quant-backups/full-security-history-repair-20260910T004154CST`。
+本地全套 1,077 passed / 6 skipped，SG 专项 60 passed。仅部署恢复脚本、恢复模块、覆盖存储
+模块及其测试，没有覆盖其他 EP/LLM 改动，也未调整定时或发送配置。
+
+00:45:13 SGT 启动 `quant-full-history-repair.service`，目标为仍可复核的冻结日 2026-09-08。
+单线程 BLAS，MemoryHigh=700M、MemoryMax=900M、TasksMax=64、Nice=10、90 分钟超时，
+持有 `data/lake/.broad-production.lock`。入口为：
+
+```bash
+.venv/bin/python scripts/update_us_equity_coverage.py \
+  --target-session 2026-09-08 --env-file /etc/quant/market-data.env \
+  --repair-full-history --publish --json
+```
+
+生产运行必须像本次一样由 systemd 施加上述资源限制，并在外层取得生产 flock；不要直接并发
+启动第二个 writer。只审计时使用 `--audit-overlap-only`，此模式不发布；发现差异返回码 2。
+普通日常 pipeline 没有自动附加修复开关，以免每天无界全量重取。需要先看本轮审计结果和成本，
+再决定如何接入常态恢复；不要把此次显式重跑等同于日常链已永久解决。
+
+本次逐票报告：
+`data/lake/staging/us_equity_coverage_incremental/asof=2026-09-08/run=20260909T164515Z_62b6aca9/full_history_repair.json`。
+`completed` 是处理数，`validated` 才是验证成功列表，`errors` 必须为空才允许继续分片发布。
+失败不会删除已完成缓存，下次同一父版本/主表/目标/审计合同可复用；不同输入必须重新认证。
+即使 coverage 修复完成，也要另行核验其 manifest，再构建对应 PIT 和候选，不能跳过这些门禁。
+
+**本次终态：未发布。** 01:11:05 SGT 完成 321/321，318 只验证通过（323,492 行），3 只失败。
+耗时 25 分 52 秒，CPU 368.354 秒，峰值 702.0 MiB、swap 0；非 OOM/服务器中断。
+STRR 的 HSON 查询缺失 2025-08-22 至 09-04 共 9 日，已证明三类 STRR 查询均有这 9 日，
+但 SEC 支持真实换码日仍为 09-05，必须另建受控 provider 映射，不能改真实身份日期。
+ATCX/BGLC 各 2 条 open > high，与旧正式隔离台账精确一致；新恢复分支尚未接入该台账，
+目前默认拒绝，不能误报成供应商新增缺数。详细证据与后续边界见宽基实施 30.1。
+
+父 coverage `562967c01bb54e2ab39454804cc4ac73` 已重验，指针未变；没有触发 PIT、候选或
+盘中任务。两个 Web 服务仍 active。修复主干及后续 PIT/资源保护已部署，后续代码备份为
+`/home/projects/quant-backups/full-history-repair-hardening-20260910T012835CST`；最终本地
+1,079 passed / 6 skipped、SG 73 passed。没有重跑并强行发布，日常 timer 与发送开关不变。
+
+收尾校验：本地与 SG 的恢复脚本、PIT 脚本、两个数据模块、恢复测试及四份文档逐文件 SHA-256
+一致；`configs/default.yaml` 与本轮初始备份字节一致，cup delivery 为 false。认证后主站
+`/research` 返回 200（0.427 秒），运维站 `/healthz` 返回 200（0.004 秒）。主站不定义
+`/healthz`，其认证后 404 不是服务故障；未认证两站返回 401 是正常的权限保护。
+
+## 46. 2026-09-10 11:45 SGT 茶杯柄与日更核验
+
+今日宽基日更 11:32:02 启动、11:43:55 失败，总耗时 712.601 秒，coverage 阶段
+391.764 秒，cgroup 峰值 701.9 MiB、swap=0。不是服务器中断：主表 target=09-09
+已发布 c8f5a40065914b83b68a87ecb0012b59，随后 324 只证券重叠认证不通过，5,433 只通过。
+CALC 首报 non-uniform volume revision，max_relative_deviation=1.93013e-05。
+报告：outputs/data_audits/broad_daily_pipeline/target=2026-09-09/run=20260910T033203Z_7662d499.json。
+冻结审计：data/lake/staging/us_equity_coverage_incremental/asof=2026-09-09/run=20260910T033726Z_b076440e/overlap_scope_audit.json。
+11:46 service 为 auto-restart，意味着失败后等待 systemd 重试，不是正在成功生产。
+
+正式 coverage=562967c01bb54e2ab39454804cc4ac73、PIT=c1329fcd14dd4521911976b21fa6be22、
+因子=037d9d2783f0467b90679e0df1af0c3a，均截至 09-04。恢复仍需 STRR 受控查询映射和
+ATCX/BGLC 精确旧隔离台账承接；新 target/主表/源缓存绑定变化必须重新认证，不得复用旧检查点冒充完成。
+
+茶杯柄 v3 0/5，09-09 无评估，最近 09-08 FAIL；完整统计见茶杯柄文档 28。
+候选和盘中 service 保留昨日 exit-code，今日 timer 18:30/21:20，未人工重启。
+watchdog SUCCESS，约 111.5 MiB、零 swap；运维网页 active，49.7 MiB、零 swap。
+运维站保留最近完整日失败与版本；本轮只读巡检和文档同步，没有放宽门槛或开启发送。

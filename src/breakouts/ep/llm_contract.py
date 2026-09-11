@@ -10,6 +10,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .facts import basis, share_basis
 from .models import digest
+from .llm_batches import batch_spec, batch_rules, scoped_schema
+from .llm_evidence import ContextEvidence, locate_context
 
 VERSION = "ep-llm-claims-v1"
 RULES = (
@@ -58,6 +60,11 @@ class Response(StrictModel):
     claims: list[Claim] = Field(max_length=60)
 
 
+class LocatedClaim(Claim):
+    unit_scale_text: str | None = Field(max_length=100)
+    context_evidence: list[ContextEvidence] = Field(max_length=6)
+
+
 def strict_json(raw: str | bytes):
     if len(raw) > 1_000_000:
         raise ValueError("MODEL_RESPONSE_TOO_LARGE")
@@ -76,7 +83,16 @@ def strict_json(raw: str | bytes):
         raise ValueError("INVALID_MODEL_JSON") from None
 
 
-def prepare_request(source: dict, *, max_chars=60000, max_paragraphs=500) -> dict:
+def response_schema(request):
+    schema = Response.model_json_schema()
+    if request.get("batch", {}).get("context_evidence_version"):
+        located = LocatedClaim.model_json_schema()
+        schema["$defs"].update(located.pop("$defs"))
+        schema["$defs"]["Claim"] = located
+    return scoped_schema(schema, request["batch"]) if "batch" in request else schema
+
+
+def prepare_request(source: dict, *, max_chars=60000, max_paragraphs=500, batch=None) -> dict:
     parsed = source.get("parsed") or {}
     result = source["result"]
     if parsed.get("status") != "EXTRACTED" or result.get("verification", {}).get("status") != "DOCUMENT_MATCHED":
@@ -103,6 +119,11 @@ def prepare_request(source: dict, *, max_chars=60000, max_paragraphs=500) -> dic
         "document_id": source["document_id"], "text_revision": parsed["text_revision"], "ticker": source["ticker"],
         "untrusted_paragraphs": selected, "coverage": {"included": len(selected), "total": len(paragraphs),
             "included_chars": size, "complete": len(selected) == len(paragraphs)}}
+    if batch is not None:
+        request["batch"] = batch_spec(batch)
+        request["version"] = request["batch"]["version"]
+        request["rules"] += batch_rules(request["batch"])
+        request["schema_hash"] = digest(response_schema(request))
     request["request_id"] = digest(request)
     return request
 
@@ -114,30 +135,44 @@ def _contains(text, quote, *, numeric=False):
 
 def validate_response(request: dict, response: dict) -> dict:
     # Validate the envelope first; malformed individual proposals cannot smuggle extra commands.
-    if not isinstance(response, dict) or set(response) != {"request_id", "document_id", "text_revision", "claims"}:
+    spec = request.get("batch")
+    located = bool(spec and spec.get("context_evidence_version"))
+    fields = {"request_id", "document_id", "text_revision", "claims"} | ({"scope_status"} if spec else set())
+    if not isinstance(response, dict) or set(response) != fields:
         raise ValueError("INVALID_MODEL_ENVELOPE")
+    if spec and response["scope_status"] not in ("COMPLETE_FOR_SCOPE", "MORE_FACTS_REMAIN", "UNCERTAIN"):
+        raise ValueError("INVALID_MODEL_SCOPE_STATUS")
     for key in ("request_id", "document_id", "text_revision"):
         if response[key] != request[key]:
             raise ValueError("MODEL_DOCUMENT_VERSION_MISMATCH")
-    if not isinstance(response["claims"], list) or len(response["claims"]) > 60:
+    if not isinstance(response["claims"], list) or len(response["claims"]) > (spec["claim_limit"] if spec else 60):
         raise ValueError("INVALID_MODEL_CLAIM_COUNT")
     paragraphs = {p["id"]: p["text"] for p in request["untrusted_paragraphs"]}
     accepted, rejected, seen = [], [], set()
     for index, raw in enumerate(response["claims"]):
         errors = []
         try:
-            claim = Claim.model_validate(raw).model_dump()
+            claim = (LocatedClaim if located else Claim).model_validate(raw).model_dump()
         except ValidationError:
             rejected.append({"index": index, "reasons": ["INVALID_CLAIM_SCHEMA"]})
             continue
         citations = claim["evidence"]
+        if spec:
+            if claim["metric"] not in spec["metrics"] or claim["value_kind"] not in spec["value_kinds"]:
+                errors.append("CLAIM_OUTSIDE_BATCH_SCOPE")
+            if len(citations) > spec["citations_per_claim"] or any(len(e["quote"]) > spec["quote_char_limit"] for e in citations):
+                errors.append("BATCH_EVIDENCE_LIMIT_EXCEEDED")
         if any(e["paragraph_id"] not in paragraphs or e["quote"] not in paragraphs[e["paragraph_id"]] for e in citations):
             errors.append("QUOTE_NOT_IN_SOURCE")
+        localization = locate_context(claim, paragraphs) if located else None
+        if localization:
+            errors.extend(localization["errors"])
+        grounding_citations = citations + (claim["context_evidence"] if located else [])
         for field in ("metric_text", "value_text", "subject_text", "period_text", "unit_text", "basis_text", "share_basis_text", "value_kind_text"):
             value = claim[field]
             if value is not None and (not value.strip() or not any(
                 value in e["quote"] if field == "unit_text" and value in {"$", "%"} else
-                _contains(value, e["quote"], numeric=field == "value_text") for e in citations)):
+                _contains(value, e["quote"], numeric=field == "value_text") for e in grounding_citations)):
                 errors.append(field.upper() + "_NOT_GROUNDED")
         if not re.search(r"\d", claim["value_text"]):
             errors.append("NUMERIC_VALUE_REQUIRED")
@@ -165,7 +200,8 @@ def validate_response(request: dict, response: dict) -> dict:
                 and share_basis(text) != claim["share_basis"] for text in full_value_context):
             errors.append("SHARE_BASIS_CONTEXT_CONTRADICTION")
         if errors:
-            rejected.append({"index": index, "reasons": sorted(set(errors))})
+            rejected.append({"index": index, "reasons": sorted(set(errors)),
+                             **({"evidence_localization": localization} if located else {})})
             continue
         identity = digest(claim)
         if identity in seen:
@@ -177,8 +213,18 @@ def validate_response(request: dict, response: dict) -> dict:
             missing.append("EPS_BASIS_UNRESOLVED")
         if claim["value_kind"] == "CONSENSUS":
             missing.append("CONSENSUS_ASOF_NOT_VERIFIED")
+        if located:
+            missing.append("UNIT_SCALE_AND_EXCEPTION_APPLICABILITY_REQUIRES_REVIEW")
+            if any(a["location_status"] == "AMBIGUOUS" for a in localization["anchors"]):
+                missing.append("CONTEXT_LOCATION_AMBIGUOUS")
+            if claim["period_text"] is None and any(a["role"] == "PERIOD" for a in localization["anchors"]):
+                missing.append("PERIOD_FRAGMENTS_NOT_ASSEMBLED")
         accepted.append({"proposal_id": identity, **claim, "review_required": missing,
-                         "validation_level": "TEXT_GROUNDED_ONLY", "financial_semantics_verified": False})
-    return {"version": VERSION, "request_id": request["request_id"], "accepted": accepted, "rejected": rejected,
+                         "validation_level": "TEXT_GROUNDED_ONLY", "financial_semantics_verified": False,
+                         **({"evidence_localization": localization} if located else {})})
+    batch_result = {"batch": spec, "model_scope_status": response["scope_status"],
+                    "claim_limit_reached": len(response["claims"]) == spec["claim_limit"],
+                    "exhaustiveness_verified": False} if spec else {}
+    return {"version": request["version"], "request_id": request["request_id"], "accepted": accepted, "rejected": rejected,
             "coverage": request["coverage"], "status": "PROPOSALS_REQUIRE_REVIEW" if accepted else "NO_ACCEPTED_PROPOSALS",
-            "eligible_for_rating": False, "delivery": "DISABLED_SHADOW_ONLY"}
+            "eligible_for_rating": False, "delivery": "DISABLED_SHADOW_ONLY", **batch_result}

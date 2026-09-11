@@ -429,3 +429,160 @@ def test_kimi_http_endpoint_no_fallback_or_secret_echo(monkeypatch, provider, ho
         create_transport(replace(KIMI, provider=provider), "dummy-test-key").generate({})
     assert len(captured) == 1 and captured[0][0] == f"https://{host}/v1/chat/completions"
     assert captured[0][1] is False and captured[0][2]["allow_redirects"] is False
+
+
+@pytest.mark.parametrize("kind,expected", [("ConnectTimeout", "LLM_CONNECT_TIMEOUT"),
+    ("ReadTimeout", "LLM_READ_TIMEOUT"), ("SSLError", "LLM_TLS_FAILED"),
+    ("ConnectionError", "LLM_CONNECTION_FAILED"), ("Timeout", "LLM_TIMEOUT")])
+def test_http_failures_are_typed_and_redacted(monkeypatch, kind, expected):
+    import requests
+    from src.data.llm_transport import KimiHttpClient
+    calls = []
+    class Session:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def post(self, endpoint, **kwargs):
+            calls.append(kwargs)
+            raise getattr(requests.exceptions, kind)("secret-key URL and provider message")
+    monkeypatch.setattr(requests, "Session", Session)
+    client = KimiHttpClient("dummy-test-key", provider="kimi-cn", timeout=180)
+    with pytest.raises(LlmError, match="^" + expected + "$"):
+        client.generate({})
+    assert len(calls) == 1 and calls[0]["timeout"] == (10, 180)
+    assert client.last_diagnostics["phase"] == "WAITING_HEADERS"
+    assert "secret" not in json.dumps(client.last_diagnostics)
+
+
+def test_http_streaming_read_timeout_retains_status(monkeypatch):
+    import requests
+    from urllib3.exceptions import ReadTimeoutError
+    from src.data.llm_transport import KimiHttpClient
+    class Reply:
+        status_code = 200
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def iter_content(self, size):
+            yield b" "
+            raise requests.ConnectionError(ReadTimeoutError(None, "secret-url", "secret"))
+    class Session:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def post(self, *args, **kwargs): return Reply()
+    monkeypatch.setattr(requests, "Session", Session)
+    client = KimiHttpClient("dummy-test-key", provider="kimi-cn")
+    with pytest.raises(LlmError, match="^LLM_READ_TIMEOUT$"):
+        client.generate({})
+    assert client.last_diagnostics["http_status"] == 200
+    assert client.last_diagnostics["phase"] == "READING_BODY"
+    assert client.last_diagnostics["received_bytes"] == 1
+
+
+def test_manual_retry_preserves_failure_budget_and_atomic_dedup(observed):
+    store, _, sid = seeded(observed)
+    original = run_llm(store, sid, SETTINGS, Transport(error=LlmError("LLM_TRANSPORT_FAILED")), clock=CLOCK)
+    first_history = store.llm_history(sid)
+    fake = Transport()
+    with ThreadPoolExecutor(4) as executor:
+        results = list(executor.map(lambda _: run_llm(store, sid, replace(SETTINGS, read_timeout_seconds=180),
+            fake, clock=CLOCK, retry_of=original["request_key"]), range(4)))
+    assert sum(row["external_requests"] for row in results) == 1
+    assert len(fake.payloads) == 1
+    history = store.llm_history(sid)
+    assert len(history) == 2 and history[0] == first_history[0]
+    assert sum(row["reserved_microusd"] for row in history) == 2 * history[0]["reserved_microusd"]
+    assert run_llm(store, sid, SETTINGS, fake, clock=CLOCK)["external_requests"] == 0
+    with pytest.raises(ValueError, match="FAILED_PARENT"):
+        run_llm(store, sid, SETTINGS, fake, clock=CLOCK, retry_of=history[1]["request_key"])
+
+
+def test_manual_retry_budget_payload_and_limit_guards(observed):
+    store, _, sid = seeded(observed)
+    fake = Transport(error=LlmError("LLM_READ_TIMEOUT"))
+    first = run_llm(store, sid, SETTINGS, fake, clock=CLOCK)
+    reserve = store.llm_history(sid)[0]["reserved_microusd"]
+    blocked = run_llm(store, sid, replace(SETTINGS, total_microusd=reserve), fake, clock=CLOCK,
+                      retry_of=first["request_key"])
+    assert blocked["status"] == "BUDGET_EXHAUSTED" and len(fake.payloads) == 1
+    with pytest.raises(ValueError, match="PAYLOAD_MISMATCH"):
+        run_llm(store, sid, replace(SETTINGS, max_output_tokens=5000), fake, clock=CLOCK,
+                retry_of=first["request_key"])
+    for _ in range(2):
+        first = run_llm(store, sid, SETTINGS, fake, clock=CLOCK, retry_of=first["request_key"])
+    with pytest.raises(ValueError, match="RETRY_LIMIT"):
+        run_llm(store, sid, SETTINGS, fake, clock=CLOCK, retry_of=first["request_key"])
+    assert len(fake.payloads) == 3
+
+
+def test_validation_failure_is_not_network_retryable(observed):
+    store, _, sid = seeded(observed)
+    fake = Transport(error=LlmError("LLM_INVALID_RESPONSE_JSON"))
+    first = run_llm(store, sid, SETTINGS, fake, clock=CLOCK)
+    with pytest.raises(ValueError, match="NOT_RETRYABLE"):
+        run_llm(store, sid, SETTINGS, fake, clock=CLOCK, retry_of=first["request_key"])
+    assert len(fake.payloads) == 1
+
+
+def test_read_timeout_config_is_bounded_and_does_not_change_payload():
+    from src.breakouts.ep.llm_provider import create_transport
+    for invalid in (0, True, 301, "180"):
+        with pytest.raises(ValueError):
+            replace(KIMI, read_timeout_seconds=invalid)
+    longer = replace(KIMI, read_timeout_seconds=180)
+    assert create_transport(longer, "dummy-test-key").timeout == 180
+    request = prepare_request(evidence_source())
+    assert responses_payload(request, longer) == responses_payload(request, KIMI)
+
+
+@pytest.mark.parametrize("kind,message,expected", [
+    ("engine_overloaded_error", "The engine is currently overloaded, secret", {}),
+    ("exceeded_current_quota_error", "secret account suspended", {}),
+    ("rate_limit_reached_error", "org-secret request reached organization TPM rate limit", {"rate_limit_kind": "TPM"}),
+])
+def test_http_provider_error_details_are_allowlisted(monkeypatch, kind, message, expected):
+    import requests
+    from src.data.llm_transport import KimiHttpClient, error_diagnostics
+    class Reply:
+        status_code = 429
+        headers = {"Retry-After": "30", "Authorization": "secret"}
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def iter_content(self, size):
+            yield json.dumps({"error": {"type": kind, "message": message}}).encode()
+    class Session:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def post(self, *args, **kwargs): return Reply()
+    monkeypatch.setattr(requests, "Session", Session)
+    client = KimiHttpClient("dummy-test-key", provider="kimi-cn")
+    with pytest.raises(LlmError, match="^LLM_HTTP_429$"):
+        client.generate({})
+    assert client.last_diagnostics["provider_error_type"] == kind
+    assert client.last_diagnostics["retry_after_seconds"] == 30
+    assert expected.items() <= client.last_diagnostics.items()
+    assert "secret" not in json.dumps(client.last_diagnostics)
+    for invalid in ('{"error":{"type":"secret-api-key"}}', '[]', '{', '{"error": {"type": []}}'):
+        assert error_diagnostics(invalid) == {}
+
+
+def test_truncated_kimi_output_preserves_usage_but_never_accepts_claims(observed):
+    store, _, sid = seeded(observed)
+    def truncated(body):
+        body["choices"][0].update(finish_reason="length")
+        body["choices"][0]["message"]["content"] = '{"claims":['
+        body["usage"] = {"prompt_tokens": 11205, "completion_tokens": 4000}
+    result = run_llm(store, sid, KIMI, KimiTransport(truncated), clock=CLOCK)["result"]
+    assert result["status"] == "FAILED" and result["validation"] is None
+    assert result["finish_reason"] == "length"
+    assert result["usage"] == {"input_tokens": 11205, "output_tokens": 4000}
+    assert result["estimated_usage_microusd"] > 0
+    assert result["eligible_for_rating"] is False
+
+
+def test_truncated_usage_over_reservation_still_latches_budget(observed):
+    store, _, sid = seeded(observed)
+    def truncated(body):
+        body["choices"][0].update(finish_reason="length")
+        body["usage"]["completion_tokens"] = 1000000
+    result = run_llm(store, sid, KIMI, KimiTransport(truncated), clock=CLOCK)
+    assert result["status"] == "BILLING_REVIEW_REQUIRED"
+    assert run_llm(store, sid, SETTINGS, Transport(), clock=CLOCK)["external_requests"] == 0
