@@ -1354,11 +1354,56 @@ class ServiceTests(unittest.TestCase):
                 {"PREPARED_ALREADY_EXISTS"},
             )
             self.assertEqual(momentum_source.calls, 1)
-            self.assertEqual(group_source.calls, 1)
+            self.assertEqual(group_source.calls, 2)
             self.assertEqual(calls, {"momentum": [], "sector": []})
             store = DigestStateStore(Path(temporary) / "state.sqlite3")
             for channel in DigestChannel:
                 self.assertEqual(store.get(TARGET, channel)["status"], "PENDING")
+
+    def test_unsent_sector_rotation_prepare_can_replace_changed_payload(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            momentum_source = _Source(_momentum_report())
+            group_source = _Source(_group_report())
+            service, _ = self._service(
+                temporary,
+                {"momentum": [], "sector": []},
+                momentum=momentum_source,
+                groups=group_source,
+            )
+            first = service.run(prepare=True, requested_session=TARGET)
+            self.assertEqual({result["status"] for result in first["results"]}, {"PREPARED"})
+            group_source.report = {**group_source.report, "partial": True, "errors": {"sector": "stale"}}
+            second = service.run(prepare=True, requested_session=TARGET)
+            statuses = {result["channel"]: result["status"] for result in second["results"]}
+            self.assertEqual(statuses["momentum"], "PREPARED_ALREADY_EXISTS")
+            self.assertEqual(statuses["sector-rotation"], "PREPARED_REPLACED")
+            replaced = next(result for result in second["results"] if result["channel"] == "sector-rotation")
+            self.assertTrue(replaced.get("previous_payload_hash"))
+            self.assertNotEqual(replaced["payload_hash"], replaced["previous_payload_hash"])
+            store = DigestStateStore(Path(temporary) / "state.sqlite3")
+            row = store.get(TARGET, DigestChannel.SECTOR_ROTATION)
+            self.assertEqual(row["status"], "PENDING")
+            self.assertEqual(row["last_error_code"], "REPLACED_UNSENT")
+
+    def test_sent_sector_rotation_prepare_does_not_replace(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            momentum_source = _Source(_momentum_report())
+            group_source = _Source(_group_report())
+            service, calls = self._service(
+                temporary,
+                {"momentum": [{"status": 200, "message_id": "m1"}],
+                 "sector": [{"status": 200, "message_id": "s1"}]},
+                momentum=momentum_source,
+                groups=group_source,
+            )
+            service.run(prepare=True, requested_session=TARGET)
+            service.run(send=True, requested_session=TARGET)
+            group_source.report = {**group_source.report, "partial": True}
+            again = service.run(prepare=True, requested_session=TARGET)
+            statuses = {result["channel"]: result["status"] for result in again["results"]}
+            self.assertEqual(statuses["sector-rotation"], "PREPARED_ALREADY_EXISTS")
+            store = DigestStateStore(Path(temporary) / "state.sqlite3")
+            self.assertEqual(store.get(TARGET, DigestChannel.SECTOR_ROTATION)["status"], "SENT")
 
     def test_scheduled_send_requires_a_prepared_payload(self):
         with tempfile.TemporaryDirectory() as temporary:

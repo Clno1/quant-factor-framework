@@ -3,8 +3,9 @@
 
 Writes independent files under
 ``data/reference/group_analytics/rotation/holdings/<ETF>/<captured_at>.json``.
-Member prices go into ``rotation/holdings_canonical/``, never the theme
-``rotation/canonical/`` cache used by the daily price job.
+The weekly job refreshes holdings lists only (``--no-refresh-members``).
+Member prices are refreshed by the daily price stage into
+``rotation/holdings_canonical/``, never the theme ``rotation/canonical/`` cache.
 Per-ETF failures are recorded and do not abort the remaining funds.
 """
 from __future__ import annotations
@@ -89,7 +90,9 @@ def main(argv=None):
     parser.add_argument("--output", type=Path, help="Optional extra dump directory; must be empty/new")
     parser.add_argument("--env-file", type=Path)
     parser.add_argument("--max-members", type=int, default=120)
-    parser.add_argument("--refresh-members", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--refresh-members", action=argparse.BooleanOptionalAction, default=False,
+                        help="Refresh member OHLCV into holdings_canonical. Daily price --refresh does this; "
+                             "the weekly holdings job should keep --no-refresh-members.")
     args = parser.parse_args(argv)
     if args.env_file and load_local_env(args.env_file) is None:
         raise ValueError("Missing env file")

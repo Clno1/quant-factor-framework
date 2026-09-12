@@ -15,6 +15,7 @@ from ..calendar import _calendar, latest_completed_session, official_session_clo
 from ..artifacts import normalize_json_value
 from . import (
     AMOUNT_AUDIT_DOC,
+    AMOUNT_AUDIT_STATUS,
     AMOUNT_BASIS,
     CACHE_PRICE_BASIS,
     FLOWS_AUDIT_DOC,
@@ -33,14 +34,26 @@ from .holdings import (
     holding_member_symbols,
     holdings_fingerprint,
     load_latest_observations,
+    member_measurement_fingerprint,
 )
 from .store import RotationStore, encoded
 from .themes import default_themes, proxy_etf_symbols, required_symbols
 
 LOOKBACK_CALENDAR_DAYS = 550
 LOOKBACK_SESSIONS = 300
+MEMBER_LOOKBACK_CALENDAR_DAYS = 90
 CANONICAL_CACHE_LEAF = "canonical"
 HOLDINGS_CACHE_LEAF = "holdings_canonical"
+ROTATION_PARAMETERS = {
+    "history_sessions": 300, "return_windows": [1, 5, 20, 60],
+    "relative_ma": [20, 50], "amount_ma": 20,
+    "source_volume_threshold": 1.3, "extension_rs60_pct": 18,
+    "extension_ma50_pct": 8, "confirmation_bars": 2,
+    "strength_deadband_log": .005, "acceleration_deadband_log": .002,
+    "min_breadth_members": 5, "min_breadth_coverage": .8,
+    "holdings_stale_calendar_days": 14,
+    "price_state_version": "dual-axis-v3",
+}
 logger = logging.getLogger(__name__)
 
 
@@ -72,6 +85,36 @@ def _write_basis(sidecar: Path):
         "price_basis": CACHE_PRICE_BASIS,
         "amount_basis": AMOUNT_BASIS,
     }, ensure_ascii=False, sort_keys=True))
+
+
+def _series(frame, column):
+    if isinstance(frame, pd.DataFrame) and column in frame.columns:
+        return frame[column]
+    return pd.Series(dtype=float)
+
+
+def config_fingerprint(*, schema_version, parameters, amount_verified, amount_audit_status,
+                       decision_cutoff, themes, context):
+    return hashlib.sha256(encoded(normalize_json_value({
+        "schema_version": schema_version,
+        "parameters": parameters,
+        "amount_verified": amount_verified,
+        "amount_audit_status": amount_audit_status,
+        "decision_cutoff": decision_cutoff,
+        "themes": [theme.record() for theme in themes],
+        "context": context,
+    }))).hexdigest()
+
+
+def publish_fingerprint(*, input_fingerprint, config_fingerprint_value, holdings_fingerprint_value,
+                        holdings_measurement_fingerprint, flows_fingerprint_value):
+    return hashlib.sha256(encoded(normalize_json_value({
+        "input_fingerprint": input_fingerprint,
+        "config_fingerprint": config_fingerprint_value,
+        "holdings_fingerprint": holdings_fingerprint_value,
+        "holdings_measurement_fingerprint": holdings_measurement_fingerprint,
+        "flows_fingerprint": flows_fingerprint_value,
+    }))).hexdigest()
 
 
 def load_frames(symbols, start, end, *, refresh=False, cache_root=None,
@@ -140,9 +183,11 @@ def run_rotation(*, asof="latest", refresh=False, store=None, frames=None, theme
         for symbol, frame in frames.items():
             if symbol not in symbols or not isinstance(frame, pd.DataFrame):
                 continue
-            prices[symbol] = frame.get("adj_close", frame.get("close", pd.Series(dtype=float)))
-            volumes[symbol] = frame.get("volume", pd.Series(dtype=float))
-            execution[symbol] = frame.get("close", frame.get("adj_close", pd.Series(dtype=float)))
+            prices[symbol] = _series(frame, "adj_close")
+            if prices[symbol].empty:
+                prices[symbol] = _series(frame, "close")
+            volumes[symbol] = _series(frame, "volume")
+            execution[symbol] = _series(frame, "close")
         prices = clean_table(pd.DataFrame(prices), sessions)
         volumes = clean_table(pd.DataFrame(volumes), sessions)
         exec_px = clean_table(pd.DataFrame(execution), sessions)
@@ -156,24 +201,28 @@ def run_rotation(*, asof="latest", refresh=False, store=None, frames=None, theme
         except Exception as exc:
             logger.warning("rotation holdings observations skipped: %s", type(exc).__name__)
             holdings_observations = {}
+        allow_current_observation = target == latest
         member_frames = {}
         try:
-            members = holding_member_symbols(holdings_observations)
+            members = holding_member_symbols(holdings_observations) if allow_current_observation else []
             if members:
+                member_start = (target - pd.Timedelta(days=MEMBER_LOOKBACK_CALENDAR_DAYS)).date().isoformat()
                 member_frames = load_frames(
-                    members, sessions[0].date().isoformat(), source_session,
-                    refresh=False, cache_root=cache_root, cache_leaf=HOLDINGS_CACHE_LEAF,
+                    members, member_start, source_session,
+                    refresh=refresh, cache_root=cache_root, cache_leaf=HOLDINGS_CACHE_LEAF,
                 )
-                if frames is not None:
-                    for symbol in members:
-                        frame = frames.get(symbol)
-                        if symbol not in member_frames and isinstance(frame, pd.DataFrame):
-                            member_frames[symbol] = frame
+                for symbol in members:
+                    frame = frames.get(symbol)
+                    if symbol not in member_frames and isinstance(frame, pd.DataFrame):
+                        member_frames[symbol] = frame
         except Exception as exc:
             logger.warning("rotation holdings member prices skipped: %s", type(exc).__name__)
             member_frames = {}
         try:
-            attach_holdings_breadth(rows, holdings_observations, member_frames, sessions, now=now)
+            attach_holdings_breadth(
+                rows, holdings_observations, member_frames, sessions, now=now,
+                allow_current_observation=allow_current_observation,
+            )
         except Exception as exc:
             logger.warning("rotation holdings overlay skipped: %s", type(exc).__name__)
         try:
@@ -190,6 +239,10 @@ def run_rotation(*, asof="latest", refresh=False, store=None, frames=None, theme
                                      else "背景证据不适用于此基准，独立观察价格")
         holdings_fp = holdings_fingerprint(holdings_observations, now=now)
         flows_fp = flows_fingerprint(rows)
+        measurement_fp = (
+            member_measurement_fingerprint(member_frames, sessions)
+            if allow_current_observation else None
+        )
         input_panel = normalize_json_value({
             "sessions": sessions.strftime("%Y-%m-%d").tolist(),
             "price_columns": prices.columns.tolist(), "volume_columns": volumes.columns.tolist(),
@@ -199,30 +252,39 @@ def run_rotation(*, asof="latest", refresh=False, store=None, frames=None, theme
             "holdings_fingerprint": holdings_fp, "flows_fingerprint": flows_fp,
         })
         fingerprint = hashlib.sha256(encoded(input_panel)).hexdigest()
+        parameters = dict(ROTATION_PARAMETERS)
+        cfg_fp = config_fingerprint(
+            schema_version=SCHEMA_VERSION, parameters=parameters,
+            amount_verified=amount_verified, amount_audit_status=AMOUNT_AUDIT_STATUS,
+            decision_cutoff=cutoff.isoformat(), themes=themes, context=context,
+        )
+        pub_fp = publish_fingerprint(
+            input_fingerprint=fingerprint, config_fingerprint_value=cfg_fp,
+            holdings_fingerprint_value=holdings_fp,
+            holdings_measurement_fingerprint=measurement_fp,
+            flows_fingerprint_value=flows_fp,
+        )
         snapshot = normalize_json_value({
             "schema_version": SCHEMA_VERSION, "source_session": source_session,
             "generated_at": now.isoformat(), "decision_cutoff": cutoff.isoformat(),
             "profiles": [SOURCE_PROFILE, PRODUCTION_PROFILE], "price_basis": CACHE_PRICE_BASIS,
             "amount_basis": AMOUNT_BASIS, "amount_audit_doc": AMOUNT_AUDIT_DOC,
+            "amount_audit_status": AMOUNT_AUDIT_STATUS,
             "holdings_audit_doc": HOLDINGS_AUDIT_DOC, "flows_audit_doc": FLOWS_AUDIT_DOC,
             "flows_audit_status": FLOWS_AUDIT_STATUS, "amount_verified": amount_verified,
-            "input_fingerprint": fingerprint, "holdings_fingerprint": holdings_fp,
-            "flows_fingerprint": flows_fp, "input_panel": input_panel,
-            "parameters": {"history_sessions": 300, "return_windows": [1, 5, 20, 60],
-                           "relative_ma": [20, 50], "amount_ma": 20,
-                           "source_volume_threshold": 1.3, "extension_rs60_pct": 18,
-                           "extension_ma50_pct": 8, "confirmation_bars": 2,
-                           "strength_deadband_log": .005, "acceleration_deadband_log": .002,
-                           "min_breadth_members": 5, "min_breadth_coverage": .8,
-                           "holdings_stale_calendar_days": 14,
-                           "price_state_version": "dual-axis-v3"},
+            "input_fingerprint": fingerprint, "config_fingerprint": cfg_fp,
+            "holdings_fingerprint": holdings_fp,
+            "holdings_measurement_fingerprint": measurement_fp,
+            "flows_fingerprint": flows_fp, "publish_fingerprint": pub_fp,
+            "input_panel": input_panel,
+            "parameters": parameters,
             "session_status": "FINAL", "valid_theme_count": valid,
             "total_theme_count": len(rows), "context": context, "rows": rows,
             "notes": ["日线研究观察，不是交易指令；未包含实时盘前行情",
                       "公开版为规则级对照，未完成TradingView数值对账；生产0–100分不在主表展示",
                       "自建篮子历史按固定成员回看，不是历史时点可选组合",
-                      "成交额口径为拆股复权收盘价×成交量，见 " + AMOUNT_AUDIT_DOC,
-                      "ETF真实广度为当前持仓观测，持仓生效日未披露，见 " + HOLDINGS_AUDIT_DOC,
+                      "成交额按拆股复权 close×volume 计算；供应商价量复权尚未用真实抽样核验，见 " + AMOUNT_AUDIT_DOC,
+                      "ETF真实广度为当前持仓观测，持仓名单可周更、成员价格每日更新；持仓生效日未披露，见 " + HOLDINGS_AUDIT_DOC,
                       "净申赎审计未通过，列为空且不用成交额冒充，见 " + FLOWS_AUDIT_DOC],
         })
         run_id = None if dry_run else store.publish(snapshot)

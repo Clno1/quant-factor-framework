@@ -69,11 +69,28 @@ def failure_source_session(asof):
 
 
 def same_price_inputs(existing, snapshot):
+    if existing.get("publish_fingerprint") and snapshot.get("publish_fingerprint"):
+        return (
+            existing.get("source_session") == snapshot.get("source_session")
+            and existing.get("publish_fingerprint") == snapshot.get("publish_fingerprint")
+        )
     return (
         existing.get("source_session") == snapshot.get("source_session")
         and existing.get("input_fingerprint") == snapshot.get("input_fingerprint")
+        and existing.get("config_fingerprint") == snapshot.get("config_fingerprint")
         and existing.get("holdings_fingerprint") == snapshot.get("holdings_fingerprint")
+        and existing.get("holdings_measurement_fingerprint") == snapshot.get("holdings_measurement_fingerprint")
         and existing.get("flows_fingerprint") == snapshot.get("flows_fingerprint")
+        and existing.get("amount_verified") == snapshot.get("amount_verified")
+        and existing.get("amount_audit_status") == snapshot.get("amount_audit_status")
+        and existing.get("decision_cutoff") == snapshot.get("decision_cutoff")
+    )
+
+
+def price_identity(snapshot):
+    return (
+        snapshot.get("source_session"),
+        snapshot.get("publish_fingerprint") or snapshot.get("input_fingerprint"),
     )
 
 
@@ -180,6 +197,13 @@ def run_linkage_stage(*, asof, store, dry_run, snapshot=None):
     attached["generated_at"] = original_generated_at
     if dry_run:
         return _summary(attached, status="DRY_RUN", run_id=None, stage="linkage") | {"snapshot": attached}
+    latest = _load_latest(store)
+    if latest is not None and price_identity(latest) != price_identity(working):
+        raise RotationStageError(
+            "ROTATION_PARENT_MOVED",
+            "关联期间价格快照已被更新的价格版本替换，未覆盖较新结果",
+            record_failure=False,
+        )
     run_id = store.publish(attached)
     published = {**attached, "run_id": run_id}
     return _summary(published, status="SUCCESS", run_id=run_id, stage="linkage") | {"snapshot": published}
@@ -218,7 +242,8 @@ def main(argv=None):
     parser.add_argument("--context-file", type=Path, help="Optional authorized as-of evidence records (JSON array)")
     parser.add_argument("--decision-cutoff", help="Timezone-aware evidence cutoff; default source-session close")
     parser.add_argument("--amount-verified", action=argparse.BooleanOptionalAction, default=True,
-                        help="Unlock production amount after the canonical close×volume audit; --no-amount-verified disables it")
+                        help="Unlock production amount from canonical close×volume. "
+                             "This is not a live vendor-sample pass; snapshots keep amount_audit_status.")
     parser.add_argument("--without-candidates", action="store_true")
     args = parser.parse_args(argv)
     if args.stage == "linkage" and args.refresh:

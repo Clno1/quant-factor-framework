@@ -10,6 +10,7 @@ import math
 from urllib.parse import quote
 
 from src.alerts.discord import validate_discord_payload
+from src.group_analytics.rotation.holdings import format_holdings_breadth_text
 from src.group_analytics.rotation.store import RotationStore
 from .models import SourceGateError
 
@@ -155,12 +156,9 @@ def rotation_payload(report, context, settings):
             line = f"**{r['name']}** · {label} · {_action_name(p['action'])}\n5日 {_pct(p['rs5'])}｜20日 {_pct(p['rs20'])}｜60日 {_pct(p['rs60'])}（相对{r['benchmark']}）"
             hb = r.get("holdings_breadth") or {}
             if hb.get("breadth_kind") == "etf_holdings_observation" and hb.get("breadth_equal_weight_pct") is not None:
-                equal = hb["breadth_equal_weight_pct"]
-                weighted = hb.get("breadth_weighted_pct")
-                line += f"\n当前持仓观测广度 等权 {equal:.0f}%"
-                if weighted is not None:
-                    line += f" / 加权 {weighted:.0f}%"
-                line += "（持仓生效日未披露）"
+                line += f"\n{format_holdings_breadth_text(hb)}（持仓生效日未披露）"
+            elif hb.get("status") == "HOLDINGS_NOT_POINT_IN_TIME":
+                line += "\n当前持仓观测不用于历史时点，仅价格观察"
             elif hb.get("status") == "HOLDINGS_OBSERVATION_STALE":
                 line += "\n持仓观测过期未用，仅价格观察"
             elif hb.get("status") == "HOLDINGS_MEASUREMENT_FAILED":

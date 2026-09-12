@@ -2,7 +2,7 @@
 
 日期：2026-09-12
 
-状态：**开发依据文档**。P0–P3 已在分支 `cursor/sector-rotation-v3-99b0`（PR #7）落地；P4 / P5 未开始。后续板块轮动的迭代严格按本文推进；偏离本文的改动需要先更新本文再实施。
+状态：**开发依据文档**。P0–P3 在分支 `cursor/sector-rotation-v3-99b0`（PR #7）有实现，但**不能视为已完成验收、不能直接进入 P4/P5**。关键闭环、日度成员价格、覆盖展示、NOOP、关联消息换版、真实量价抽样与回退演练仍待兑现。后续板块轮动的迭代严格按本文推进；偏离本文的改动需要先更新本文再实施。
 
 适用范围：`src/group_analytics/rotation/`、`src/premarket_digest/rotation.py`、`src/webapp/group_analytics_routes.py` 及对应模板/静态资源、`deploy/systemd/` 中轮动相关 unit。
 
@@ -291,7 +291,9 @@ X 轴（月度相对强弱）与 Y 轴（近 5 日相对前 15 日速度）**独
 
 ### P0 — 时效与发布闭环
 
-**目标**：收盘后 1.5 小时内出快照；个股关联失败可重试；页面区分最新与历史。
+**目标**：按交易所实际收盘与供应商就绪时间发布主题价格快照；个股关联失败可重试且未发送摘要可受控换版；页面区分最新、历史、过期与失败。
+
+启动时间、完成 SLA、失败补偿分开写，不得把「17:30 启动」写成「收盘后 1.5 小时内完成」。常规日 16:00 ET 收盘后 17:30 才启动，下载与计算还要时间；提前收盘日更不满足 1.5 小时承诺。
 
 **不改算法。**
 
@@ -316,15 +318,24 @@ X 轴（月度相对强弱）与 Y 轴（近 5 日相对前 15 日速度）**独
 
 快照包含 `"generated_at": now.isoformat()`，因此**即使输入完全相同，每次构建的 digest 也不同**，会生成一个新的 `run_id`。在美股休市日、或同一交易日重复触发时，`price` 阶段会为同一个 `source_session` 反复产出内容等价的 run。
 
-`price` 阶段发布前必须先比对：
+`price` 阶段发布前必须先比对 **发布指纹**，覆盖实际输出依赖，不能只比较行情面板：
 
 ```text
-若 latest 快照的 source_session 相同
-且 latest 快照的 input_fingerprint 相同
-→ 跳过发布，返回 NOOP
+原始数据指纹     input_fingerprint          主题价量与 execution_close 面板
+计算配置指纹     config_fingerprint         schema、parameters、amount_verified、
+                                           amount_audit_status、decision_cutoff、
+                                           主题定义、背景证据
+持仓观测指纹     holdings_fingerprint       当前持仓 JSON（不含成员价）
+广度测量指纹     holdings_measurement_fingerprint
+                                           实际用于 overlay 的成员价格
+资金流指纹       flows_fingerprint
+发布指纹         publish_fingerprint        以上各项的组合
 ```
 
-`input_fingerprint` 已经是输入面板的 sha256（不含 `generated_at`），正是这个判断的正确键。休市日因此自然收敛为 NOOP，不需要在 timer 里单独判断交易所假日。
+若 latest 的 `source_session` 与 `publish_fingerprint` 均相同 → 跳过发布，返回 NOOP。
+`amount_verified` 翻转、只修正一只成员价格、背景证据或主题定义变化，都必须产生新 run。不能只比较 `input_fingerprint` + 持仓 JSON。
+
+关联阶段在 `publish` 前必须重读 `latest.json`：若价格父版本（`publish_fingerprint`）已变，返回 `ROTATION_PARENT_MOVED` 且 `record_failure=False`，避免旧价格快照派生的关联覆盖较新价格。
 
 #### P0.2 定时器调整
 
@@ -339,13 +350,19 @@ RandomizedDelaySec=60s
 Unit=quant-group-rotation-price.service
 ```
 
-使用 `America/New_York` 让 systemd 自动处理夏令时，收盘后固定 1.5 小时。对应 SGT 夏令时 05:30、冬令时 06:30。
+使用 `America/New_York` 让 systemd 自动处理夏令时。**17:30 是启动时间，不是完成时刻。** 完成 SLA 登记为启动后 75 分钟；提前收盘日仍按 17:30 启动，不承诺相对当日实际收盘的固定时差。FMP 凭据通过 `EnvironmentFile=-/etc/quant/market-data.env`（及可选 `momentum-alerts.env`）进入价格层与周持仓进程。
 
-service 沿用现有资源约束（root、`flock` 宽基锁、`MemoryHigh=400M`、`MemoryMax=550M`、`CPUQuota=100%`），`ExecStart` 加 `--stage price`。
+价格层 `MemoryHigh=700M` / `MemoryMax=900M`，因为 `--refresh` 同时刷新主题 canonical 与成员 `holdings_canonical`。
 
-`quant-group-analytics-eod.timer` 保持 13:15 SGT，`ExecStart` 改为 `--stage linkage`。
+`quant-group-analytics-eod.timer` 保持 13:15 SGT，`ExecStart` 为 `--stage linkage`。停用价格 timer **不会**自动恢复价格构建：13:15 任务已改为只做 linkage。
 
-在 `quant-premarket-prepare.service`（07:00 ET）之前追加一次 `--stage linkage` 重试，作为 `ExecStartPre` 或独立 oneshot。允许失败不阻断盘前流程。
+盘前摘要三个时点必须分开：
+
+1. 关联重试截止（07:00 ET `ExecStartPre` linkage）
+2. 允许降级为无候选摘要的时点（仍可预生成）
+3. 消息最终冻结时点（进入 SENDING/SENT）
+
+尚未发送、尚未进入发送中的板块频道记录，在 payload/`run_id` 变化时允许受控换版，保留旧 payload hash 审计（`REPLACED_UNSENT`）。SENT / SENDING / UNKNOWN 不得换版。不能只增加一次重试命令就认为闭环完成。
 
 `configs/operations.yaml` 增加 `group_rotation_price` job 登记，`enabled_expected: true`。
 
@@ -355,8 +372,8 @@ service 沿用现有资源约束（root、`flock` 宽基锁、`MemoryHigh=400M`�
 
 - 头部改为三行：数据截至哪个收盘 / 快照生成时间 / 距今时长 + 下次更新时间。
 - `run` 查询参数存在时，显著标注"固定历史快照"并提供"查看最新"按钮。
-- `visibilitychange` 事件 + 5 分钟轮询，检测到新 `run_id` 时提示"有更新的快照"，由用户点击刷新，不自动跳变。
-- `freshness !== "current"` 的黄色告警保留并加强。
+- `visibilitychange` 事件 + 5 分钟轮询。检测到新 `run_id` 时提示"有更新的快照"，由用户点击刷新，不自动跳变。
+- **同一 `run_id` 必须更新运行健康**：`freshness`、`last_attempt`、有效主题数。报告正文可以保持固定，过期和失败告警必须动态更新。固定 `?run=` 快照不把 latest 的正文合并进来。
 
 #### P0.4 Discord
 
@@ -376,9 +393,16 @@ service 沿用现有资源约束（root、`flock` 宽基锁、`MemoryHigh=400M`�
 - `price` 阶段不触碰 `CompletedSessionMomentumSource`
 - `tests/test_systemd_units.py` 覆盖新 unit
 
-**验收**：SG 上观察连续 3 个交易日，收盘后 1.5 小时内出快照；至少复现一次"13:15 关联失败 → 07:00 ET 重试成功"。
+**验收**：SG 上观察连续 3 个交易日：价格层在 17:30 ET 启动后于登记 SLA 内出快照；至少复现一次「13:15 关联失败 → 07:00 ET 重试成功 → 未发送摘要换版为新结果」。提前收盘日只核对应启动与补偿，不核 1.5 小时承诺。
 
-**回退**：`--stage all` 保持可用；停用新 timer 即回到原行为。
+**回退（完整步骤，停用新 timer 不等于回到原行为）**：
+
+1. 停止 writer：`quant-group-rotation-price.timer`、`quant-group-rotation-holdings.timer`；13:15 linkage 也先停，避免只关联不写价格。
+2. 恢复代码版本到仍使用 `--stage all`（或旧单进程价格+关联）的 git 与对应 unit/drop-in。
+3. 若回退代码只能读 v2.1：把 `latest.json` 指回最后一份 `rotation.v2.1` run；不要让旧读取器去读 v3 schema。新代码能读 v2 **不等于**旧代码能读 v3。
+4. 未发送摘要：确认 outbox 中 PENDING 是否仍指向将下线的 v3 run；必要时重建或跳过当日板块频道。
+5. 验证：页面能打开且 schema 与读取器匹配；盘前 prepare/send 不引用已下线 run。
+6. 旧 run 文件保留、不覆盖，是必要条件但不是完整回退。
 
 ---
 
@@ -461,14 +485,22 @@ speed_axis    = "accelerating" if y >  δy
 
 `metric_frame` 中相对收益继续用 `adj_close`，成交额改用 `close × volume`。二者在同一 frame 内共存，字段名必须区分。
 
-**对账要求（必须先做，通过才改默认值）**：
+**对账要求（必须先做，通过才把供应商口径标为已核验）**：
 
 1. 选 3 个有拆股记录的标的（含近两年拆股）、3 个有大额分红的标的
 2. 拆股日前后各 5 个交易日逐日核对 `close × volume` 连续性
 3. 对比 `adj_close × volume` 与 `close × volume` 的差异分布
 4. 结果写入 `docs/sector_rotation_v3_amount_audit_<date>.md`
 
-对账通过后，`amount_verified` 默认改为 `true`，`--amount-verified` 参数保留但反转为 `--no-amount-verified`。快照中必须记录 `amount_basis`（取值 `split_adjusted_close_x_volume`）与对账文档的 commit，使任一历史 run 都能追溯其成交额口径。
+保留两个不同状态，不能用一个 `verified=true` 混在一起：
+
+- **计算路径**：始终用 canonical `close × volume`；缺少 `close` 时金额为 null，禁止回退 `adj_close`。
+- **`amount_verified`**：仅表示生产轨按 canonical 字段解锁「成交活跃」列。
+- **`amount_audit_status`**：`SYNTHETIC_GATES_ONLY`（当前）或真实抽样通过后的 `PASSED`。
+
+合成测试只能证明代码乘对了两个字段，不能证明供应商实际返回的价量复权一致。
+
+`scripts/research_group_rotation.py` 仍下载分红复权 complete OHLCV，与运行快照不是同一条计算链。P5 必须先增加「研究计算与运行计算逐值一致」门槛，再谈是否跑赢 RS20。若保留旧口径作对照，应单独命名，不能都叫 `source_v1_compat`。
 
 成交额方向标签按 [V2 修订稿 §5.1](sector_rotation_v2_public_source_revision.md) 的反例要求：必须写"放量相对走强/走弱"，需要写"放量下跌"时另行检查绝对收益。
 
@@ -569,7 +601,14 @@ def load_frames(symbols, start, end, *, refresh=False, cache_root=None, fetcher=
 
 **验收**：用 09-10 真实快照重算，逐条核对 §4.4 三个主题的目标表达；22 个主题中"等待确认"占比显著下降且每个剩余的"等待"都有明确原因码。
 
-**回退**：schema 双版本可读，回退代码后旧页面仍能读 v3 快照的兼容子集。
+**回退**：
+
+1. 停止 v3 writer。
+2. 恢复可读 v2.1 的代码版本与 unit。
+3. 把有效 `latest.json` 指回最后一份 v2.1 run（旧读取器会拒绝 v3 schema）。
+4. 处理未发送摘要后验证页面与投递。
+
+新代码能读 v2，不等于旧代码能读 v3。schema 双版本可读只覆盖「新读取器看旧快照」。
 
 ---
 
@@ -585,7 +624,13 @@ def load_frames(symbols, start, end, *, refresh=False, cache_root=None, fetcher=
 
 - `service.py` 新增 `holdings_root` 参数，`run_rotation` 在计算前加载各 ETF 的最近一次持仓观测
 - 持仓观测作为**独立产物**存储，与价格缓存分离：`data/reference/group_analytics/rotation/holdings/<ETF>/<captured_at>.json`
-- 观测刷新独立排期（每周一次足够，持仓变动慢），失败不阻断价格层构建
+必须拆开两件事：
+
+- **持仓名单**按约定频率更新（周一 12:00 ET 周任务，`--no-refresh-members`）。
+- **成员股价每日更新**（价格层 `--refresh` 写入 `rotation/holdings_canonical/`，不进主题 `rotation/canonical/`）。
+- 日度广度基于「当前名单 × 目标交易日成员价格」组合计算。
+
+周任务完成后，连续两个交易日构建广度必须能得到 `eligible_members>0`（成员缓存不得停在上周五）。历史 `--asof` 不得拿今天最新持仓配过去价格；`point_in_time=false` 只是标签，代码必须拒绝这种组合（`HOLDINGS_NOT_POINT_IN_TIME`）。
 
 #### P2.2 双口径必须同时展示
 
@@ -602,15 +647,19 @@ breadth_kind                  口径枚举
 holdings_captured_at          持仓观测时间
 holdings_effective_at         持仓生效日（供应商未提供时为 null）
 point_in_time                 恒为 false
+measured_fund_weight_pct      已测基金权重（有价格的映射成员权重合计）
+measurement_complete          样本与权重覆盖是否达到资格
 ```
+
+主表与 Discord 不能把部分持仓显示成完整广度。必须同时显示：已测基金权重；已映射样本内参与率；`measurement_complete=false` 时标明「仅部分持仓观察」。例如 80% 权重无法映射、剩余 20% 全部站上均线时，不得只写「等权 100%／加权 100% · 样本 5/5」。
 
 生产轨道的 `breadth_kind` 枚举：`member_above_ma`（自建篮子）、`etf_holdings_observation`（ETF 当前持仓观测）、`unavailable`。**不设 `etf_trend_proxy`** —— 参考版的 70/30 永远不进这个字段。对照轨道产出的 70/30 继续保留在行内 `compatibility` 字段中，只在"方法对照"区展示。
 
 #### P2.3 资格边界
 
 - `holdings_effective_at` 为 null 时保持 `status = OBSERVATION_ONLY_NO_PROVIDER_DATE`、`point_in_time = false`
-- **只用于当日展示**。不倒填历史、不进 `validation.py` 的回测样本、不参与任何前向研究标签
-- 页面文案："当前持仓观测广度（持仓生效日未披露）"，不叫"历史成分广度"
+- **只用于当日展示**。不倒填历史、不进 `validation.py` 的回测样本、不参与任何前向研究标签。`--asof` 早于最新完整交易日时不得叠加当前持仓观测。
+- 页面文案同时给出样本内参与率、已测基金权重；覆盖不足时写「仅部分持仓观察」
 - 海外上市成分、现金、衍生品继续进 `excluded` 证据，不静默丢弃
 
 #### P2.4 优先级仍不使用广度
@@ -626,9 +675,9 @@ P1 已把广度从优先级中移除，本阶段**不恢复**。广度是并列�
 5. 请求配额消耗估算
 6. 结果写入 `docs/sector_rotation_v3_holdings_audit_<date>.md`
 
-**测试**：双口径同时输出；权重合计越界拒绝；成分映射失败进 `excluded`；持仓观测过期时降级为 `unavailable` 而非使用旧数据；`point_in_time` 恒 false；持仓数据不进 validation 样本。
+**测试**：双口径同时输出；权重合计越界拒绝；成分映射失败进 `excluded`；持仓观测过期时降级为 `unavailable` 而非使用旧数据；`point_in_time` 恒 false；持仓数据不进 validation 样本；成员价格日更与周名单分离；部分覆盖不得显示为完整广度；历史 asof 不得使用当前持仓。
 
-**验收**：17 个 ETF 全部有真实广度或明确的不可用原因；SMH 结果与试点一致。
+**验收**：17 个 ETF 全部有真实广度或明确的不可用原因；SMH 结果与试点一致；周任务后连续两个交易日 `eligible_members>0`。
 
 ---
 
@@ -674,8 +723,9 @@ P1 已把广度从优先级中移除，本阶段**不恢复**。广度是并列�
 - 净申赎列只在有份额数据时出现，没有就留空
 - 独立标注数据日期（与价格日期可能不同，通常落后一天）
 - 同时展示日净申赎与 5 日/20 日累计
-- 与价格方向组合成解释性标签：`价格涨+净流入`（含金量高）、`价格涨+净流出`（可能是反弹出货）、`价格跌+净流入`（可能是逢低吸纳）、`价格跌+净流出`
-- 这些标签是**描述**，不是评分项，不进优先级
+- 与价格方向组合成**事实标签**（只写组合及数据日期，不作机构意图判断）：`价格涨+净流入`、`价格涨+净流出`、`价格跌+净流入`、`价格跌+净流出`
+- 「含金量高 / 反弹出货 / 逢低吸纳」属于待检验假设，不进计划正文与产品文案。ETF 申赎可能涉及实物交换、套利和做空安排，不能据此识别机构意图。
+- 这些标签不是评分项，不进优先级
 - 自建篮子无 ETF 份额概念，该列恒为"不适用"，不用成员成交额顶替
 
 **验收**：17 个 ETF 的净申赎与至少一个公开来源（如 ETF.com 或发行商官网）抽样对账 5 个交易日，偏差与原因可解释。
@@ -823,14 +873,16 @@ P5.2 增量验证         （在 P1 / P2 / P3 各自结束时分别跑一次）
 
 ## 8. 待核实事项
 
-1. **SG 上线后的 P0 三日观察**：核对 `quant-group-rotation-price` 是否在收盘后 1.5h 出快照；至少复现一次「13:15 关联失败 → 07:00 ET 重试成功」。需只读 `systemctl` / `journalctl` / `outputs/group_analytics/rotation/last_attempt.json`
+1. **SG 上线后的 P0 观察**：核价格层是否在 17:30 ET **启动**并在登记 SLA 内完成；至少复现一次「13:15 关联失败 → 07:00 ET 重试成功 → 未发送摘要换版」。需只读 `systemctl` / `journalctl` / `outputs/group_analytics/rotation/last_attempt.json`。不把「收盘后 1.5 小时内完成」当验收标准。
 2. **个股关联首次失败的具体调用条件**：不能继续笼统归因为「宽基停在 09-04」，需定位 `CompletedSessionMomentumSource.load()` 当时抛出的确切原因码
 3. **§4.4 能源行的缺失字段**：需从 SG 快照补齐 `rs5`、`rs1`、`dist50`、`abs20`、`absolute_ma20`，确认「延伸偏大」来自 `dist50 > 8` 而非 `rs60 > 18`
 4. **TradingView 外部数值对账**：仍未完成，`source_v1_compat` 目前只能称「规则级实现候选」
-5. **P1 成交额 6 标的实盘抽样**：合成门禁已绿；3 只有拆股、3 只有大额分红的 FMP 抽样仍待 SG，见 [成交额对账](sector_rotation_v3_amount_audit_20260912.md)
-6. **P2 17 个 ETF `/etf/holdings` 活样本**：本环境无 FMP key；SMH 试点仍是唯一实盘锚点，见 [持仓对账](sector_rotation_v3_holdings_audit_20260912.md)
+5. **P1 成交额 6 标的实盘抽样**：合成门禁已绿，`amount_audit_status` 仍为 `SYNTHETIC_GATES_ONLY`；3 只有拆股、3 只有大额分红的 FMP 抽样仍待 SG
+6. **P2 17 个 ETF `/etf/holdings` 活样本**与「周名单后连续两日日度广度」集成验收：本环境无 FMP key
 7. **P3 FMP ETF 份额/NAV**：公开文档 **NOT_PASSED**（无历史份额/NAV 序列）。已禁止降级替代。若 SG 发现未文档化端点，先更新 [净申赎审计](sector_rotation_v3_flows_audit_20260912.md) 再写取数
-8. **P5.2 对 RS20 的增量对照**：P1/P2/P3 各自结束后应跑一次；本环境没有冻结实盘面板，未跑。上线后用 `scripts/research_group_rotation.py` 补。广度/净申赎在对照跑赢前不得进排序
+8. **P5 研究/运行口径对齐**：`make_panel` 已按 close×volume 计算；`research_group_rotation.py` 下载仍是分红复权 complete OHLCV。对齐前不得把研究积分与运行快照都叫当前 `source_v1_compat` 去比 RS20。广度/净申赎在对照跑赢前不得进排序
+
+已关闭：计划原文「FMP ETF 份额/NAV 未审计前不承诺 P3」——文档审计已做完，结论是不可得，P3 只保留空列管线。
 
 已关闭：计划原文「FMP ETF 份额/NAV 未审计前不承诺 P3」——文档审计已做完，结论是不可得，P3 只保留空列管线。
 
@@ -845,6 +897,7 @@ P5.2 增量验证         （在 P1 / P2 / P3 各自结束时分别跑一次）
 | 2026-09-12 | P0–P3 在同一分支落地（见 §10）。P0 三日观察门禁由负责人豁免为上线后补做 |
 | 2026-09-12 | P0–P3 复查：修复盘前关联重试未开 `GROUP_ANALYTICS_ENABLED`、失败会话写成 `latest`、周持仓截断主题 canonical、overlay 可打断价格层、过期持仓仍显示「未接入」 |
 | 2026-09-12 | 二次复查：关联层不得把 `NO_QUALIFIED_CANDIDATE` / `LINKAGE_FAILED` 写入 `production.evidence_gaps`（否则 `audit_group_rotation.py` 对已关联快照报 DIFFERENT）；盘前 `kind` 按 schema 标 `rotation_v3`，渲染器同时接受 v2/v3，避免误走旧单日板块摘要 |
+| 2026-09-12 | 外部审阅（对照 6297897）：日度成员价格、amount 双状态、发布指纹、部分覆盖展示、关联换版、父版本校验、轮询健康、运维适配与回退步骤未兑现。实现补齐后仍不视为 P0–P3 验收通过，不得直接开 P4/P5 |
 
 ---
 
@@ -852,36 +905,46 @@ P5.2 增量验证         （在 P1 / P2 / P3 各自结束时分别跑一次）
 
 唯一合入分支：`cursor/sector-rotation-v3-99b0`。不按阶段拆 PR。隔离边界未变：只动 `src/group_analytics/rotation/`、`src/premarket_digest/rotation.py`、轮动 Web、轮动 systemd；不碰多因子 / 回测 / 模拟盘 / 茶杯柄 / EP。
 
-### 10.1 已交付
+### 10.1 阶段状态（更准确的表述）
 
 | 阶段 | 状态 | 要点 |
 |---|---|---|
-| 计划 | 已写 | 本文 + 自审修订 |
-| P0 | 代码完成，SG 三日观察未做 | `--stage {price,linkage,all}`；17:30 ET 价格层；13:15 SGT 关联；07:00 ET 盘前 `ExecStartPre` 重试（已补 `GROUP_ANALYTICS_ENABLED`）；页面新鲜度 / `?run=` 固定快照；Discord 双链接；`group_rotation_price` 已登记 operations |
-| P1 | 代码完成，6 标的实盘抽样未做 | schema `rotation.v3.0`；双轴强弱×速度；`pending` 不覆盖优先级；EXTENDED 不吞档；canonical `close×volume`；主表趋势/成交活跃/风险；生产 0–100 分不在主表 |
-| P2 | 代码完成，17 ETF 活样本未做 | 独立 `rotation/holdings/<ETF>/`；主表等权/加权；14 日历日过期停用；不进优先级 / validation / `production.breadth`；周更写入 `rotation/holdings_canonical/`，**不覆盖**主题 `rotation/canonical/` |
-| P3 | 审计 NOT_PASSED，只保留管线 | 篮子「不适用」，ETF「—」；`amount_proxy` 恒 null；无份额/NAV 拉取 |
-| P4 | 未开始 | 轨迹图 / 热力图 / 跨资产条 |
-| P5 | 未开始 | FRED；把广度/净申赎纳入排序前必须先跑赢 RS20 |
+| 计划 | 已写，并按外部审阅修订原则 | 本文 + 自审 + 发布/数据链缺口修订 |
+| P0 | **实现存在，关键闭环与真实数据验收未完成** | 价格/关联拆分已有；17:30 是启动不是完成承诺；未发送摘要可换版；轮询更新 freshness/last_attempt；linkage 运维读 RotationStore；父版本校验；完整回退步骤见 P0。SG 观察未做 |
+| P1 | **实现存在，真实量价抽样未完成** | 双轴已落地；canonical close×volume 计算；`amount_audit_status=SYNTHETIC_GATES_ONLY`；缺少 close 不再回退 adj_close。6 标的 FMP 抽样未做 |
+| P2 | **接入管线存在，日度成员价格链和覆盖展示已按审阅修正，活样本未做** | 名单周更、成员价日更；部分覆盖同时显示已测基金权重与样本内参与；历史 asof 不用当前持仓。17 ETF 活样本与「周任务后连续两日广度」未在 SG 跑过 |
+| P3 | **接口审计未通过，只有禁用状态与预留管线，不能称真实净申赎功能已交付** | 篮子「不适用」，ETF「—」；无份额/NAV 拉取 |
+| P4 | 未开始 | 轨迹图 / 热力图 / 跨资产条之前，应先补「排名迁移、趋势持续性、广度变化」时间线；不新增总分 |
+| P5 | 未开始 | 先对齐研究与运行口径，再谈 RS20；FRED 独立审计 |
 
-### 10.2 复查已修的缺陷
+总体设计（双轴强弱、独立风险、广度不强行控制排名）保留，不需要推倒重来。工具定位是日线研究地图，不是已验证的轮动交易策略，也不是盘中实时轮动。
 
-1. `quant-premarket-prepare` 未设置 `GROUP_ANALYTICS_ENABLED`，07:00 ET 关联重试是空转。已在 `EnvironmentFile` 之后写入 true。
-2. CLI `--asof latest` 失败时 `last_attempt.source_session` 写成字面 `"latest"`。现解析为 XNYS ISO 日期。
-3. `observe_rotation_holdings.py` 曾用 70 日历日 refresh 进主题 canonical，可能截断 61 根历史。现独立 leaf `holdings_canonical`，回看 550 日历日。
-4. `attach_holdings_breadth` 异常（含无 `adj_close`）曾中断整个价格层。现按行/外层兜底；无 `adj_close` 时读 `close`。
-5. 过期/测量失败的持仓仍展示 `ETF_HOLDINGS_NOT_LINKED`。页面与 Discord 已按状态过滤。
-6. `attach_candidates` 曾把关联缺口写进 `production.evidence_gaps`，已关联快照的冻结重放会报 DIFFERENT。现只写行级 `evidence_gaps`。
-7. `load_rotation_report` 的 `kind` 是 Discord 分流键（不是 schema）。v3 快照现标 `rotation_v3`；`build_sector_rotation_payload` 同时接受 `rotation_v2` / `rotation_v3`，避免误渲染成旧单日板块涨跌摘要。
+### 10.2 本轮已修的发布与数据链缺口
+
+1. 价格层 `--refresh` 同时刷新 `holdings_canonical` 成员股价；周持仓任务改为 `--no-refresh-members`。
+2. `amount_audit_status` 与 `amount_verified` 分离；缺少 close 时金额为 null。
+3. `publish_fingerprint` 覆盖配置、持仓观测、成员价格与资金流；NOOP 不再只比行情面板。
+4. 部分持仓展示已测基金权重 +「仅部分持仓观察」；历史 asof 拒绝当前持仓配过去价格。
+5. 未发送的板块摘要可按 payload 变化换版；SENT 不换。
+6. linkage `publish` 前校验价格父版本。
+7. 未钉住的 latest 轮询更新 freshness / last_attempt。
+8. `group_analytics` 运维 job 改为 `group_rotation` 适配器，看 `candidate_linkage` 而不是旧单日板块产物。
+9. 价格/持仓 unit 增加 FMP `EnvironmentFile`；价格层内存与成员日更匹配。
+10. 验证 `make_panel` 在存在 close 时走 execution_close；研究下载仍单独命名。
 
 ### 10.3 刻意保持的行为
 
 - 生产 0–100 分本轮全程不在主表
 - 广度、净申赎不进优先级
 - 周持仓任务不进 `operations.yaml`（周日历 vs `latest_publishable_xnys` 会误报 MISSED）
-- 盘前报告 `kind` 即使在 v3 也必须走 `rotation_payload`，不能只改名字不改渲染器
-- 首次部署因 `input_panel` 增加 holdings/flows fingerprint，价格层会多发布一次新 run，随后指纹稳定则 NOOP
+- 盘前报告 `kind` 即使在 v3 也必须走 `rotation_payload`
+- 资金流标签只写事实组合，不写机构意图
 
-### 10.4 下一步
+### 10.4 下一步（先于 P4/P5）
 
-等负责人指示。默认顺序是 P4（呈现层，只依赖 P1 字段）或 P5.1（FRED 审计，独立）。不要在 P3 审计通过前写份额/NAV 取数，也不要把广度/净申赎塞进排序。
+1. 在 SG 完成日度广度、覆盖与 NOOP 的实盘观察（含周任务后连续两个交易日）。
+2. 对齐关联重试、消息冻结和运维状态的一次真实失败/重试。
+3. 完成真实量价抽样及部署/回退演练。
+4. 统一研究与运行口径后，再继续 P4（排名路径 / 持续性 / 广度变化）或 P5。
+
+不要在上述缺口关闭前做轨迹图或 FRED，也不要把广度/净申赎塞进排序。

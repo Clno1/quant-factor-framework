@@ -17,7 +17,8 @@
     LOW_PARTICIPATION:"参与度低", STATE_CONFIRMING:"新状态确认中",
     NO_QUALIFIED_CANDIDATE:"扫描正常，暂无合格形态", LINKAGE_FAILED:"个股关联失败",
     INSUFFICIENT_HISTORY:"历史不足", HOLDINGS_OBSERVATION_STALE:"持仓观测过期未用",
-    HOLDINGS_MEASUREMENT_FAILED:"持仓已接入但成员价格不足"
+    HOLDINGS_MEASUREMENT_FAILED:"持仓已接入但成员价格不足",
+    PARTIAL_HOLDINGS_COVERAGE:"仅部分持仓观察", HOLDINGS_NOT_POINT_IN_TIME:"当前持仓不用于历史时点"
   };
   const v3Head = ["主题","强弱","速度","5日相对","20日相对","60日相对","趋势","成交活跃","真实广度","净申赎","风险","研究优先级"];
   const v2Head = ["主题 / 状态","5日相对","20日相对","60日相对","真实广度","研究优先级"];
@@ -49,12 +50,19 @@
     if (hb.breadth_kind === "etf_holdings_observation") {
       const equal = hb.breadth_equal_weight_pct, weighted = hb.breadth_weighted_pct;
       if (typeof equal !== "number" || !Number.isFinite(equal)) return "当前持仓观测 · 成员价格不足";
-      const weightPart = typeof weighted === "number" && Number.isFinite(weighted) ? ` / 加权${weighted.toFixed(0)}%` : "";
-      const sample = (hb.breadth_eligible_members != null && hb.breadth_mapped_members != null)
-        ? ` · 样本${hb.breadth_eligible_members}/${hb.breadth_mapped_members}` : "";
-      return `等权${equal.toFixed(0)}%${weightPart}${sample}`;
+      let text = `样本内参与 等权${equal.toFixed(0)}%`;
+      if (typeof weighted === "number" && Number.isFinite(weighted)) text += ` / 加权${weighted.toFixed(0)}%`;
+      if (hb.breadth_eligible_members != null && hb.breadth_mapped_members != null) {
+        text += ` · 样本${hb.breadth_eligible_members}/${hb.breadth_mapped_members}`;
+      }
+      if (typeof hb.measured_fund_weight_pct === "number" && Number.isFinite(hb.measured_fund_weight_pct)) {
+        text += ` · 已测基金权重${hb.measured_fund_weight_pct.toFixed(0)}%`;
+      }
+      if (hb.measurement_complete === false) text += " · 仅部分持仓观察";
+      return text;
     }
     if (hb.status === "HOLDINGS_OBSERVATION_STALE") return "持仓过期未用";
+    if (hb.status === "HOLDINGS_NOT_POINT_IN_TIME") return "当前持仓不用于历史时点";
     if (p.breadth === null || p.breadth === undefined) return (hb.breadth_kind === "member_above_ma" || (r.definition && r.definition.members && r.definition.members.length)) ? "无有效样本" : "未接入";
     return `${p.breadth.toFixed(0)}% · 样本${p.breadth_n}/${p.breadth_expected}${p.breadth_n < 5 ? "（小样本）" : ""}`;
   }
@@ -73,7 +81,8 @@
     const overlayStatus = hb.status || "";
     if (hb.breadth_kind === "etf_holdings_observation"
         || overlayStatus === "HOLDINGS_OBSERVATION_STALE"
-        || overlayStatus === "HOLDINGS_MEASUREMENT_FAILED") {
+        || overlayStatus === "HOLDINGS_MEASUREMENT_FAILED"
+        || overlayStatus === "HOLDINGS_NOT_POINT_IN_TIME") {
       gaps = gaps.filter(gap => gap !== "ETF_HOLDINGS_NOT_LINKED");
     }
     for (const extra of hb.observation_gaps || []) {
@@ -264,6 +273,14 @@
     try {
       const latest = await get("/api/group-analytics/rotation");
       if (latest.run_id && latest.run_id !== data.run_id) el("rotation-refresh").hidden = false;
+      if (pinned) return;
+      if (latest.run_id && latest.run_id === data.run_id) {
+        data.freshness = latest.freshness;
+        data.last_attempt = latest.last_attempt;
+        data.valid_theme_count = latest.valid_theme_count;
+        data.total_theme_count = latest.total_theme_count;
+        fillStatus(new Date());
+      }
     } catch (_error) { /* keep the visible snapshot; retry on the next poll */ }
   }
   el("rotation-refresh-btn").addEventListener("click", () => { location.href = "/group-analytics"; });

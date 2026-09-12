@@ -58,7 +58,7 @@
 
 ### 板块轮动
 
-- [`sector_rotation_v3_plan_20260912.md`](sector_rotation_v3_plan_20260912.md)：**当前开发依据**。P0–P3 已在 PR #7 落地；P4/P5 未开始。实施状态见该文 §10。
+- [`sector_rotation_v3_plan_20260912.md`](sector_rotation_v3_plan_20260912.md)：**当前开发依据**。P0–P3 有实现但未完成发布/数据链验收，不能直接进入 P4/P5。实施状态见该文 §10。
 - [`sector_rotation_v3_amount_audit_20260912.md`](sector_rotation_v3_amount_audit_20260912.md)：P1 成交额口径（拆股复权收盘价×成交量）对账与默认解锁条件。
 - [`sector_rotation_v3_holdings_audit_20260912.md`](sector_rotation_v3_holdings_audit_20260912.md)：P2 当前持仓观测广度；17 ETF 实盘探测仍待 SG。
 - [`sector_rotation_v3_flows_audit_20260912.md`](sector_rotation_v3_flows_audit_20260912.md)：P3 净申赎接口审计，结论 NOT_PASSED，不用成交额冒充。

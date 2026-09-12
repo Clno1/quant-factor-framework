@@ -7,6 +7,7 @@ from src.group_analytics.rotation.engine import analyze
 from src.group_analytics.rotation.holdings import (
     HOLDINGS_NOTE,
     attach_holdings_breadth,
+    format_holdings_breadth_text,
     is_observation_stale,
     load_latest_observations,
     normalize_observation,
@@ -226,3 +227,60 @@ def test_observe_script_isolates_holdings_canonical_cache():
     assert "HOLDINGS_CACHE_LEAF" in text
     assert "Timedelta(days=70)" not in text
     assert "holdings_canonical" in text
+
+
+def test_partial_mapped_weight_is_labeled_incomplete():
+    data = [{"symbol": "SMH", "asset": s, "isin": "US" + s, "weightPercentage": 4,
+             "updatedAt": "2026-09-08 17:00:00"} for s in ("NVDA", "AMD", "TSM", "AVGO", "INTC")]
+    data.append({"symbol": "SMH", "asset": "CASHUSD", "weightPercentage": 80,
+                 "updatedAt": "2026-09-08 17:00:00"})
+    obs = normalize_observation(data, "SMH", "2026-09-08T18:00:00Z")
+    assert sum(item["weight_pct"] for item in obs["excluded"]) == 80
+    dates = pd.bdate_range("2026-08-01", periods=21)
+    frames = {m["ticker"]: pd.DataFrame({"adj_close": range(100, 121)}, index=dates) for m in obs["members"]}
+    measured = observation_breadth(obs, frames, dates)
+    assert measured["above_ma20_pct"] == 100
+    assert measured["measured_fund_weight_pct"] == pytest.approx(20)
+    assert measured["measurement_complete"] is False
+    dates2, prices, volume, themes = _sample_frames()
+    rows = analyze(prices, volume, dates2, (themes[0],))
+    member_frames = {f"S{i}": pd.DataFrame({"adj_close": prices[f"S{i}"]}, index=dates2) for i in range(5)}
+    partial = [{"symbol": "ETF", "asset": f"S{i}", "isin": f"US{i}", "weightPercentage": 4,
+                "updatedAt": "2026-04-20 00:00:00"} for i in range(5)]
+    partial.append({"symbol": "ETF", "asset": "CASHUSD", "weightPercentage": 80,
+                    "updatedAt": "2026-04-20 00:00:00"})
+    attach_holdings_breadth(
+        rows, {"ETF": normalize_observation(partial, "ETF", "2026-04-20T00:00:00Z")},
+        member_frames, dates2, now="2026-04-24T00:00:00Z",
+    )
+    overlay = rows[0]["holdings_breadth"]
+    assert overlay["breadth_equal_weight_pct"] == pytest.approx(100)
+    assert overlay["measured_fund_weight_pct"] == pytest.approx(20)
+    assert overlay["measurement_complete"] is False
+    assert "PARTIAL_HOLDINGS_COVERAGE" in overlay["observation_gaps"]
+    text = format_holdings_breadth_text(overlay)
+    assert "已测基金权重20%" in text
+    assert "仅部分持仓观察" in text
+
+
+def test_historical_asof_does_not_attach_current_holdings(tmp_path):
+    import numpy as np
+    import exchange_calendars as xcals
+    cal = xcals.get_calendar("XNYS")
+    dates = cal.sessions_in_range("2025-01-02", "2026-09-08")
+    close = 100 * np.exp(.0001 * np.arange(len(dates)))
+    frame = pd.DataFrame({"adj_close": close, "close": close, "volume": 10000}, index=dates)
+    members = {f"S{i}": frame.copy() for i in range(5)}
+    obs = _etf_observation("2026-09-01T00:00:00Z")
+    save_observation(tmp_path / "holdings", obs)
+    theme = Theme("etf", "测试", "technology", "QQQ", proxy="ETF")
+    result = run_rotation(
+        asof="2026-09-04", store=RotationStore(tmp_path / "out"),
+        frames={"ETF": frame, "QQQ": frame, **members}, themes=[theme],
+        now="2026-09-09T01:00:00Z", dry_run=True, holdings_root=tmp_path / "holdings",
+        cache_root=tmp_path / "cache",
+    )
+    overlay = result["rows"][0]["holdings_breadth"]
+    assert overlay["status"] == "HOLDINGS_NOT_POINT_IN_TIME"
+    assert overlay["breadth_equal_weight_pct"] is None
+    assert "HOLDINGS_NOT_POINT_IN_TIME" in overlay["observation_gaps"]

@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.group_analytics.rotation import CACHE_PRICE_BASIS, LEGACY_SCHEMA_VERSION, SCHEMA_VERSION
+from src.group_analytics.rotation import CACHE_PRICE_BASIS, LEGACY_SCHEMA_VERSION, SCHEMA_VERSION, AMOUNT_AUDIT_STATUS
 from src.group_analytics.rotation.context import evaluate_context, price_response
 from src.group_analytics.rotation.engine import (
     amount_direction_label, analyze, assign_priority, basket_index, classify_axes, metric_frame, add_states,
@@ -550,7 +550,7 @@ def test_rotation_page_freshness_contract():
     assert "固定历史快照" in html
     assert ">强弱<" in html and ">速度<" in html and ">成交活跃<" in html and ">风险<" in html
     assert ">净申赎<" in html
-    assert "当前持仓观测广度" in html
+    assert "仅部分持仓观察" in html
     assert "生产分数不在主表" in html
     assert "schema_legacy" in js
     assert "strength_label" in js
@@ -561,6 +561,11 @@ def test_rotation_page_freshness_contract():
     assert "America/New_York" in js
     assert 'overlayStatus === "HOLDINGS_OBSERVATION_STALE"' in js
     assert 'overlayStatus === "HOLDINGS_MEASUREMENT_FAILED"' in js
+    assert "latest.freshness" in js
+    assert "latest.last_attempt" in js
+    assert "已测基金权重" in js
+    assert "PARTIAL_HOLDINGS_COVERAGE" in js
+    assert "仅部分持仓观察" in js
 
 
 def test_group_rotation_price_adapter_reads_store(tmp_path):
@@ -871,9 +876,151 @@ def test_service_records_amount_basis_and_replays(tmp_path):
     assert result["amount_basis"] == "split_adjusted_close_x_volume"
     assert result["price_basis"] == CACHE_PRICE_BASIS
     assert result["amount_verified"] is True
+    assert result["amount_audit_status"] == AMOUNT_AUDIT_STATUS
     assert "execution_close" in result["input_panel"]
     assert "priority_breadth_pct" not in result["parameters"]
     assert result["parameters"]["price_state_version"] == "dual-axis-v3"
     assert replay_snapshot(result)["status"] == "MATCH"
 
 
+def test_missing_close_does_not_fall_back_to_adj_for_amount(tmp_path):
+    import exchange_calendars as xcals
+    cal = xcals.get_calendar("XNYS")
+    dates = cal.sessions_in_range("2025-01-02", "2026-09-08")
+    frame = pd.DataFrame({
+        "adj_close": 100 * np.exp(.0001 * np.arange(len(dates))),
+        "volume": 10000,
+    }, index=dates)
+    theme = Theme("etf", "测试", "technology", "QQQ", proxy="ETF")
+    result = run_rotation(
+        asof="2026-09-08", store=RotationStore(tmp_path),
+        frames={"ETF": frame, "QQQ": frame}, themes=[theme],
+        now="2026-09-09T01:00:00Z", dry_run=True,
+    )
+    amount = result["rows"][0]["production"]["amount_proxy"]
+    assert amount is None or (isinstance(amount, float) and np.isnan(amount))
+
+
+def test_amount_verified_flip_republishes(tmp_path, capsys):
+    from scripts.run_group_rotation import main
+    patches, root = _price_cli_patches(tmp_path)
+    nows = iter(["2026-09-09T01:00:00Z", "2026-09-09T03:00:00Z"])
+    with patches[0], patches[1], \
+         patch("scripts.run_group_rotation.run_rotation",
+               side_effect=lambda **kw: run_rotation(now=next(nows), **kw)):
+        assert main(["--stage", "price", "--asof", "2026-09-08", "--output-root", str(root)]) == 0
+        first = json.loads(capsys.readouterr().out)
+        assert main(["--stage", "price", "--asof", "2026-09-08", "--output-root", str(root),
+                     "--no-amount-verified"]) == 0
+        second = json.loads(capsys.readouterr().out)
+    assert first["status"] == "SUCCESS"
+    assert second["status"] == "SUCCESS"
+    assert second["run_id"] != first["run_id"]
+
+
+def test_member_price_change_republishes(tmp_path, capsys):
+    from scripts.run_group_rotation import main
+    from src.group_analytics.rotation.holdings import normalize_observation, save_observation
+    import exchange_calendars as xcals
+    dates = xcals.get_calendar("XNYS").sessions_in_range("2025-10-01", "2026-09-08")
+    close = 100 * np.exp(.0001 * np.arange(len(dates)))
+    frame = pd.DataFrame({"adj_close": close, "close": close, "volume": 10000}, index=dates)
+    members = {f"S{i}": frame.copy() for i in range(5)}
+    theme = Theme("etf", "测试", "technology", "QQQ", proxy="ETF")
+    holdings = tmp_path / "holdings"
+    data = [{"symbol": "ETF", "asset": f"S{i}", "isin": f"US{i}", "weightPercentage": 20,
+             "updatedAt": "2026-09-08 17:00:00"} for i in range(5)]
+    save_observation(holdings, normalize_observation(data, "ETF", "2026-09-08T18:00:00Z"))
+    frames = {"ETF": frame, "QQQ": frame, **members}
+    nows = iter(["2026-09-09T01:00:00Z", "2026-09-09T03:00:00Z"])
+    argv = ["--stage", "price", "--asof", "2026-09-08", "--output-root", str(tmp_path / "out"),
+            "--holdings-root", str(holdings)]
+    with patch("src.group_analytics.rotation.service.default_themes", return_value=[theme]), \
+         patch("src.group_analytics.rotation.service.load_frames", return_value=frames), \
+         patch("scripts.run_group_rotation.run_rotation",
+               side_effect=lambda **kw: run_rotation(now=next(nows), **kw)):
+        assert main(argv) == 0
+        first = json.loads(capsys.readouterr().out)
+        members["S0"].loc[dates[-1], "adj_close"] = float(members["S0"].iloc[-1]["adj_close"]) * 0.5
+        members["S0"].loc[dates[-1], "close"] = float(members["S0"].iloc[-1]["close"]) * 0.5
+        assert main(argv) == 0
+        second = json.loads(capsys.readouterr().out)
+    assert first["status"] == "SUCCESS"
+    assert second["status"] == "SUCCESS"
+    assert second["run_id"] != first["run_id"]
+
+
+def test_price_refresh_writes_member_cache_into_holdings_leaf(tmp_path):
+    from src.group_analytics.rotation.service import HOLDINGS_CACHE_LEAF, MEMBER_LOOKBACK_CALENDAR_DAYS
+    dates = pd.bdate_range("2026-01-05", periods=25)
+    stale = dates[:-1]
+    root = tmp_path / "holdings_canonical"
+    root.mkdir()
+    stale_frame = pd.DataFrame({"close": 1.0, "adj_close": 1.0, "volume": 1.0}, index=stale)
+    stale_frame.to_parquet(root / "NVDA.parquet")
+    (root / "NVDA.basis.json").write_text(json.dumps({"price_basis": CACHE_PRICE_BASIS}))
+    loaded = load_frames(["NVDA"], dates[0].date().isoformat(), dates[-1].date().isoformat(),
+                         cache_root=tmp_path, cache_leaf=HOLDINGS_CACHE_LEAF)
+    assert dates[-1] not in loaded["NVDA"].index
+
+    def fake_fetch(symbol, start, end):
+        return pd.DataFrame({"close": 2.0, "adj_close": 2.0, "volume": 1.0}, index=dates)
+
+    refreshed = load_frames(
+        ["NVDA"], dates[0].date().isoformat(), dates[-1].date().isoformat(),
+        refresh=True, cache_root=tmp_path, cache_leaf=HOLDINGS_CACHE_LEAF, fetcher=fake_fetch,
+    )
+    assert dates[-1] in refreshed["NVDA"].index
+    assert not (tmp_path / "canonical" / "NVDA.parquet").exists()
+    assert MEMBER_LOOKBACK_CALENDAR_DAYS >= 80
+
+
+def test_linkage_aborts_if_price_parent_moved(tmp_path, capsys):
+    from scripts.run_group_rotation import RotationStageError, main, run_linkage_stage
+    patches, root = _price_cli_patches(tmp_path)
+    nows = iter(["2026-09-09T01:00:00Z", "2026-09-09T03:00:00Z"])
+    report = {"source_session": "2026-09-08", "input_fingerprint": "fp-1", "universe": "SP500", "rows": []}
+    with patches[0], patches[1], \
+         patch("scripts.run_group_rotation.run_rotation",
+               side_effect=lambda **kw: run_rotation(now=next(nows), **kw)), \
+         patch("scripts.run_group_rotation.load_momentum_report", return_value=report):
+        assert main(["--stage", "price", "--asof", "2026-09-08", "--output-root", str(root)]) == 0
+        capsys.readouterr()
+        old = RotationStore(root).load()
+        assert main(["--stage", "price", "--asof", "2026-09-08", "--output-root", str(root),
+                     "--no-amount-verified"]) == 0
+        newest = RotationStore(root).load()
+        with pytest.raises(RotationStageError) as exc:
+            run_linkage_stage(asof="2026-09-08", store=RotationStore(root),
+                              dry_run=False, snapshot=old)
+    assert exc.value.code == "ROTATION_PARENT_MOVED"
+    assert RotationStore(root).load()["run_id"] == newest["run_id"]
+
+
+def test_linkage_ops_adapter_requires_available_candidates(tmp_path):
+    from datetime import datetime, timezone
+    from src.operations.adapters.research import collect_research_evidence
+    from src.operations.models import JobDefinition, JobStatus
+    store = RotationStore(tmp_path / "group_analytics" / "rotation")
+    pending = attach_candidates(snapshot())
+    pending["source_session"] = "2026-09-08"
+    store.publish(pending)
+    job = JobDefinition(
+        job_id="group_analytics", display_name="板块轮动个股关联", category="RESEARCH",
+        run_type="SCHEDULED_BATCH", adapter="group_rotation", order=40, enabled_expected=True,
+        schedule={"timezone": "Asia/Singapore", "time": "13:15", "deadline_minutes": 75,
+                  "target_policy": "latest_publishable_xnys"},
+    )
+    now = datetime(2026, 9, 8, 22, 0, tzinfo=timezone.utc)
+    with patch("src.operations.adapters.research._rotation_store", return_value=store), \
+         patch("src.operations.adapters.research.expected_target_session", return_value="2026-09-08"):
+        result = collect_research_evidence([job], now=now, observed_at=now.isoformat())
+    assert result.snapshots[0].status != JobStatus.SUCCESS
+    linked = attach_candidates(pending, {"source_session": "2026-09-08", "input_fingerprint": "fp",
+                                         "universe": "SP500", "rows": []})
+    store.publish(linked)
+    with patch("src.operations.adapters.research._rotation_store", return_value=store), \
+         patch("src.operations.adapters.research.expected_target_session", return_value="2026-09-08"):
+        result = collect_research_evidence([job], now=now, observed_at=now.isoformat())
+    assert result.snapshots[0].status == JobStatus.SUCCESS
+    assert result.snapshots[0].stage == "主题个股关联"

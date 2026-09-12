@@ -2,7 +2,7 @@
 
 日期：2026-09-12
 
-状态：代码门禁已锁定合成口径；**真实 6 只标的的 FMP 抽样对账仍待 SG 补做**，不阻塞 P1 把 `amount_verified` 默认改为 true。
+状态：代码门禁已锁定合成口径，并用 `amount_audit_status=SYNTHETIC_GATES_ONLY` 与“按 canonical close 计算”分开。**真实 6 只标的的 FMP 抽样对账仍待 SG 补做**。在抽样通过前，不得把 `amount_verified=true` 理解成供应商口径已核验。
 
 相关代码：`src/group_analytics/rotation/service.py` `load_frames()`、`src/group_analytics/rotation/engine.py` `metric_frame()`。
 
@@ -38,10 +38,12 @@
 
 旧目录保留便于回退，但运行时不再读取。
 
-## 5. 默认值
+## 5. 默认值与两种状态
 
-对账文档与合成门禁齐备后，`run_rotation(..., amount_verified=True)` 成为默认；CLI 为 `--amount-verified` / `--no-amount-verified`。systemd 价格层 unit 不必加开关。
+- **计算路径**：只使用 canonical `close × volume`。缺少 `close` 时金额为 null，**禁止**回退 `adj_close`。
+- **`amount_verified`**：解锁生产轨“成交活跃”列（仍要求 close 存在）。这只表示“按 canonical 字段计算”，不是供应商抽样通过。
+- **`amount_audit_status`**：当前为 `SYNTHETIC_GATES_ONLY`。真实 6 标的 FMP 抽样通过后才能改为 `PASSED`。
 
-解锁成交额只服务于主表「成交活跃」列。生产 0–100 分仍要求真实广度，且 **本轮全程不在主表展示**。
+systemd 价格层 unit 不必加 `--amount-verified` 开关。解锁成交额只服务于主表「成交活跃」列。生产 0–100 分仍要求真实广度，且 **本轮全程不在主表展示**。
 
-快照字段：`amount_basis = split_adjusted_close_x_volume`，`amount_audit_doc` 指向本文，`price_basis = canonical_full_plus_dividend_adj`。
+快照字段：`amount_basis = split_adjusted_close_x_volume`，`amount_audit_status = SYNTHETIC_GATES_ONLY`，`amount_audit_doc` 指向本文，`price_basis = canonical_full_plus_dividend_adj`。

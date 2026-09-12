@@ -343,6 +343,7 @@ def _collect_group_rotation(
     *,
     now: datetime,
     observed_at: str,
+    linkage: bool = False,
 ) -> CollectionResult:
     result = CollectionResult()
     expected = expected_target_session(job, now=now)
@@ -362,17 +363,43 @@ def _collect_group_rotation(
     actual = str((snapshot or {}).get("source_session") or "") or None
     generated_at = iso_utc((snapshot or {}).get("generated_at"))
     run_id = str((snapshot or {}).get("run_id") or "") or None
+    linkage_status = ((snapshot or {}).get("candidate_linkage") or {}).get("status")
     session_ok = bool(snapshot) and actual == expected
-    if session_ok:
-        status = JobStatus.SUCCESS
-    else:
-        timing = time_relative_status(
-            now=now,
-            scheduled_for=scheduled_for,
-            deadline_at=deadline_at,
-            has_older_evidence=bool(snapshot),
+    linked = session_ok and linkage_status == "available"
+    if linkage:
+        if linked:
+            status = JobStatus.SUCCESS
+        else:
+            timing = time_relative_status(
+                now=now,
+                scheduled_for=scheduled_for,
+                deadline_at=deadline_at,
+                has_older_evidence=bool(snapshot),
+            )
+            status = JobStatus.DEGRADED if session_ok else timing
+        stage_name = "LINKAGE"
+        snapshot_stage = "主题个股关联"
+        success_reason = "已关联目标交易日动量候选"
+        pending_reason = (
+            "价格快照已在但关联尚未成功" if session_ok else "轮动关联尚未到目标交易日"
         )
-        status = timing
+        source_name = "rotation/latest.json#candidate_linkage"
+    else:
+        if session_ok:
+            status = JobStatus.SUCCESS
+        else:
+            timing = time_relative_status(
+                now=now,
+                scheduled_for=scheduled_for,
+                deadline_at=deadline_at,
+                has_older_evidence=bool(snapshot),
+            )
+            status = timing
+        stage_name = "PRICE"
+        snapshot_stage = "主题价格快照"
+        success_reason = "已发布目标交易日轮动价格快照"
+        pending_reason = "轮动价格快照尚未到目标交易日"
+        source_name = "rotation/latest.json"
     if attempt.get("status") == "FAILED" and (
         not session_ok or str(attempt.get("source_session") or "") in {expected, ""}
     ):
@@ -388,11 +415,11 @@ def _collect_group_rotation(
             source="rotation_store",
             observed_at=observed_at,
             target_session=actual,
-            stage="PRICE",
+            stage=stage_name,
             completed_at=generated_at,
             output_versions={"rotation_run_id": run_id or ""},
             metadata={
-                "candidate_linkage": ((snapshot or {}).get("candidate_linkage") or {}).get("status"),
+                "candidate_linkage": linkage_status,
                 "valid_theme_count": (snapshot or {}).get("valid_theme_count"),
             },
         ))
@@ -402,18 +429,16 @@ def _collect_group_rotation(
         observed_at=observed_at,
         target_session=expected,
         run_id=aggregate_id if snapshot or attempt.get("status") != "UNKNOWN" else None,
-        stage="主题价格快照",
-        status_reason=(
-            "已发布目标交易日轮动价格快照"
-            if session_ok else "轮动价格快照尚未到目标交易日"
-        ),
+        stage=snapshot_stage,
+        status_reason=(success_reason if (linked if linkage else session_ok) else pending_reason),
         scheduled_for=scheduled_for,
         deadline_at=deadline_at,
-        last_success_at=generated_at,
+        last_success_at=generated_at if (not linkage or linked) else None,
         output_version=(run_id[:20] if run_id else None),
         metrics={
             "valid_themes": (snapshot or {}).get("valid_theme_count"),
             "total_themes": (snapshot or {}).get("total_theme_count"),
+            "candidate_linkage": linkage_status,
         },
     ))
     result.freshness.append(FreshnessObservation(
@@ -426,7 +451,7 @@ def _collect_group_rotation(
         actual_session=actual,
         delay_sessions=session_delay(expected, actual),
         version_id=run_id,
-        source="rotation/latest.json",
+        source=source_name,
     ))
     return result
 
@@ -444,7 +469,10 @@ def collect_research_evidence(
         elif job.adapter == "group_analytics":
             result.extend(_collect_group_analytics(job, now=now, observed_at=observed_at))
         elif job.adapter == "group_rotation":
-            result.extend(_collect_group_rotation(job, now=now, observed_at=observed_at))
+            result.extend(_collect_group_rotation(
+                job, now=now, observed_at=observed_at,
+                linkage=job.job_id != "group_rotation_price",
+            ))
     return result
 
 

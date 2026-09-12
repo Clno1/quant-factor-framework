@@ -23,17 +23,26 @@ def block_interval(values, *, block=20, repeats=500):
 
 def make_panel(frames, sessions, themes):
     """T+1 adjusted open -> T+h adjusted close, with every bar required."""
-    prices = clean_table(pd.DataFrame({s:f.adj_close for s,f in frames.items()}), sessions)
-    opens = clean_table(pd.DataFrame({s:f.open for s,f in frames.items()}), sessions)
+    prices = clean_table(pd.DataFrame({s: f.adj_close for s, f in frames.items()}), sessions)
+    opens = clean_table(pd.DataFrame({s: f.open for s, f in frames.items()}), sessions)
     prices = prices.where(prices > 0)
     opens = opens.where(opens > 0)
-    volumes = clean_table(pd.DataFrame({s:f.volume for s,f in frames.items()}), sessions)
+    volumes = clean_table(pd.DataFrame({s: f.volume for s, f in frames.items()}), sessions)
+    closes = {}
+    for symbol, frame in frames.items():
+        if "close" in getattr(frame, "columns", []):
+            closes[symbol] = frame["close"]
+    if closes:
+        execution = clean_table(pd.DataFrame(closes), sessions).where(lambda table: table > 0)
+    else:
+        execution = prices * np.nan
     records = []
     for theme in themes:
         if not theme.proxy or theme.members:
             raise ValueError("Validation requires native ETFs, not current-member backcasts")
-        p = metric_frame(theme, prices, volumes, strict=True)
-        compat = metric_frame(theme, prices, volumes, strict=False)
+        p = metric_frame(theme, prices, volumes, strict=True, amount_verified=True,
+                         execution_close=execution)
+        compat = metric_frame(theme, prices, volumes, strict=False, execution_close=execution)
         p["source_score"] = compat.score
         p["rs20_60"] = (p.rs20 + p.rs60) / 2
         for horizon in (5,20):
@@ -145,7 +154,8 @@ def summarize(panel, prices, opens, sessions, themes):
             "state_outcomes":states,"rank_ic":ic,"portfolios":portfolios,"paired_test":paired,
             "limits":["ETF selection and rules frozen today; history is not a truly untouched or prospective test",
                       "Current ETF holdings and custom baskets excluded from historical signals",
-                      "Source score retains unverified adjusted-price dollar-volume proxy",
+                      "Amount uses close×volume when close exists; missing close does not fall back to adj_close",
+                      "Research downloader in scripts/research_group_rotation.py is still dividend-adjusted complete OHLCV; that path is not production canonical close and must not share the source_v1_compat name until field-for-field alignment",
                       "Roundtrip cost charged on all invested slots, even retained names; turnover is target-weight L1",
                       "Daily marked drawdown within trades; gaps with incomplete cohort skip equally; no annualization across skipped periods",
                       "Primary horizon 20 sessions; 5 secondary; split-spanning labels purged; circular date-block bootstrap 500 draws"]}

@@ -108,12 +108,16 @@ def observation_breadth(observation, frames, sessions):
     n = int(valid.sum())
     total_weight = sum(weights.values())
     valid_weight = sum(weights[s] for s in symbols if valid[s])
+    excluded_weight = sum(float(item.get("weight_pct") or 0) for item in observation.get("excluded") or [])
     return {"etf": observation["etf"], "price_session": sessions[-1].date().isoformat(),
             "holdings_captured_at": observation["captured_at"], "holdings_effective_at": None,
             "status": "OBSERVATION_ONLY_NO_PROVIDER_DATE", "point_in_time": False,
             "eligible_members": n, "mapped_equity_members": expected,
             "member_coverage": n / expected, "mapped_equity_weight_pct": total_weight,
+            "excluded_weight_pct": excluded_weight,
+            "reported_weight_pct": total_weight + excluded_weight,
             "valid_weight_pct": valid_weight,
+            "measured_fund_weight_pct": valid_weight,
             "weight_coverage": valid_weight / total_weight if total_weight else None,
             "above_ma20_pct": 100 * int(above.sum()) / n if n else None,
             "weighted_above_ma20_pct": (
@@ -217,6 +221,55 @@ def holdings_fingerprint(observations, *, now=None):
     return hashlib.sha256(encoded(payload)).hexdigest() if payload else None
 
 
+def member_measurement_fingerprint(frames, sessions):
+    if not frames or sessions is None or len(sessions) == 0:
+        return None
+    last = pd.Timestamp(sessions[-1]).tz_localize(None).normalize()
+    payload = []
+    for symbol in sorted(frames):
+        frame = frames[symbol]
+        series = _member_price_series(frame) if isinstance(frame, pd.DataFrame) else None
+        value = None
+        rows = int(len(frame)) if isinstance(frame, pd.DataFrame) else 0
+        columns = sorted(map(str, frame.columns)) if isinstance(frame, pd.DataFrame) else []
+        if series is not None and not series.empty:
+            aligned = series.copy()
+            aligned.index = pd.DatetimeIndex(aligned.index).tz_localize(None).normalize()
+            if last in aligned.index:
+                raw = aligned.loc[last]
+                if isinstance(raw, pd.Series):
+                    raw = raw.iloc[-1]
+                value = _finite(raw)
+        payload.append({
+            "symbol": symbol,
+            "last_session": last.date().isoformat(),
+            "value": value,
+            "rows": rows,
+            "columns": columns,
+        })
+    return hashlib.sha256(encoded(payload)).hexdigest()
+
+
+def format_holdings_breadth_text(overlay):
+    equal = _finite((overlay or {}).get("breadth_equal_weight_pct"))
+    if equal is None:
+        return "当前持仓观测 · 成员价格不足"
+    weighted = _finite(overlay.get("breadth_weighted_pct"))
+    fund = _finite(overlay.get("measured_fund_weight_pct"))
+    text = f"样本内参与 等权{equal:.0f}%"
+    if weighted is not None:
+        text += f" / 加权{weighted:.0f}%"
+    eligible = overlay.get("breadth_eligible_members")
+    mapped = overlay.get("breadth_mapped_members")
+    if eligible is not None and mapped is not None:
+        text += f" · 样本{eligible}/{mapped}"
+    if fund is not None:
+        text += f" · 已测基金权重{fund:.0f}%"
+    if overlay.get("measurement_complete") is False:
+        text += " · 仅部分持仓观察"
+    return text
+
+
 def _empty_overlay(*, kind, status, note, gaps=(), **extra):
     payload = {
         "breadth_kind": kind,
@@ -232,6 +285,9 @@ def _empty_overlay(*, kind, status, note, gaps=(), **extra):
         "point_in_time": False,
         "measurement_complete": False,
         "production_eligible": False,
+        "mapped_equity_weight_pct": None,
+        "measured_fund_weight_pct": None,
+        "excluded_weight_pct": None,
         "observation_gaps": list(gaps),
         "note": note,
     }
@@ -260,11 +316,15 @@ def _etf_unavailable(status, note, gaps):
     return _empty_overlay(kind="unavailable", status=status, note=note, gaps=gaps)
 
 
-def attach_holdings_breadth(rows, observations, frames, sessions, *, now):
+def attach_holdings_breadth(rows, observations, frames, sessions, *, now,
+                            allow_current_observation=True):
     """Overlay dual-calibre observation onto rows; never writes production.breadth."""
     for row in rows:
         try:
-            _attach_one_holdings_row(row, observations, frames, sessions, now=now)
+            _attach_one_holdings_row(
+                row, observations, frames, sessions, now=now,
+                allow_current_observation=allow_current_observation,
+            )
         except Exception:
             if "holdings_breadth" not in row:
                 row["holdings_breadth"] = _etf_unavailable(
@@ -277,12 +337,22 @@ def attach_holdings_breadth(rows, observations, frames, sessions, *, now):
     return rows
 
 
-def _attach_one_holdings_row(row, observations, frames, sessions, *, now):
+def _attach_one_holdings_row(row, observations, frames, sessions, *, now,
+                             allow_current_observation=True):
     has_basket_members = bool(row.get("definition", {}).get("members"))
     if has_basket_members:
         overlay = _basket_overlay(row)
         row["holdings_breadth"] = overlay
         row["breadth_kind"] = "member_above_ma"
+        return
+    if not allow_current_observation:
+        overlay = _etf_unavailable(
+            "HOLDINGS_NOT_POINT_IN_TIME",
+            "当前持仓观测不用于历史时点广度，禁止用今日名单配过去价格",
+            ["HOLDINGS_NOT_POINT_IN_TIME"],
+        )
+        row["holdings_breadth"] = overlay
+        row["breadth_kind"] = "unavailable"
         return
     proxy = row.get("proxy")
     observation = observations.get(proxy) if proxy else None
@@ -323,6 +393,8 @@ def _attach_one_holdings_row(row, observations, frames, sessions, *, now):
     gaps = []
     if equal is not None and equal < 60:
         gaps.append("LOW_PARTICIPATION")
+    if equal is not None and not measured.get("measurement_complete"):
+        gaps.append("PARTIAL_HOLDINGS_COVERAGE")
     overlay = {
         "breadth_kind": "etf_holdings_observation",
         "status": measured.get("status"),
@@ -332,6 +404,9 @@ def _attach_one_holdings_row(row, observations, frames, sessions, *, now):
         "breadth_mapped_members": measured.get("mapped_equity_members"),
         "breadth_member_coverage": _finite(measured.get("member_coverage")),
         "breadth_weight_coverage": _finite(measured.get("weight_coverage")),
+        "mapped_equity_weight_pct": _finite(measured.get("mapped_equity_weight_pct")),
+        "measured_fund_weight_pct": _finite(measured.get("measured_fund_weight_pct")),
+        "excluded_weight_pct": _finite(measured.get("excluded_weight_pct")),
         "holdings_captured_at": measured.get("holdings_captured_at"),
         "holdings_effective_at": measured.get("holdings_effective_at"),
         "point_in_time": False,

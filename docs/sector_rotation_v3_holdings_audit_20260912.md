@@ -48,7 +48,8 @@ V2 已完成的 **SMH 试点**（见 [V2 验证文档 §4](sector_rotation_v2_va
 - 等权 &lt; 60 只进入 `observation_gaps.LOW_PARTICIPATION`，不写回 `production.evidence_gaps`（避免污染 replay / 关联层）
 - `validation.py` 不引用持仓观测；`make_panel` 继续拒绝 current-member 回看
 - 带 overlay 的快照 `replay_snapshot` 仍为 MATCH（只比 production/compatibility）
-- 关联层缺口只写在行级 `evidence_gaps`，不写回 `production.evidence_gaps`
+- 部分覆盖必须同时给出已测基金权重与样本内参与率，并带 `PARTIAL_HOLDINGS_COVERAGE`
+- 历史 `--asof` 不得把当前持仓观测写成该日广度（`HOLDINGS_NOT_POINT_IN_TIME`）
 
 ## 4. 存储与排期
 
@@ -58,19 +59,20 @@ V2 已完成的 **SMH 试点**（见 [V2 验证文档 §4](sector_rotation_v2_va
 data/reference/group_analytics/rotation/holdings/<ETF>/<YYYYMMDDTHHMMSSZ>.json
 ```
 
-日常 `run_rotation(..., holdings_root=)` **只读**最近一次观测，失败不阻断价格层。成员价格优先从独立缓存 `rotation/holdings_canonical/` 读取，缺失时才回退到当日已注入/主题 canonical 的重叠标的；**不得**把周更 refresh 写进主题 `rotation/canonical/`，否则会截断 61 根历史。
+日常 `run_rotation(..., holdings_root=)` **只读**最近一次观测，失败不阻断价格层。价格层 `--refresh` 把成员股价写入独立缓存 `rotation/holdings_canonical/`；**不得**把周更 refresh 写进主题 `rotation/canonical/`，否则会截断 61 根历史。
 
-每周一 **12:00 America/New_York**（早于 17:30 价格层）跑 `scripts/observe_rotation_holdings.py --all --refresh-members`：
+每周一 **12:00 America/New_York**（早于 17:30 价格层）跑 `scripts/observe_rotation_holdings.py --all --no-refresh-members`：
 
 - `deploy/systemd/quant-group-rotation-holdings.timer` / `.service` / `-root.service`
 - 独立 flock：`.rotation-holdings.lock`，不占用宽基 `.broad-production.lock`
-- MemoryHigh=700M / MemoryMax=900M（成员 canonical 刷新比 30 只主题价格重）
+- MemoryHigh=700M / MemoryMax=900M
 - 单 ETF 失败继续其余 16 个；全部失败才非零退出
 - 默认 `--max-members 120`，超过则该 ETF 失败而不是截断权重
+- 周任务只更新持仓名单；成员价格由当日 17:30 价格层刷新。周任务完成后连续两个交易日广度必须能测到目标日成员价格。
 
 未加入 `configs/operations.yaml`：现有 watchdog 的 `target_policy=latest_publishable_xnys` 按交易日对齐，周任务会在周二至周五误报 MISSED。先 systemd-only，避免假警报。
 
-配额粗算（待 SG 用实盘 N 修正）：每周 17 次 holdings + 每成分 2 次 canonical OHLCV（`/full` + dividend-adjusted）。成分在 SMH/XLK 等之间重叠，实际 ticker 数低于 17×N。
+配额粗算（待 SG 用实盘 N 修正）：每周 17 次 holdings；每个交易日对去重后的持仓成员刷新 canonical OHLCV（`/full` + dividend-adjusted）。成分在 SMH/XLK 等之间重叠，实际 ticker 数低于 17×N。
 
 ## 5. 展示
 

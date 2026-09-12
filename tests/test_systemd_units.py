@@ -252,8 +252,10 @@ class SystemdUnitTests(unittest.TestCase):
 
         for content in (price, price_root):
             self.assertIn("--stage price --refresh --asof latest", content)
-            self.assertIn("MemoryHigh=400M", content)
-            self.assertIn("MemoryMax=550M", content)
+            self.assertIn("MemoryHigh=700M", content)
+            self.assertIn("MemoryMax=900M", content)
+            self.assertIn("EnvironmentFile=-/etc/quant/market-data.env", content)
+            self.assertIn("EnvironmentFile=-/etc/quant/momentum-alerts.env", content)
             self.assertIn(".broad-production.lock", content)
             self.assertNotIn("quant-broad-factor-data.service", content)
         holdings = (
@@ -263,9 +265,11 @@ class SystemdUnitTests(unittest.TestCase):
             SYSTEMD_DIR / "quant-group-rotation-holdings-root.service"
         ).read_text(encoding="utf-8")
         for content in (holdings, holdings_root):
-            self.assertIn("observe_rotation_holdings.py --all --refresh-members", content)
+            self.assertIn("observe_rotation_holdings.py --all --no-refresh-members", content)
+            self.assertNotIn("--refresh-members", content.replace("--no-refresh-members", ""))
             self.assertIn("MemoryHigh=700M", content)
             self.assertIn("MemoryMax=900M", content)
+            self.assertIn("EnvironmentFile=-/etc/quant/market-data.env", content)
             self.assertIn(".rotation-holdings.lock", content)
             self.assertNotIn("quant-broad-factor-data.service", content)
             self.assertNotIn("--stage price", content)

@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Explicit research-only ETF data download and frozen-rule evaluation."""
+"""Explicit research-only ETF data download and frozen-rule evaluation.
+
+The download path uses dividend-adjusted complete OHLCV and is not the
+production canonical close×volume amount path. A new study version is required
+before comparing research scores with run snapshots field-for-field.
+"""
 from pathlib import Path
 import argparse
 import hashlib

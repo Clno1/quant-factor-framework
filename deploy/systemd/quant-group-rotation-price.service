@@ -12,6 +12,8 @@ Group=quant
 WorkingDirectory=/opt/quant
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH=/opt/quant
+EnvironmentFile=-/etc/quant/market-data.env
+EnvironmentFile=-/etc/quant/momentum-alerts.env
 Environment=GROUP_ANALYTICS_ENABLED=true
 Environment=GROUP_ANALYTICS_WEB_ENABLED=false
 ExecStartPre=/opt/quant/.venv/bin/python -c "import sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
@@ -19,8 +21,8 @@ ExecStart=/usr/bin/flock --exclusive --wait 10800 /opt/quant/data/lake/.broad-pr
 TimeoutStartSec=3h
 Restart=on-failure
 RestartSec=30min
-MemoryHigh=400M
-MemoryMax=550M
+MemoryHigh=700M
+MemoryMax=900M
 MemorySwapMax=0
 CPUQuota=100%
 TasksMax=64
