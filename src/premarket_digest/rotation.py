@@ -10,6 +10,7 @@ import math
 from urllib.parse import quote
 
 from src.alerts.discord import validate_discord_payload
+from src.group_analytics.rotation.holdings import format_holdings_breadth_text
 from src.group_analytics.rotation.store import RotationStore
 from .models import SourceGateError
 
@@ -27,9 +28,21 @@ SECTORS = {
     "sector_utilities": "Utilities", "sector_realestate": "Real Estate",
     "sector_communications": "Communication Services",
 }
-ACTION_ZH = {"priority": "优先核对", "price_watch": "价格领先／待广度确认",
-             "watch": "转强观察", "extended": "延伸偏大／不追涨",
-             "caution": "降温或落后", "wait": "等待确认", "unavailable": "数据不足"}
+ACTION_ZH = {
+    "unavailable": "数据不足",
+    "focus": "持续领先", "defensive": "相对抗跌", "recover": "正在修复",
+    "weak": "持续落后", "neutral": "与基准同步",
+    "priority": "优先核对", "price_watch": "价格领先／待广度确认",
+    "watch": "转强观察", "extended": "延伸偏大／不追涨",
+    "caution": "降温或落后", "wait": "等待确认",
+}
+ELIGIBLE_ACTIONS = {"focus", "recover", "priority", "price_watch", "watch"}
+LINKAGE_PENDING_REASONS = {"个股关联待后续阶段", "个股关联未启用"}
+RISK_FLAG_ZH = {
+    "EXTENDED": "延伸偏大",
+    "BELOW_ABSOLUTE_MA20": "低于绝对20日均线",
+    "ABSOLUTE_DOWNTREND": "绝对下跌",
+}
 
 
 def _number(value):
@@ -81,9 +94,19 @@ def attach_candidates(snapshot, report=None, *, unavailable_reason=None):
                                 for r in matched[:3]]
         theme["candidate_basis"] = ("FMP同板块股票，非ETF持仓名单" if sector else
                                      "已登记篮子成员" if members else "未登记ETF成分映射")
-        theme["action_name"] = ACTION_ZH[theme["production"]["action"]]
+        theme["action_name"] = ACTION_ZH.get(theme["production"]["action"], theme["production"]["action"])
         theme["confirmation"] = "观察20日相对优势能否保持，并核验成员广度与既有个股突破位"
         theme["invalidation"] = "20日相对转弱或既有突破形态失效时重新评估；不是自动止损指令"
+        gaps = list(theme.get("evidence_gaps") or theme["production"].get("evidence_gaps") or [])
+        if valid_report:
+            if not theme["candidates"] and "NO_QUALIFIED_CANDIDATE" not in gaps:
+                gaps.append("NO_QUALIFIED_CANDIDATE")
+        elif (unavailable_reason or "没有同日突破扫描产物") not in LINKAGE_PENDING_REASONS:
+            if "LINKAGE_FAILED" not in gaps:
+                gaps.append("LINKAGE_FAILED")
+        theme["evidence_gaps"] = gaps
+        # Linkage/display gaps stay on the row. production.evidence_gaps remains
+        # the engine snapshot so replay MATCH still holds after association.
     return result
 
 
@@ -101,7 +124,11 @@ def load_rotation_report(source_session, *, store=None, now=None):
             raise SourceGateError("ROTATION_FUTURE", "轮动快照生成时间异常")
     if report.get("valid_theme_count", 0) < max(1, report.get("total_theme_count", 0) * .8):
         raise SourceGateError("ROTATION_LOW_COVERAGE", "有效主题不足80%，暂停盘前摘要")
-    return {**report, "kind": "rotation_v2"}
+    # Discord renderer switches on this kind (not schema_version). Keep both
+    # labels so a v3 snapshot is not mistaken for the old single-day group digest.
+    schema = str(report.get("schema_version") or "")
+    kind = "rotation_v3" if schema.startswith("rotation.v3") else "rotation_v2"
+    return {**report, "kind": kind}
 
 
 def _pct(value):
@@ -109,19 +136,37 @@ def _pct(value):
     return "—" if n is None else f"{n:+.2f}%"
 
 
+def _action_name(action):
+    return ACTION_ZH.get(action, action)
+
+
+def _risk_flags(production):
+    return [flag for flag in (production.get("risk_flags") or []) if flag]
+
+
 def rotation_payload(report, context, settings):
     fields = []
     for cohort, name in (("technology", "科技与AI"), ("sectors", "全市场板块")):
-        eligible = [r for r in report["rows"] if r["cohort"] == cohort and r["production"]["action"] in {"priority", "price_watch", "watch"}]
+        eligible = [r for r in report["rows"] if r["cohort"] == cohort and r["production"]["action"] in ELIGIBLE_ACTIONS]
         eligible.sort(key=lambda r: -(r["production"].get("rs20") or 0))
         lines = []
         for r in eligible[:2]:
             p = r["production"]
-            line = f"**{r['name']}** · {p['state_name']} · {ACTION_ZH[p['action']]}\n5日 {_pct(p['rs5'])}｜20日 {_pct(p['rs20'])}｜60日 {_pct(p['rs60'])}（相对{r['benchmark']}）"
-            if p.get("breadth") is not None:
+            label = p.get("combined_label") or p.get("state_name")
+            line = f"**{r['name']}** · {label} · {_action_name(p['action'])}\n5日 {_pct(p['rs5'])}｜20日 {_pct(p['rs20'])}｜60日 {_pct(p['rs60'])}（相对{r['benchmark']}）"
+            hb = r.get("holdings_breadth") or {}
+            if hb.get("breadth_kind") == "etf_holdings_observation" and hb.get("breadth_equal_weight_pct") is not None:
+                line += f"\n{format_holdings_breadth_text(hb)}（持仓生效日未披露）"
+            elif hb.get("status") == "HOLDINGS_NOT_POINT_IN_TIME":
+                line += "\n当前持仓观测不用于历史时点，仅价格观察"
+            elif hb.get("status") == "HOLDINGS_OBSERVATION_STALE":
+                line += "\n持仓观测过期未用，仅价格观察"
+            elif hb.get("status") == "HOLDINGS_MEASUREMENT_FAILED":
+                line += "\n持仓已接入但成员价格不足，仅价格观察"
+            elif p.get("breadth") is not None:
                 line += f"\n站20日线 {int(p['breadth_n'])}只有效样本中的 {p['breadth']:.0f}%"
                 if p["breadth_n"] < 5:
-                    line += "（小样本，未达广度确认门槛）"
+                    line += "（小样本，广度不作为优先门槛）"
             else:
                 line += "\n真实广度未接入，仅价格观察"
             if r.get("candidates"):
@@ -129,26 +174,42 @@ def rotation_payload(report, context, settings):
             else:
                 line += "\n暂无已关联的合格个股候选"
             lines.append(line)
-        fields.append({"name": name + "｜优先观察", "value": "\n\n".join(lines) or "暂无满足条件的方向，等待确认。", "inline": False})
-    risks = [r for r in report["rows"] if r["production"]["action"] in {"extended", "caution"} and r["production"]["history_valid"]]
+        fields.append({"name": name + "｜优先观察", "value": "\n\n".join(lines) or "暂无持续领先或正在修复的方向。", "inline": False})
     risk_lines = []
     for cohort, label in (("technology", "科技"), ("sectors", "全市场")):
-        weak = sorted((r for r in risks if r["cohort"] == cohort and r["production"]["action"] == "caution"),
+        rows = [r for r in report["rows"] if r["cohort"] == cohort and r["production"]["history_valid"]]
+        weak = sorted((r for r in rows if r["production"]["action"] in {"weak", "caution"}),
                       key=lambda r: r["production"].get("rs20") or 0)
-        extended = [r for r in risks if r["cohort"] == cohort and r["production"]["action"] == "extended"]
+        extended = [r for r in rows if r["production"]["action"] == "extended"
+                    or "EXTENDED" in _risk_flags(r["production"])]
         if weak:
-            risk_lines.append(label + "降温/落后：" + "、".join(r["name"] for r in weak[:2]))
+            risk_lines.append(label + "持续落后：" + "、".join(r["name"] for r in weak[:2]))
         if extended:
             risk_lines.append(label + "延伸偏大：" + "、".join(r["name"] for r in extended[:2]))
+        flagged = [r for r in rows if set(_risk_flags(r["production"])) - {"EXTENDED"}]
+        extra = []
+        for r in flagged[:2]:
+            extra.append(r["name"] + "（" + "、".join(RISK_FLAG_ZH.get(f, f) for f in _risk_flags(r["production"]) if f != "EXTENDED") + "）")
+        if extra:
+            risk_lines.append(label + "其他风险：" + "、".join(extra))
     fields.append({"name": "风险与失效条件", "value":
                    ("；".join(risk_lines) or "无额外风险标签") +
                    "。若20日相对优势消失或原突破形态失效，重新评估；延伸偏大时不把强势当作追涨理由。", "inline": False})
     base = settings.dashboard_base_url.rstrip("/")
-    url = base + "/group-analytics?run=" + report["run_id"] if base.startswith(("https://", "http://")) else None
+    latest = base + "/group-analytics" if base.startswith(("https://", "http://")) else None
+    url = (latest + "?run=" + report["run_id"]) if latest else None
     embed = {"title": f"板块轮动 · {context.target_session} 开盘前",
-             "description": f"截至 {report['source_session']} 完整收盘 · 不含实时盘前行情\n{report['context']['label']} · 有效主题 {report['valid_theme_count']}/{report['total_theme_count']}",
+             "description": (
+                 f"截至 {report['source_session']} 完整收盘 · 不含实时盘前行情\n"
+                 f"本消息数据截至 {report['source_session']} 收盘，链接为该时刻固定快照\n"
+                 f"{report['context']['label']} · 有效主题 {report['valid_theme_count']}/{report['total_theme_count']}"
+             ),
              "color": 0x386FC8, "fields": fields,
              "footer": {"text": "主题强度不是个股买点 · 研究观察，非买卖指令"}}
+    if latest:
+        fields.append({"name": "页面入口",
+                       "value": f"固定快照见标题链接\n查看最新：{latest}",
+                       "inline": False})
     if url:
         embed["url"] = url
     from .models import DigestChannel

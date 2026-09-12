@@ -270,7 +270,7 @@ def build_sector_rotation_payload(
     context: PremarketContext,
     settings: PremarketDigestSettings,
 ) -> dict[str, Any]:
-    if report.get("kind") == "rotation_v2":
+    if report.get("kind") in {"rotation_v2", "rotation_v3"}:
         from .rotation import rotation_payload
 
         return rotation_payload(report, context, settings)

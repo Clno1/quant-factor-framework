@@ -56,5 +56,16 @@
 - [`market_regime_breadth_cor1m_v2.md`](market_regime_breadth_cor1m_v2.md)：PIT 均线宽度、COR1M、v2 冻结假设和封存规则。
 - [`group_analytics_benchmark.md`](group_analytics_benchmark.md)：板块分析性能基线。
 
+### 板块轮动
+
+- [`sector_rotation_v3_plan_20260912.md`](sector_rotation_v3_plan_20260912.md)：**当前开发依据**。P0–P3 有实现但未完成发布/数据链验收，不能直接进入 P4/P5。实施状态见该文 §10。
+- [`sector_rotation_v3_amount_audit_20260912.md`](sector_rotation_v3_amount_audit_20260912.md)：P1 成交额口径（拆股复权收盘价×成交量）对账与默认解锁条件。
+- [`sector_rotation_v3_holdings_audit_20260912.md`](sector_rotation_v3_holdings_audit_20260912.md)：P2 当前持仓观测广度；17 ETF 实盘探测仍待 SG。
+- [`sector_rotation_v3_flows_audit_20260912.md`](sector_rotation_v3_flows_audit_20260912.md)：P3 净申赎接口审计，结论 NOT_PASSED，不用成交额冒充。
+- [`sector_rotation_v2_upgrade.md`](sector_rotation_v2_upgrade.md)：V2 实现、两条算法轨道、产物契约与 SG 部署操作。
+- [`sector_rotation_v2_public_source_revision.md`](sector_rotation_v2_public_source_revision.md)：公开 Pine 源码逐条审计与分层设计修订。
+- [`sector_rotation_v2_validation_20260909.md`](sector_rotation_v2_validation_20260909.md)：真实数据验证；结论为 `NOT_APPROVED`。
+- [`sector_rotation_v2_research.md`](sector_rotation_v2_research.md)：初次调研记录（部分结论已被修订稿取代）。
+
 旧迁移脚本说明、旧 root/Discord 超长手册和早期 group analytics 需求稿已经删除。需要追溯时使用
 Git 历史，不再把过期操作指南放在当前阅读路径中。

@@ -24,7 +24,7 @@ from .render import (
 )
 from .schedule import resolve_premarket_context
 from .settings import PremarketDigestSettings
-from .state import ConcurrentDigestWorkerError, DigestStateStore, payload_hash
+from .state import ConcurrentDigestWorkerError, DigestStateStore, payload_hash, unsent_replaceable
 
 
 class PremarketDigestService:
@@ -384,12 +384,17 @@ class PremarketDigestService:
                         "status": "FAILED_PERMANENT",
                         "error_code": "PREPARED_SOURCE_SESSION_MISMATCH",
                     }
-                return {
-                    **base,
-                    "status": "PREPARED_ALREADY_EXISTS",
-                    "delivery_status": str(existing.get("status") or ""),
-                    "payload_hash": existing.get("payload_hash"),
-                }
+                replace_unsent = (
+                    channel is DigestChannel.SECTOR_ROTATION
+                    and unsent_replaceable(existing)
+                )
+                if not replace_unsent:
+                    return {
+                        **base,
+                        "status": "PREPARED_ALREADY_EXISTS",
+                        "delivery_status": str(existing.get("status") or ""),
+                        "payload_hash": existing.get("payload_hash"),
+                    }
 
         webhook_url = self.settings.webhook_for(channel)
         if send:
@@ -471,19 +476,35 @@ class PremarketDigestService:
             }
         digest = payload_hash(payload)
         if prepare:
+            existing = self.state_store.get(context.target_session, channel)
+            previous = str((existing or {}).get("payload_hash") or "")
             staged = self.state_store.stage(
                 context.target_session,
                 channel,
                 context.source_session,
                 payload,
+                replace_unsent=channel is DigestChannel.SECTOR_ROTATION,
             )
-            return {
+            staged_hash = str(staged.get("payload_hash") or digest)
+            if previous and previous == staged_hash:
+                return {
+                    **base,
+                    "status": "PREPARED_ALREADY_EXISTS",
+                    "delivery_status": str(staged.get("status") or ""),
+                    "payload_hash": staged_hash,
+                    "metadata": metadata,
+                }
+            status = "PREPARED_REPLACED" if previous and previous != staged_hash else "PREPARED"
+            result = {
                 **base,
-                "status": "PREPARED",
+                "status": status,
                 "delivery_status": str(staged.get("status") or ""),
-                "payload_hash": digest,
+                "payload_hash": staged_hash,
                 "metadata": metadata,
             }
+            if status == "PREPARED_REPLACED":
+                result["previous_payload_hash"] = previous
+            return result
         if not send:
             return {
                 **base,

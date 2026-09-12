@@ -6,10 +6,18 @@
 <section class="rotation-main" id="rotation-main">
     <header class="rotation-header">
         <div><p class="rotation-eyebrow">每日研究 · 板块与主题</p><h1>板块轮动</h1>
-            <p>先看持续强弱，再核对价格与个股确认条件。</p></div>
+            <p>先看持续强弱，再并列核对广度、成交、风险与个股确认。</p></div>
         <a href="/group-analytics/daily">旧版单日统计 →</a>
     </header>
-    <div id="rotation-status" role="status">正在读取完整收盘快照…</div>
+    <div id="rotation-status" role="status">
+        <p id="rotation-asof">正在读取完整收盘快照…</p>
+        <p id="rotation-generated" hidden></p>
+        <p id="rotation-next" hidden></p>
+    </div>
+    <p id="rotation-frozen" class="rotation-banner" hidden>固定历史快照 · <a id="rotation-latest-link" href="/group-analytics">查看最新</a></p>
+    <p id="rotation-refresh" class="rotation-banner rotation-refresh" hidden>
+        <button type="button" id="rotation-refresh-btn">有更新的快照，点击刷新到最新</button>
+    </p>
     <div id="rotation-error" role="alert" hidden></div>
     <div id="rotation-content" hidden>
         <section class="rotation-cards" id="rotation-cards" aria-label="研究方向与分歧"></section>
@@ -18,8 +26,12 @@
             <label>排序 <select id="rotation-sort" aria-label="排序"><option value="rs20">20日相对强弱</option><option value="rs5">5日相对强弱</option><option value="rs60">60日相对强弱</option></select></label>
         </div>
         <div class="rotation-table-wrap">
-            <table class="rotation-table"><caption>研究版日线观察 · 分数不是上涨概率</caption>
-                <thead><tr><th>主题 / 状态</th><th>5日相对</th><th>20日相对</th><th>60日相对</th><th>真实广度</th><th>研究优先级</th></tr></thead>
+            <table class="rotation-table"><caption>研究版日线观察 · 生产分数不在主表 · 分数不是上涨概率</caption>
+                <thead><tr>
+                    <th>主题</th><th>强弱</th><th>速度</th>
+                    <th>5日相对</th><th>20日相对</th><th>60日相对</th>
+                    <th>趋势</th><th>成交活跃</th><th>真实广度</th><th>净申赎</th><th>风险</th><th>研究优先级</th>
+                </tr></thead>
                 <tbody id="rotation-rows"></tbody>
             </table>
         </div>
@@ -27,8 +39,8 @@
             <p>点击主题，查看历史、成员、原版对账和个股观察条件。</p>
         </section>
         <details class="rotation-method"><summary>方法、边界与数据状态</summary>
-            <p>相对收益基于主题/基准价格比，窗口为5/20/60个完整美股交易日。研究状态需要连续2个日线收盘确认；边界保留上次状态，数据不足时不确认。</p>
-            <p>ETF的真实持仓广度未接入时留空。公开基础版的70/30仅是ETF趋势代理，放在独立对账区域。量价复权口径未经核验时，研究版量能和综合分停用。</p>
+            <p>相对收益基于主题/基准价格比，窗口为5/20/60个完整美股交易日。月度强弱（领先/持平/落后）需要连续2个日线收盘确认；速度（加速/平稳/减速）每日直出。稳定领先 = 领先 + 平稳，不再写成“等待确认”。</p>
+            <p>ETF的真实持仓广度来自当前持仓观测。主表同时给出样本内参与率、已测基金权重，覆盖不足时标明“仅部分持仓观察”；持仓生效日未披露，不是历史成分广度。公开基础版的70/30仅是ETF趋势代理，放在独立对账区域。持仓观测超过14个日历日则停用，不使用旧持仓。成交额按拆股复权 close×volume 计算，供应商价量复权尚未用真实抽样核验。净申赎在份额/NAV审计通过前留空，不用成交额冒充。生产0–100分本轮不在主表展示。</p>
             <p>自建篮子为固定成员每日等权研究序列，不代表历史时点可选组合。背景实验不影响评分或仓位；本页不包含盘中行情、自动买卖或已验证收益预测。</p>
             <p id="rotation-audit"></p>
         </details>

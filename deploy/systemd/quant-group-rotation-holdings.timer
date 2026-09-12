@@ -1,0 +1,12 @@
+[Unit]
+Description=Weekly ETF holdings observation before the rotation price build
+
+[Timer]
+OnCalendar=Mon *-*-* 12:00:00 America/New_York
+Persistent=true
+AccuracySec=2min
+RandomizedDelaySec=60s
+Unit=quant-group-rotation-holdings.service
+
+[Install]
+WantedBy=timers.target

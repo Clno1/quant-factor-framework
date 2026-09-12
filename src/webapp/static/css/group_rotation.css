@@ -4,8 +4,13 @@
 .rotation-header p{margin:0;color:var(--text-2)}
 .rotation-main a{color:var(--accent-2)}
 .rotation-eyebrow{font-size:12px;letter-spacing:.1em}
-#rotation-status{padding:12px 16px;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;color:var(--text-2);font-size:13px}
+#rotation-status{padding:12px 16px;background:var(--bg-2);border:1px solid var(--border);border-radius:8px;color:var(--text-2);font-size:13px;display:grid;gap:4px}
+#rotation-status p{margin:0;line-height:1.6}
 #rotation-status.warn,#rotation-error{color:var(--amber);border:1px solid var(--amber);padding:14px;border-radius:8px}
+.rotation-banner{margin:10px 0 0;padding:10px 14px;border-radius:8px;font-size:13px}
+#rotation-frozen{color:var(--amber);border:1px solid var(--amber);background:var(--bg-2)}
+.rotation-refresh{border:1px solid var(--accent-2);color:var(--text-1);background:var(--bg-2)}
+.rotation-refresh button{width:100%;text-align:left}
 .rotation-main [hidden]{display:none!important}
 .rotation-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-bottom:22px}
 .rotation-card{background:var(--card-bg);padding:18px;border:1px solid var(--border);border-radius:10px}
@@ -18,7 +23,8 @@
 .rotation-main button{cursor:pointer}
 .rotation-main button:focus-visible,.rotation-main a:focus-visible{outline:2px solid var(--accent-2);outline-offset:3px}
 .rotation-table-wrap{overflow:auto;border:1px solid var(--border);border-radius:10px}
-.rotation-table{width:100%;border-collapse:collapse;min-width:620px;background:var(--card-bg);font-size:13px}
+.rotation-table{width:100%;border-collapse:collapse;min-width:1100px;background:var(--card-bg);font-size:13px}
+.rotation-risk{color:var(--amber)}
 .rotation-table caption{text-align:left;padding:12px;color:var(--text-2);font-size:12px}
 .rotation-table th,.rotation-table td{padding:13px 10px;text-align:right;border-bottom:1px solid var(--border);font-variant-numeric:tabular-nums}
 .rotation-table th{font-size:12px;font-weight:400;color:var(--text-2)}

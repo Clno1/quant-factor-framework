@@ -1,7 +1,23 @@
+from pathlib import Path
+
 import pandas as pd
 import pytest
 
-from src.group_analytics.rotation.holdings import normalize_observation, observation_breadth
+from src.group_analytics.rotation.engine import analyze
+from src.group_analytics.rotation.holdings import (
+    HOLDINGS_NOTE,
+    attach_holdings_breadth,
+    format_holdings_breadth_text,
+    is_observation_stale,
+    load_latest_observations,
+    normalize_observation,
+    observation_breadth,
+    save_observation,
+)
+from src.group_analytics.rotation.replay import replay_snapshot
+from src.group_analytics.rotation.service import run_rotation
+from src.group_analytics.rotation.store import RotationStore
+from src.group_analytics.rotation.themes import Theme, proxy_etf_symbols
 
 
 def rows():
@@ -39,3 +55,232 @@ def test_unmapped_weight_never_disappears():
     obs=normalize_observation(data,"SMH","2026-09-08T18:00:00Z")
     assert len(obs["members"])==4
     assert obs["excluded"][0]["weight_pct"]==20
+
+
+def test_seventeen_proxy_etfs_are_registered():
+    symbols = proxy_etf_symbols()
+    assert len(symbols) == 17
+    assert "SMH" in symbols and "XLK" in symbols and "XLRE" in symbols
+
+
+def _sample_frames(n=80):
+    dates = pd.bdate_range("2026-01-05", periods=n)
+    t = range(n)
+    curve = 100 * pd.Series([1.001 ** i for i in t], index=dates)
+    prices = pd.DataFrame({"QQQ": 100.0, "ETF": curve, **{f"S{i}": curve for i in range(5)}}, index=dates)
+    volume = pd.DataFrame(1000.0, index=dates, columns=prices.columns)
+    themes = (
+        Theme("etf", "ETF测试", "technology", "QQQ", proxy="ETF"),
+        Theme("basket", "篮子测试", "technology", "QQQ", members=tuple(f"S{i}" for i in range(5))),
+    )
+    return dates, prices, volume, themes
+
+
+def _etf_observation(captured="2026-04-20T00:00:00Z"):
+    data = [{"symbol": "ETF", "asset": f"S{i}", "isin": f"US{i}", "weightPercentage": 20,
+             "updatedAt": "2026-04-20 00:00:00"} for i in range(5)]
+    return normalize_observation(data, "ETF", captured)
+
+
+def test_dual_calibre_overlay_does_not_enter_production_or_priority():
+    dates, prices, volume, themes = _sample_frames()
+    rows = analyze(prices, volume, dates, themes)
+    before = rows[0]["production"]["priority"]
+    assert pd.isna(rows[0]["production"]["breadth"])
+    frames = {f"S{i}": pd.DataFrame({"adj_close": prices[f"S{i}"]}, index=dates) for i in range(5)}
+    attach_holdings_breadth(
+        rows, {"ETF": _etf_observation()}, frames, dates, now="2026-04-24T00:00:00Z",
+    )
+    overlay = rows[0]["holdings_breadth"]
+    assert overlay["breadth_kind"] == "etf_holdings_observation"
+    assert overlay["point_in_time"] is False
+    assert overlay["holdings_effective_at"] is None
+    assert overlay["note"] == HOLDINGS_NOTE
+    assert overlay["breadth_equal_weight_pct"] == pytest.approx(100)
+    assert overlay["breadth_weighted_pct"] == pytest.approx(100)
+    assert pd.isna(rows[0]["production"]["breadth"])
+    assert rows[0]["production"]["priority"] == before
+    assert "ETF_HOLDINGS_NOT_LINKED" in rows[0]["production"]["evidence_gaps"]
+    assert "LOW_PARTICIPATION" not in overlay["observation_gaps"]
+    assert rows[1]["holdings_breadth"]["breadth_kind"] == "member_above_ma"
+
+
+def test_low_participation_is_observation_gap_only():
+    dates, prices, volume, themes = _sample_frames()
+    # Pull the last prints below MA20 while keeping history valid.
+    for i in range(5):
+        prices.loc[dates[-1], f"S{i}"] = prices[f"S{i}"].iloc[-25]
+    rows = analyze(prices, volume, dates, (themes[0],))
+    frames = {f"S{i}": pd.DataFrame({"adj_close": prices[f"S{i}"]}, index=dates) for i in range(5)}
+    attach_holdings_breadth(rows, {"ETF": _etf_observation()}, frames, dates, now="2026-04-24T00:00:00Z")
+    assert rows[0]["holdings_breadth"]["breadth_equal_weight_pct"] == pytest.approx(0)
+    assert "LOW_PARTICIPATION" in rows[0]["holdings_breadth"]["observation_gaps"]
+    assert "LOW_PARTICIPATION" not in rows[0]["production"]["evidence_gaps"]
+
+
+def test_stale_observation_is_unused(tmp_path):
+    obs = _etf_observation("2026-04-01T00:00:00Z")
+    save_observation(tmp_path, obs)
+    loaded = load_latest_observations(tmp_path, ["ETF"])
+    assert "ETF" in loaded
+    assert is_observation_stale(loaded["ETF"], "2026-04-16T00:00:00Z")
+    dates, prices, volume, themes = _sample_frames()
+    rows = analyze(prices, volume, dates, (themes[0],))
+    frames = {f"S{i}": pd.DataFrame({"adj_close": prices[f"S{i}"]}, index=dates) for i in range(5)}
+    attach_holdings_breadth(rows, loaded, frames, dates, now="2026-04-16T00:00:00Z")
+    assert rows[0]["holdings_breadth"]["status"] == "HOLDINGS_OBSERVATION_STALE"
+    assert "HOLDINGS_OBSERVATION_STALE" in rows[0]["holdings_breadth"]["observation_gaps"]
+    assert rows[0]["holdings_breadth"]["breadth_equal_weight_pct"] is None
+    assert rows[0]["breadth_kind"] == "unavailable"
+    assert pd.isna(rows[0]["production"]["breadth"])
+
+
+def test_missing_observation_keeps_unlinked_gap():
+    dates, prices, volume, themes = _sample_frames()
+    rows = analyze(prices, volume, dates, (themes[0],))
+    attach_holdings_breadth(rows, {}, {}, dates, now="2026-04-24T00:00:00Z")
+    assert rows[0]["holdings_breadth"]["status"] == "ETF_HOLDINGS_NOT_LINKED"
+    assert "ETF_HOLDINGS_NOT_LINKED" in rows[0]["production"]["evidence_gaps"]
+
+
+def test_run_rotation_overlay_still_replays(tmp_path):
+    import numpy as np
+    import exchange_calendars as xcals
+    cal = xcals.get_calendar("XNYS")
+    dates = cal.sessions_in_range("2025-01-02", "2026-09-08")
+    close = 100 * np.exp(.0001 * np.arange(len(dates)))
+    frame = pd.DataFrame({"adj_close": close, "close": close, "volume": 10000}, index=dates)
+    members = {f"S{i}": frame.copy() for i in range(5)}
+    obs = _etf_observation("2026-09-01T00:00:00Z")
+    save_observation(tmp_path / "holdings", obs)
+    theme = Theme("etf", "测试", "technology", "QQQ", proxy="ETF")
+    result = run_rotation(
+        asof="2026-09-08", store=RotationStore(tmp_path / "out"),
+        frames={"ETF": frame, "QQQ": frame, **members}, themes=[theme],
+        now="2026-09-09T01:00:00Z", dry_run=True, holdings_root=tmp_path / "holdings",
+        cache_root=tmp_path / "cache",
+    )
+    assert result["rows"][0]["holdings_breadth"]["breadth_kind"] == "etf_holdings_observation"
+    assert result["rows"][0]["holdings_breadth"]["point_in_time"] is False
+    assert pd.isna(result["rows"][0]["production"]["breadth"])
+    assert replay_snapshot(result)["status"] == "MATCH"
+
+
+def test_validation_module_does_not_import_holdings():
+    text = Path("src/group_analytics/rotation/validation.py").read_text(encoding="utf-8")
+    assert "observation_breadth" not in text
+    assert "holdings_breadth" not in text
+    assert "current-member" in text
+
+
+def test_close_only_member_frames_still_measure():
+    obs = normalize_observation(rows(), "SMH", "2026-09-08T18:00:00Z")
+    dates = pd.bdate_range("2026-08-01", periods=21)
+    frames = {m["ticker"]: pd.DataFrame({"close": range(100, 121)}, index=dates) for m in obs["members"]}
+    result = observation_breadth(obs, frames, dates)
+    assert result["above_ma20_pct"] == 100
+    assert result["eligible_members"] == 5
+
+
+def test_overlay_price_exception_does_not_abort_later_rows():
+    from unittest.mock import patch
+    dates, prices, volume, themes = _sample_frames()
+    rows = analyze(prices, volume, dates, themes)
+    with patch(
+        "src.group_analytics.rotation.holdings.observation_breadth",
+        side_effect=AttributeError("adj_close"),
+    ):
+        attach_holdings_breadth(
+            rows, {"ETF": _etf_observation()}, {}, dates, now="2026-04-24T00:00:00Z",
+        )
+    overlay = rows[0]["holdings_breadth"]
+    assert overlay["status"] == "HOLDINGS_MEASUREMENT_FAILED"
+    assert "HOLDINGS_MEASUREMENT_FAILED" in overlay["observation_gaps"]
+    assert rows[1]["holdings_breadth"]["breadth_kind"] == "member_above_ma"
+
+
+def test_run_rotation_survives_holdings_overlay_crash(tmp_path):
+    from unittest.mock import patch
+    import numpy as np
+    import exchange_calendars as xcals
+    cal = xcals.get_calendar("XNYS")
+    dates = cal.sessions_in_range("2025-01-02", "2026-09-08")
+    close = 100 * np.exp(.0001 * np.arange(len(dates)))
+    frame = pd.DataFrame({"adj_close": close, "close": close, "volume": 10000}, index=dates)
+    theme = Theme("etf", "测试", "technology", "QQQ", proxy="ETF")
+    with patch(
+        "src.group_analytics.rotation.service.attach_holdings_breadth",
+        side_effect=RuntimeError("overlay-boom"),
+    ):
+        result = run_rotation(
+            asof="2026-09-08", store=RotationStore(tmp_path / "out"),
+            frames={"ETF": frame, "QQQ": frame}, themes=[theme],
+            now="2026-09-09T01:00:00Z", dry_run=True,
+        )
+    assert result["valid_theme_count"] == 1
+    assert result["source_session"] == "2026-09-08"
+
+
+def test_observe_script_isolates_holdings_canonical_cache():
+    text = Path("scripts/observe_rotation_holdings.py").read_text(encoding="utf-8")
+    assert "LOOKBACK_CALENDAR_DAYS" in text
+    assert "HOLDINGS_CACHE_LEAF" in text
+    assert "Timedelta(days=70)" not in text
+    assert "holdings_canonical" in text
+
+
+def test_partial_mapped_weight_is_labeled_incomplete():
+    data = [{"symbol": "SMH", "asset": s, "isin": "US" + s, "weightPercentage": 4,
+             "updatedAt": "2026-09-08 17:00:00"} for s in ("NVDA", "AMD", "TSM", "AVGO", "INTC")]
+    data.append({"symbol": "SMH", "asset": "CASHUSD", "weightPercentage": 80,
+                 "updatedAt": "2026-09-08 17:00:00"})
+    obs = normalize_observation(data, "SMH", "2026-09-08T18:00:00Z")
+    assert sum(item["weight_pct"] for item in obs["excluded"]) == 80
+    dates = pd.bdate_range("2026-08-01", periods=21)
+    frames = {m["ticker"]: pd.DataFrame({"adj_close": range(100, 121)}, index=dates) for m in obs["members"]}
+    measured = observation_breadth(obs, frames, dates)
+    assert measured["above_ma20_pct"] == 100
+    assert measured["measured_fund_weight_pct"] == pytest.approx(20)
+    assert measured["measurement_complete"] is False
+    dates2, prices, volume, themes = _sample_frames()
+    rows = analyze(prices, volume, dates2, (themes[0],))
+    member_frames = {f"S{i}": pd.DataFrame({"adj_close": prices[f"S{i}"]}, index=dates2) for i in range(5)}
+    partial = [{"symbol": "ETF", "asset": f"S{i}", "isin": f"US{i}", "weightPercentage": 4,
+                "updatedAt": "2026-04-20 00:00:00"} for i in range(5)]
+    partial.append({"symbol": "ETF", "asset": "CASHUSD", "weightPercentage": 80,
+                    "updatedAt": "2026-04-20 00:00:00"})
+    attach_holdings_breadth(
+        rows, {"ETF": normalize_observation(partial, "ETF", "2026-04-20T00:00:00Z")},
+        member_frames, dates2, now="2026-04-24T00:00:00Z",
+    )
+    overlay = rows[0]["holdings_breadth"]
+    assert overlay["breadth_equal_weight_pct"] == pytest.approx(100)
+    assert overlay["measured_fund_weight_pct"] == pytest.approx(20)
+    assert overlay["measurement_complete"] is False
+    assert "PARTIAL_HOLDINGS_COVERAGE" in overlay["observation_gaps"]
+    text = format_holdings_breadth_text(overlay)
+    assert "已测基金权重20%" in text
+    assert "仅部分持仓观察" in text
+
+
+def test_historical_asof_does_not_attach_current_holdings(tmp_path):
+    import numpy as np
+    import exchange_calendars as xcals
+    cal = xcals.get_calendar("XNYS")
+    dates = cal.sessions_in_range("2025-01-02", "2026-09-08")
+    close = 100 * np.exp(.0001 * np.arange(len(dates)))
+    frame = pd.DataFrame({"adj_close": close, "close": close, "volume": 10000}, index=dates)
+    members = {f"S{i}": frame.copy() for i in range(5)}
+    obs = _etf_observation("2026-09-01T00:00:00Z")
+    save_observation(tmp_path / "holdings", obs)
+    theme = Theme("etf", "测试", "technology", "QQQ", proxy="ETF")
+    result = run_rotation(
+        asof="2026-09-04", store=RotationStore(tmp_path / "out"),
+        frames={"ETF": frame, "QQQ": frame, **members}, themes=[theme],
+        now="2026-09-09T01:00:00Z", dry_run=True, holdings_root=tmp_path / "holdings",
+        cache_root=tmp_path / "cache",
+    )
+    overlay = result["rows"][0]["holdings_breadth"]
+    assert overlay["status"] == "HOLDINGS_NOT_POINT_IN_TIME"
+    assert overlay["breadth_equal_weight_pct"] is None
+    assert "HOLDINGS_NOT_POINT_IN_TIME" in overlay["observation_gaps"]

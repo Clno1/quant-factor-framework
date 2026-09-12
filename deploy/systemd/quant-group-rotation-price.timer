@@ -1,0 +1,12 @@
+[Unit]
+Description=Build rotation prices 1.5 hours after the US cash close
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 17:30:00 America/New_York
+Persistent=true
+AccuracySec=2min
+RandomizedDelaySec=60s
+Unit=quant-group-rotation-price.service
+
+[Install]
+WantedBy=timers.target

@@ -117,7 +117,9 @@ class RunGroupAnalyticsCliTests(unittest.TestCase):
         content = service_file.read_text(encoding="utf-8")
 
         self.assertEqual(content.count("\nExecStart="), 1)
-        self.assertIn("scripts/run_group_rotation.py --refresh --asof latest", content)
+        start = next(line for line in content.splitlines() if line.startswith("ExecStart="))
+        self.assertIn("scripts/run_group_rotation.py --stage linkage --asof latest", start)
+        self.assertNotIn("--refresh", start)
         self.assertNotIn("run_premarket_digest.py", content)
         self.assertIn("EnvironmentFile=-/etc/quant/momentum-alerts.env", content)
         self.assertIn("Environment=GROUP_ANALYTICS_ENABLED=true", content)

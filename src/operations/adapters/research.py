@@ -330,6 +330,132 @@ def _collect_group_analytics(
     return result
 
 
+def _rotation_store():
+    from src.group_analytics.rotation.store import RotationStore
+    from src.group_analytics.settings import load_group_analytics_settings
+
+    settings = load_group_analytics_settings()
+    return RotationStore(settings.output_root / "group_analytics" / "rotation")
+
+
+def _collect_group_rotation(
+    job: JobDefinition,
+    *,
+    now: datetime,
+    observed_at: str,
+    linkage: bool = False,
+) -> CollectionResult:
+    result = CollectionResult()
+    expected = expected_target_session(job, now=now)
+    scheduled_for, deadline_at = schedule_bounds(
+        job,
+        now=now,
+        target_session=expected,
+    )
+    store = _rotation_store()
+    snapshot = None
+    try:
+        if store.initialized and (store.root / "latest.json").exists():
+            snapshot = store.load()
+    except (OSError, ValueError, KeyError, TypeError):
+        snapshot = None
+    attempt = store.last_attempt()
+    actual = str((snapshot or {}).get("source_session") or "") or None
+    generated_at = iso_utc((snapshot or {}).get("generated_at"))
+    run_id = str((snapshot or {}).get("run_id") or "") or None
+    linkage_status = ((snapshot or {}).get("candidate_linkage") or {}).get("status")
+    session_ok = bool(snapshot) and actual == expected
+    linked = session_ok and linkage_status == "available"
+    if linkage:
+        if linked:
+            status = JobStatus.SUCCESS
+        else:
+            timing = time_relative_status(
+                now=now,
+                scheduled_for=scheduled_for,
+                deadline_at=deadline_at,
+                has_older_evidence=bool(snapshot),
+            )
+            status = JobStatus.DEGRADED if session_ok else timing
+        stage_name = "LINKAGE"
+        snapshot_stage = "主题个股关联"
+        success_reason = "已关联目标交易日动量候选"
+        pending_reason = (
+            "价格快照已在但关联尚未成功" if session_ok else "轮动关联尚未到目标交易日"
+        )
+        source_name = "rotation/latest.json#candidate_linkage"
+    else:
+        if session_ok:
+            status = JobStatus.SUCCESS
+        else:
+            timing = time_relative_status(
+                now=now,
+                scheduled_for=scheduled_for,
+                deadline_at=deadline_at,
+                has_older_evidence=bool(snapshot),
+            )
+            status = timing
+        stage_name = "PRICE"
+        snapshot_stage = "主题价格快照"
+        success_reason = "已发布目标交易日轮动价格快照"
+        pending_reason = "轮动价格快照尚未到目标交易日"
+        source_name = "rotation/latest.json"
+    if attempt.get("status") == "FAILED" and (
+        not session_ok or str(attempt.get("source_session") or "") in {expected, ""}
+    ):
+        status = JobStatus.FAILED
+    source_id = run_id or str(attempt.get("source_session") or "missing")
+    aggregate_id = stable_id("run_", job.job_id, source_id)
+    if snapshot or attempt.get("status") != "UNKNOWN":
+        result.runs.append(OperationRun(
+            run_id=aggregate_id,
+            source_run_id=source_id,
+            job_id=job.job_id,
+            status=status,
+            source="rotation_store",
+            observed_at=observed_at,
+            target_session=actual,
+            stage=stage_name,
+            completed_at=generated_at,
+            output_versions={"rotation_run_id": run_id or ""},
+            metadata={
+                "candidate_linkage": linkage_status,
+                "valid_theme_count": (snapshot or {}).get("valid_theme_count"),
+            },
+        ))
+    result.snapshots.append(JobSnapshot(
+        job_id=job.job_id,
+        status=status,
+        observed_at=observed_at,
+        target_session=expected,
+        run_id=aggregate_id if snapshot or attempt.get("status") != "UNKNOWN" else None,
+        stage=snapshot_stage,
+        status_reason=(success_reason if (linked if linkage else session_ok) else pending_reason),
+        scheduled_for=scheduled_for,
+        deadline_at=deadline_at,
+        last_success_at=generated_at if (not linkage or linked) else None,
+        output_version=(run_id[:20] if run_id else None),
+        metrics={
+            "valid_themes": (snapshot or {}).get("valid_theme_count"),
+            "total_themes": (snapshot or {}).get("total_theme_count"),
+            "candidate_linkage": linkage_status,
+        },
+    ))
+    result.freshness.append(FreshnessObservation(
+        object_id=f"group_rotation:{job.job_id}",
+        display_name=job.display_name,
+        category="RESEARCH",
+        status=status,
+        observed_at=observed_at,
+        expected_session=expected,
+        actual_session=actual,
+        delay_sessions=session_delay(expected, actual),
+        version_id=run_id,
+        source=source_name,
+    ))
+    return result
+
+
 def collect_research_evidence(
     jobs: Iterable[JobDefinition],
     *,
@@ -342,6 +468,11 @@ def collect_research_evidence(
             result.extend(_collect_factor_research(job, now=now, observed_at=observed_at))
         elif job.adapter == "group_analytics":
             result.extend(_collect_group_analytics(job, now=now, observed_at=observed_at))
+        elif job.adapter == "group_rotation":
+            result.extend(_collect_group_rotation(
+                job, now=now, observed_at=observed_at,
+                linkage=job.job_id != "group_rotation_price",
+            ))
     return result
 
 

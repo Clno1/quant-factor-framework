@@ -12,7 +12,10 @@ def fixture_data(n=160):
     frames = {}
     for symbol, rate in (("SMH", .002), ("QQQ", .001)):
         close = 100 * (1+rate)**np.arange(n)
-        frames[symbol] = pd.DataFrame({"adj_close":close,"open":close*.99,"volume":1000.},index=dates)
+        frames[symbol] = pd.DataFrame(
+            {"adj_close": close, "close": close, "open": close * .99, "volume": 1000.},
+            index=dates,
+        )
     theme = Theme("semiconductors", "半导体", "technology", "QQQ", proxy="SMH")
     return dates,frames,(theme,)
 
@@ -72,3 +75,19 @@ def test_historical_current_holdings_forbidden():
     t=Theme("semiconductors","半导体","technology","QQQ",proxy="SMH",members=("NVDA",))
     with pytest.raises(ValueError,match="current-member"):
         make_panel(frames,dates,(t,))
+
+
+def test_make_panel_uses_close_not_adj_for_amount():
+    dates, frames, themes = fixture_data()
+    frames["SMH"] = frames["SMH"].copy()
+    frames["QQQ"] = frames["QQQ"].copy()
+    frames["SMH"]["adj_close"] *= 2
+    frames["QQQ"]["adj_close"] *= 2
+    with_close, _, _ = make_panel(frames, dates, themes)
+    no_close_frames = {
+        symbol: frame.drop(columns=["close"]) for symbol, frame in frames.items()
+    }
+    without_close, _, _ = make_panel(no_close_frames, dates, themes)
+    row_close = with_close[(with_close.date == dates[70]) & (with_close.horizon == 5)].iloc[0]
+    row_none = without_close[(without_close.date == dates[70]) & (without_close.horizon == 5)].iloc[0]
+    assert row_close.source_score != row_none.source_score

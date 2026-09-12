@@ -1080,7 +1080,7 @@ def _rotation_snapshot(run: str | None):
         snapshot.pop("input_panel", None)  # Audit input remains local, not a bulk data API.
         snapshot["last_attempt"] = store.last_attempt() if run is None else None
     except FileNotFoundError:
-        raise HTTPException(status_code=503, detail="尚无轮动快照，请运行 scripts/run_group_rotation.py --refresh") from None
+        raise HTTPException(status_code=503, detail="尚无轮动快照，请运行 scripts/run_group_rotation.py --stage price --refresh") from None
     except (ValueError, KeyError, OSError, TypeError):
         raise HTTPException(status_code=503, detail="轮动快照未通过校验，未使用旧单日榜替代") from None
     try:
