@@ -223,7 +223,10 @@ def test_digest_gate_stale_and_payload_budget(tmp_path):
     ctx = SimpleNamespace(target_session="2026-09-09")
     payload = rotation_payload(report,ctx,PremarketDigestSettings(dashboard_base_url="https://example.com"))
     assert "不含实时盘前" in payload["embeds"][0]["description"]
+    assert "固定快照" in payload["embeds"][0]["description"]
     assert payload["embeds"][0]["url"].startswith("https://example.com/group-analytics?run=")
+    assert any(field["name"] == "页面入口" and "https://example.com/group-analytics" in field["value"]
+               and "?run=" not in field["value"] for field in payload["embeds"][0]["fields"])
     assert payload["allowed_mentions"] == {"parse":[]}
     with pytest.raises(SourceGateError):
         load_rotation_report("2000-01-01",store=store)
@@ -266,6 +269,8 @@ def test_new_main_and_legacy_route_and_read_only_api(tmp_path):
     with patch.object(routes,"settings",replace(routes.settings,output_root=tmp_path)):
         client=TestClient(app)
         assert "rotation-main" in client.get("/group-analytics").text
+        assert "rotation-asof" in client.get("/group-analytics").text
+        assert "固定历史快照" in client.get("/group-analytics").text
         assert "ga-heatmap" in client.get("/group-analytics/daily").text
         response=client.get("/api/group-analytics/rotation").json()
         assert response["run_id"] == run
@@ -336,3 +341,125 @@ def test_rotation_digest_never_falls_back_after_v2_initialized(tmp_path):
     with patch.object(source,"_load_level",side_effect=AssertionError("must not silently use old daily rank")):
         with pytest.raises(SourceGateError):
             source.load("2026-09-08")
+
+
+def _price_cli_patches(tmp_path):
+    import exchange_calendars as xcals
+    dates = xcals.get_calendar("XNYS").sessions_in_range("2025-10-01", "2026-09-08")
+    frame = pd.DataFrame({"adj_close": 100 * np.exp(.0001 * np.arange(len(dates))), "volume": 10000}, index=dates)
+    theme = Theme("etf", "测试", "technology", "QQQ", proxy="ETF")
+    return [
+        patch("src.group_analytics.rotation.service.default_themes", return_value=[theme]),
+        patch("src.group_analytics.rotation.service.load_frames", return_value={"ETF": frame, "QQQ": frame}),
+        patch("scripts.run_group_rotation.run_rotation",
+              side_effect=lambda **kw: run_rotation(now="2026-09-09T01:00:00Z", **kw)),
+    ], tmp_path
+
+
+def test_price_stage_never_loads_momentum(tmp_path):
+    from scripts.run_group_rotation import main
+    patches, root = _price_cli_patches(tmp_path)
+    with patches[0], patches[1], patches[2], \
+         patch("scripts.run_group_rotation.load_momentum_report") as load_report:
+        assert main(["--stage", "price", "--asof", "2026-09-08", "--output-root", str(root)]) == 0
+    load_report.assert_not_called()
+    stored = RotationStore(root).load()
+    assert stored["candidate_linkage"]["status"] == "unavailable"
+    assert stored["candidate_linkage"]["reason"] == "个股关联待后续阶段"
+
+
+def test_price_stage_duplicate_fingerprint_is_noop(tmp_path, capsys):
+    from scripts.run_group_rotation import main
+    patches, root = _price_cli_patches(tmp_path)
+    nows = iter(["2026-09-09T01:00:00Z", "2026-09-09T03:00:00Z"])
+    with patches[0], patches[1], \
+         patch("scripts.run_group_rotation.run_rotation",
+               side_effect=lambda **kw: run_rotation(now=next(nows), **kw)), \
+         patch("scripts.run_group_rotation.load_momentum_report") as load_report:
+        assert main(["--stage", "price", "--asof", "2026-09-08", "--output-root", str(root)]) == 0
+        first = json.loads(capsys.readouterr().out)
+        assert first["status"] == "SUCCESS"
+        assert main(["--stage", "price", "--asof", "2026-09-08", "--output-root", str(root)]) == 0
+        second = json.loads(capsys.readouterr().out)
+    load_report.assert_not_called()
+    assert second["status"] == "NOOP"
+    assert second["run_id"] == first["run_id"]
+    assert len(list((root / "runs").glob("*.json"))) == 1
+
+
+def test_linkage_unavailable_does_not_overwrite_or_mark_failure(tmp_path, capsys):
+    from scripts.run_group_rotation import main
+    patches, root = _price_cli_patches(tmp_path)
+    with patches[0], patches[1], patches[2], \
+         patch("scripts.run_group_rotation.load_momentum_report", side_effect=ValueError("private-path-secret")):
+        assert main(["--stage", "price", "--asof", "2026-09-08", "--output-root", str(root)]) == 0
+        capsys.readouterr()
+        first = RotationStore(root).load()["run_id"]
+        assert main(["--stage", "linkage", "--asof", "2026-09-08", "--output-root", str(root)]) == 0
+        payload = json.loads(capsys.readouterr().out)
+    store = RotationStore(root)
+    assert payload["status"] == "LINKAGE_UNAVAILABLE"
+    assert store.load()["run_id"] == first
+    assert store.last_attempt()["status"] == "SUCCESS"
+    assert "private-path-secret" not in str(store.load())
+
+
+def test_linkage_success_advances_latest_and_keeps_old_run(tmp_path):
+    from scripts.run_group_rotation import main
+    patches, root = _price_cli_patches(tmp_path)
+    report = {"source_session": "2026-09-08", "input_fingerprint": "fp-1", "universe": "SP500", "rows": []}
+    with patches[0], patches[1], patches[2], \
+         patch("scripts.run_group_rotation.load_momentum_report", return_value=report):
+        assert main(["--stage", "price", "--asof", "2026-09-08", "--output-root", str(root)]) == 0
+        old = RotationStore(root).load()
+        assert main(["--stage", "linkage", "--asof", "2026-09-08", "--output-root", str(root)]) == 0
+        assert main(["--stage", "linkage", "--asof", "2026-09-08", "--output-root", str(root)]) == 0
+    store = RotationStore(root)
+    latest = store.load()
+    assert latest["run_id"] != old["run_id"]
+    assert latest["candidate_linkage"]["status"] == "available"
+    assert latest["generated_at"] == old["generated_at"]
+    replayed = store.load(old["run_id"])
+    assert replayed["candidate_linkage"]["status"] == "unavailable"
+    assert len(list((root / "runs").glob("*.json"))) == 2
+
+
+def test_linkage_rejects_refresh_and_without_candidates(tmp_path):
+    from scripts.run_group_rotation import main
+    assert main(["--stage", "linkage", "--refresh", "--asof", "2026-09-08", "--output-root", str(tmp_path)]) == 2
+    assert main(["--stage", "linkage", "--without-candidates", "--asof", "2026-09-08",
+                 "--output-root", str(tmp_path)]) == 2
+    assert not RotationStore(tmp_path).initialized
+
+
+def test_rotation_page_freshness_contract():
+    html = Path("src/webapp/templates/group_rotation.html").read_text(encoding="utf-8")
+    js = Path("src/webapp/static/js/group_rotation.js").read_text(encoding="utf-8")
+    assert "rotation-asof" in html and "rotation-generated" in html and "rotation-next" in html
+    assert "固定历史快照" in html
+    assert "visibilitychange" in js
+    assert "5 * 60 * 1000" in js
+    assert "America/New_York" in js
+
+
+def test_group_rotation_price_adapter_reads_store(tmp_path):
+    from datetime import datetime, timezone
+    from src.operations.adapters.research import collect_research_evidence
+    from src.operations.models import JobDefinition, JobStatus
+    store = RotationStore(tmp_path / "group_analytics" / "rotation")
+    published = attach_candidates(snapshot())
+    published["source_session"] = "2026-09-08"
+    store.publish(published)
+    job = JobDefinition(
+        job_id="group_rotation_price", display_name="板块轮动价格层", category="RESEARCH",
+        run_type="SCHEDULED_BATCH", adapter="group_rotation", order=35, enabled_expected=True,
+        schedule={"timezone": "America/New_York", "time": "17:30", "deadline_minutes": 75,
+                  "target_policy": "latest_publishable_xnys"},
+    )
+    now = datetime(2026, 9, 8, 22, 0, tzinfo=timezone.utc)
+    with patch("src.operations.adapters.research._rotation_store", return_value=store), \
+         patch("src.operations.adapters.research.expected_target_session", return_value="2026-09-08"):
+        result = collect_research_evidence([job], now=now, observed_at=now.isoformat())
+    assert result.snapshots[0].status == JobStatus.SUCCESS
+    assert result.snapshots[0].job_id == "group_rotation_price"
+

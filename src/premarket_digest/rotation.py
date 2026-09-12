@@ -144,11 +144,20 @@ def rotation_payload(report, context, settings):
                    ("；".join(risk_lines) or "无额外风险标签") +
                    "。若20日相对优势消失或原突破形态失效，重新评估；延伸偏大时不把强势当作追涨理由。", "inline": False})
     base = settings.dashboard_base_url.rstrip("/")
-    url = base + "/group-analytics?run=" + report["run_id"] if base.startswith(("https://", "http://")) else None
+    latest = base + "/group-analytics" if base.startswith(("https://", "http://")) else None
+    url = (latest + "?run=" + report["run_id"]) if latest else None
     embed = {"title": f"板块轮动 · {context.target_session} 开盘前",
-             "description": f"截至 {report['source_session']} 完整收盘 · 不含实时盘前行情\n{report['context']['label']} · 有效主题 {report['valid_theme_count']}/{report['total_theme_count']}",
+             "description": (
+                 f"截至 {report['source_session']} 完整收盘 · 不含实时盘前行情\n"
+                 f"本消息数据截至 {report['source_session']} 收盘，链接为该时刻固定快照\n"
+                 f"{report['context']['label']} · 有效主题 {report['valid_theme_count']}/{report['total_theme_count']}"
+             ),
              "color": 0x386FC8, "fields": fields,
              "footer": {"text": "主题强度不是个股买点 · 研究观察，非买卖指令"}}
+    if latest:
+        fields.append({"name": "页面入口",
+                       "value": f"固定快照见标题链接\n查看最新：{latest}",
+                       "inline": False})
     if url:
         embed["url"] = url
     from .models import DigestChannel

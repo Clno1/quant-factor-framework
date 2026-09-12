@@ -114,6 +114,14 @@ class SystemdUnitTests(unittest.TestCase):
             SYSTEMD_DIR / "quant-premarket-prepare.timer"
         ).read_text(encoding="utf-8")
         self.assertIn("07:00:00 America/New_York", premarket_prepare_timer)
+        group_price_timer = (
+            SYSTEMD_DIR / "quant-group-rotation-price.timer"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "OnCalendar=Mon..Fri *-*-* 17:30:00 America/New_York",
+            group_price_timer,
+        )
+        self.assertIn("Unit=quant-group-rotation-price.service", group_price_timer)
 
     def test_broad_units_form_a_resource_bounded_success_chain(self):
         coverage = (
@@ -216,6 +224,44 @@ class SystemdUnitTests(unittest.TestCase):
             "Before=quant-group-analytics-eod.service",
             broad_factor,
         )
+
+    def test_rotation_price_and_linkage_units_are_split(self):
+        price = (
+            SYSTEMD_DIR / "quant-group-rotation-price.service"
+        ).read_text(encoding="utf-8")
+        price_root = (
+            SYSTEMD_DIR / "quant-group-rotation-price-root.service"
+        ).read_text(encoding="utf-8")
+        linkage = (
+            SYSTEMD_DIR / "quant-group-analytics-eod.service"
+        ).read_text(encoding="utf-8")
+        prepare = (
+            SYSTEMD_DIR / "quant-premarket-prepare.service"
+        ).read_text(encoding="utf-8")
+        prepare_root = (
+            SYSTEMD_DIR / "quant-premarket-prepare-root.service"
+        ).read_text(encoding="utf-8")
+
+        for content in (price, price_root):
+            self.assertIn("--stage price --refresh --asof latest", content)
+            self.assertIn("MemoryHigh=400M", content)
+            self.assertIn("MemoryMax=550M", content)
+            self.assertIn(".broad-production.lock", content)
+            self.assertNotIn("quant-broad-factor-data.service", content)
+        self.assertIn("--stage linkage --asof latest", linkage)
+        self.assertNotIn("--refresh", next(
+            line for line in linkage.splitlines() if line.startswith("ExecStart=")
+        ))
+        self.assertIn(
+            "ExecStartPre=-/usr/bin/flock --exclusive --wait 60",
+            prepare,
+        )
+        self.assertIn("--stage linkage --asof latest", prepare)
+        self.assertIn(
+            "ExecStartPre=-/usr/bin/flock --exclusive --wait 60",
+            prepare_root,
+        )
+        self.assertIn("--stage linkage --asof latest", prepare_root)
 
     def test_operations_site_is_independent_and_read_only(self):
         web = (
