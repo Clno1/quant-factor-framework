@@ -99,7 +99,7 @@ def summarize(panel, prices, opens, sessions, themes):
                     day = subset[subset.date==date].dropna(subset=list(FEATURES))
                     if len(day)!=expected:
                         continue  # Same complete ETF sample for every method.
-                    pool = day[day.action.isin(["priority","price_watch","watch"])] if method=="price_state" else day
+                    pool = day[day.action.isin(["priority","price_watch","watch","focus","recover"])] if method=="price_state" else day
                     picks = pool.sort_values(["rs20" if method=="price_state" else method,"theme"],ascending=[False,True]).head(2)
                     weights = {x:.5 for x in picks.theme}  # Missing slots stay cash.
                     turnover = sum(abs(weights.get(x,0)-previous.get(x,0)) for x in set(weights)|set(previous))

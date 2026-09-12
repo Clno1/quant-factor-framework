@@ -9,7 +9,7 @@ import re
 from ..adapters import _atomic_json, _exclusive_file_lock
 from ..artifacts import normalize_json_value
 from ..settings import load_group_analytics_settings
-from . import SCHEMA_VERSION
+from . import READABLE_SCHEMA_VERSIONS, SCHEMA_VERSION
 
 SAFE_RUN = re.compile(r"^rot_[0-9]{8}_[a-f0-9]{16}$")
 
@@ -33,6 +33,8 @@ class RotationStore:
 
     def publish(self, snapshot):
         snapshot = normalize_json_value(snapshot)
+        snapshot.pop("run_id", None)
+        snapshot.pop("schema_legacy", None)
         if snapshot.get("schema_version") != SCHEMA_VERSION or not snapshot.get("rows"):
             raise ValueError("Invalid rotation snapshot")
         data = encoded(snapshot)
@@ -86,6 +88,7 @@ class RotationStore:
             raise ValueError("Rotation integrity check failed")
         if pointer and (pointer.get("sha256") != digest or pointer.get("source_session") != snapshot.get("source_session")):
             raise ValueError("Rotation pointer mismatch")
-        if snapshot.get("schema_version") != SCHEMA_VERSION or not isinstance(snapshot.get("rows"), list):
+        schema = snapshot.get("schema_version")
+        if schema not in READABLE_SCHEMA_VERSIONS or not isinstance(snapshot.get("rows"), list):
             raise ValueError("Unsupported rotation schema")
-        return {**snapshot, "run_id": run_id}
+        return {**snapshot, "run_id": run_id, "schema_legacy": schema != SCHEMA_VERSION}

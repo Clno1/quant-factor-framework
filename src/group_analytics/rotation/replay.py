@@ -6,6 +6,7 @@ import math
 import pandas as pd
 
 from ..artifacts import normalize_json_value
+from . import SCHEMA_VERSION
 from .engine import analyze
 from .store import encoded
 from .themes import Theme
@@ -18,9 +19,18 @@ def replay_snapshot(snapshot):
     sessions = pd.DatetimeIndex(panel["sessions"])
     prices = pd.DataFrame(panel["prices"], columns=panel["price_columns"], index=sessions)
     volumes = pd.DataFrame(panel["volumes"], columns=panel["volume_columns"], index=sessions)
+    execution = None
+    if "execution_close" in panel:
+        columns = panel.get("execution_close_columns") or panel["price_columns"]
+        execution = pd.DataFrame(panel["execution_close"], columns=columns, index=sessions)
     themes = [Theme(**{**r["definition"], "members": tuple(r["definition"]["members"])}) for r in snapshot["rows"]]
-    computed = normalize_json_value(analyze(prices, volumes, sessions, themes,
-                                           amount_verified=snapshot["amount_verified"]))
+    schema = snapshot.get("schema_version") or SCHEMA_VERSION
+    computed = normalize_json_value(analyze(
+        prices, volumes, sessions, themes,
+        amount_verified=snapshot["amount_verified"],
+        execution_close=execution,
+        schema_version=schema,
+    ))
     differences = []
     for expected, actual in zip(snapshot["rows"], computed):
         for profile in ("production", "compatibility"):
@@ -35,4 +45,5 @@ def replay_snapshot(snapshot):
     return {"status": "MATCH" if not differences else "DIFFERENT",
             "source_session": snapshot["source_session"], "run_id": snapshot.get("run_id"),
             "themes": len(themes), "differences": differences,
+            "schema_version": schema,
             "scope": "本项目冻结输入重放；不代表TradingView数值对账或预测性验证"}
