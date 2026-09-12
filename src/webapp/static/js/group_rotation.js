@@ -5,29 +5,95 @@
   const el = id => document.getElementById(id);
   const node = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
   const pct = v => typeof v === "number" && Number.isFinite(v) ? `${v >= 0 ? "+" : ""}${v.toFixed(2)}%` : "—";
-  const actions = {priority:"优先核对",price_watch:"价格领先／待广度",watch:"转强观察",extended:"延伸偏大",caution:"降温或落后",wait:"等待确认",unavailable:"数据不足"};
+  const actions = {
+    unavailable:"数据不足", focus:"持续领先", defensive:"相对抗跌", recover:"正在修复",
+    weak:"持续落后", neutral:"与基准同步",
+    priority:"优先核对", price_watch:"价格领先／待广度", watch:"转强观察",
+    extended:"延伸偏大", caution:"降温或落后", wait:"等待确认"
+  };
+  const riskZh = {EXTENDED:"延伸偏大", BELOW_ABSOLUTE_MA20:"低于绝对20日均线", ABSOLUTE_DOWNTREND:"绝对下跌"};
+  const gapZh = {
+    ETF_HOLDINGS_NOT_LINKED:"真实广度未接入", SMALL_BASKET:"小样本篮子",
+    LOW_PARTICIPATION:"参与度低", STATE_CONFIRMING:"新状态确认中",
+    NO_QUALIFIED_CANDIDATE:"扫描正常，暂无合格形态", LINKAGE_FAILED:"个股关联失败",
+    INSUFFICIENT_HISTORY:"历史不足"
+  };
+  const v3Head = ["主题","强弱","速度","5日相对","20日相对","60日相对","趋势","成交活跃","真实广度","风险","研究优先级"];
+  const v2Head = ["主题 / 状态","5日相对","20日相对","60日相对","真实广度","研究优先级"];
   let data, selection, detailSequence = 0;
   const query = new URLSearchParams(location.search);
   async function get(url) { const r = await fetch(url, {credentials:"same-origin"}); const j = await r.json(); if (!r.ok) throw new Error(j.detail || "快照读取失败"); return j; }
   function card(title, value, note) { const c = node("article", undefined, "rotation-card"); c.append(node("h2", title), node("strong", value), node("p", note)); return c; }
+  function isLegacy() { return Boolean(data && data.schema_legacy); }
+  function actionName(action) { return actions[action] || action || "—"; }
+  function fillHead() {
+    const row = document.querySelector(".rotation-table thead tr");
+    if (!row) return;
+    row.replaceChildren(...(isLegacy() ? v2Head : v3Head).map(title => node("th", title)));
+  }
+  function riskText(p) {
+    const flags = Array.isArray(p.risk_flags) ? p.risk_flags : [];
+    return flags.length ? flags.map(f => riskZh[f] || f).join(" · ") : "—";
+  }
+  function amountText(p) {
+    if (p.amount_label) {
+      const multiple = typeof p.amount_ratio === "number" && Number.isFinite(p.amount_ratio) ? ` ${p.amount_ratio.toFixed(2)}×` : "";
+      return p.amount_label + multiple;
+    }
+    return "—";
+  }
+  function breadthText(r, p) {
+    if (p.breadth === null || p.breadth === undefined) return r.members.length ? "无有效样本" : "未接入";
+    return `${p.breadth.toFixed(0)}% · 样本${p.breadth_n}/${p.breadth_expected}${p.breadth_n < 5 ? "（小样本）" : ""}`;
+  }
+  function appendTd(tr, text, label, cls) {
+    const td = node("td", text, cls); td.dataset.label = label; tr.append(td); return td;
+  }
+  function subtitle(r, p) {
+    if (isLegacy()) {
+      return `${r.proxy || "等权篮子"} · 已确认：${p.state_name}${p.boundary ? " · 边界附近" : ""}${p.confirmation_count ? ` · 新状态待确认 ${p.confirmation_count}/${p.confirmation_required}` : ""}`;
+    }
+    const combined = p.combined_label || p.state_name || "";
+    const count = p.strength_confirmation_count || p.confirmation_count;
+    const required = p.confirmation_required || 2;
+    const badge = count ? ` · 新强弱待确认 ${count}/${required}` : "";
+    return `${r.proxy || "等权篮子"} · ${combined}${badge}`;
+  }
   function render() {
     const cohort = el("rotation-cohort").value, sort = el("rotation-sort").value;
     const rows = data.rows.filter(r => r.cohort === cohort).sort((a,b) => (b.production[sort] ?? -Infinity) - (a.production[sort] ?? -Infinity) || a.id.localeCompare(b.id));
-    const candidates = rows.filter(r => ["priority","price_watch"].includes(r.production.action));
-    const improving = rows.filter(r => r.production.action === "watch");
+    const focus = rows.filter(r => ["focus","priority","price_watch"].includes(r.production.action));
+    const recover = rows.filter(r => ["recover","watch"].includes(r.production.action));
     el("rotation-cards").replaceChildren(
-      card("持续领先 · 先核对", candidates.slice(0,2).map(r=>r.name).join("、") || "暂无合格方向", "须区分价格领先与成员广度确认；不是买点"),
-      card("转强观察", improving.slice(0,2).map(r=>r.name).join("、") || "等待新的改善", "短期修复仍需月度强弱及个股形态确认"),
+      card("持续领先", focus.slice(0,2).map(r=>r.name).join("、") || "暂无合格方向", "价格持续跑赢基准且绝对趋势向上；不是买点"),
+      card("正在修复", recover.slice(0,2).map(r=>r.name).join("、") || "等待新的改善", "落后但近端加速，仍需月度强弱及个股形态确认"),
       card("背景与分歧", data.context.label, "独立实验层，不改变主题分数或核心仓位")
     );
+    fillHead();
     const tbody = el("rotation-rows"); tbody.replaceChildren();
     for (const r of rows) {
       const p = r.production, tr = node("tr"); if (selection === r.id) tr.className = "selected";
       const first = node("td"), button = node("button", r.name); button.type = "button"; button.setAttribute("aria-pressed", selection === r.id ? "true" : "false"); button.addEventListener("click", () => select(r.id));
-      first.append(button, node("span", `${r.proxy || "等权篮子"} · 已确认：${p.state_name}${p.boundary ? " · 边界附近" : ""}${p.confirmation_count ? ` · 新状态待确认 ${p.confirmation_count}/${p.confirmation_required}` : ""}`, "rotation-sub")); tr.append(first);
-      for (const [key,label] of [["rs5","5日相对"],["rs20","20日相对"],["rs60","60日相对"]]) { const td=node("td", pct(p[key]), p[key]>0?"rotation-positive":p[key]<0?"rotation-negative":"");td.dataset.label=label;tr.append(td); }
-      const breadth=node("td", p.breadth === null ? (r.members.length?"无有效样本":"未接入") : `${p.breadth.toFixed(0)}% · 样本${p.breadth_n}/${p.breadth_expected}${p.breadth_n < 5 ? "（小样本）" : ""}`);breadth.dataset.label="站20日线广度";tr.append(breadth);
-      const action=node("td",actions[p.action]);action.dataset.label="研究优先级";tr.append(action);tbody.append(tr);
+      first.append(button, node("span", subtitle(r, p), "rotation-sub")); first.dataset.label = "主题"; tr.append(first);
+      if (isLegacy()) {
+        for (const [key,label] of [["rs5","5日相对"],["rs20","20日相对"],["rs60","60日相对"]]) {
+          appendTd(tr, pct(p[key]), label, p[key]>0?"rotation-positive":p[key]<0?"rotation-negative":"");
+        }
+        appendTd(tr, breadthText(r, p), "站20日线广度");
+        appendTd(tr, actionName(p.action), "研究优先级");
+      } else {
+        appendTd(tr, p.strength_label || "—", "强弱");
+        appendTd(tr, p.speed_label || "—", "速度");
+        for (const [key,label] of [["rs5","5日相对"],["rs20","20日相对"],["rs60","60日相对"]]) {
+          appendTd(tr, pct(p[key]), label, p[key]>0?"rotation-positive":p[key]<0?"rotation-negative":"");
+        }
+        appendTd(tr, r.compatibility?.source_trend || "—", "趋势");
+        appendTd(tr, amountText(p), "成交活跃");
+        appendTd(tr, breadthText(r, p), "真实广度");
+        appendTd(tr, riskText(p), "风险", riskText(p) !== "—" ? "rotation-risk" : "");
+        appendTd(tr, actionName(p.action), "研究优先级");
+      }
+      tbody.append(tr);
     }
     if (!rows.some(r=>r.id===selection)) { selection=undefined; el("rotation-detail").replaceChildren(node("p","点击主题，查看历史、个股候选与原版对账。")); detailSequence++; }
   }
@@ -45,10 +111,22 @@
     selection=id;render();const seq=++detailSequence, box=el("rotation-detail");box.replaceChildren(node("p","正在读取固定快照详情…"));
     try {
       const detail=await get(`/api/group-analytics/rotation/${encodeURIComponent(id)}?run=${encodeURIComponent(data.run_id)}`);if(seq!==detailSequence)return;
-      const r=detail.theme,p=r.production,c=r.compatibility;box.replaceChildren(node("h2",r.name),node("p",`${p.state_name} · ${actions[p.action]} · 本次回放窗口内确认起点：${p.state_since || "尚未确认"}`));
-      if(p.confirmation_count)box.append(node("p",`新候选确认 ${p.confirmation_count}/${p.confirmation_required}；尚未替换已确认状态。`));
+      const r=detail.theme,p=r.production,c=r.compatibility;
+      const heading = p.combined_label || p.state_name;
+      box.replaceChildren(node("h2",r.name),node("p",`${heading} · ${actionName(p.action)} · 本次回放窗口内确认起点：${p.state_since || "尚未确认"}`));
+      const count = p.strength_confirmation_count || p.confirmation_count;
+      if(count)box.append(node("p",`新强弱候选确认 ${count}/${p.confirmation_required || 2}；尚未替换已确认月度强弱。速度按当日直出。`));
       const back=node("button","↑ 返回主题列表");back.type="button";back.addEventListener("click",()=>el("rotation-cohort").scrollIntoView({block:"start"}));box.append(back);
       box.append(node("p",`绝对5日 ${pct(p.abs5)}，绝对20日 ${pct(p.abs20)}。${r.price_response || "背景不足，独立观察价格"}`));
+      if (p.amount_label) box.append(node("p", `成交活跃：${amountText(p)}`));
+      const flags = Array.isArray(p.risk_flags) ? p.risk_flags : [];
+      if (flags.length) box.append(node("p", "风险标记：" + flags.map(f => riskZh[f] || f).join("、")));
+      const gaps = r.evidence_gaps || p.evidence_gaps || [];
+      if (gaps.length) {
+        const list = node("ul");
+        for (const gap of gaps) list.append(node("li", gapZh[gap] || gap));
+        box.append(node("h3","数据完备度"), list);
+      }
       if(data.context.accepted?.length){
         const bg=node("details");bg.append(node("summary","背景证据清单（实验，不是胜率）"));
         bg.append(node("p",`目标基准 ${data.context.target_benchmark || "不明确"} · 支持过线家族 ${data.context.support ?? "—"} · 压制过线家族 ${data.context.pressure ?? "—"}；独立于主题评分。`));
@@ -63,7 +141,7 @@
       for(const stock of r.candidates || []){const item=node("div",undefined,"rotation-candidate"),a=node("a",stock.ticker);a.href=stock.href;item.append(a,node("span",`${stock.status_name} · 原分数 ${stock.score ?? "—"} · 既有参考位 ${stock.pivot.toFixed(2)}`),node("p",stock.confirmation));box.append(item);}
       if(r.members.length){box.append(node("h3","篮子成员"),node("p",r.members.map(m=>`${m.ticker} ${m.above_ma20===null?"数据不足":m.above_ma20?"站上20日线":"未站上20日线"}`).join(" · ")));}
       const warning=node("ul");for(const w of r.warnings)warning.append(node("li",w));box.append(warning);
-      const compare=node("details"),summary=node("summary","公开基础版规则对账（不是生产交易分数）");compare.append(summary);
+      const compare=node("details"),summary=node("summary","公开基础版规则对账（参考版规则对照，非本项目结论）");compare.append(summary);
       compare.append(node("p",`${r.compatibility_scope==="public_v1"?"公开v1规则":"本项目行业ETF扩展，非作者原11主题"} · 原版分数 ${c.score ?? "—"} · 原版标签 ${c.source_state}`));
       const parts=node("div",undefined,"rotation-components");for(const [key,label] of [["trend_points","趋势"],["acceleration_points","改善"],["volume_points","量能"],["breadth_points","广度/代理"],["extension_points","未延伸"]])parts.append(node("span",`${label} ${c[key]}`));compare.append(parts);
       compare.append(node("p",`原版金额倍数 ${c.amount_ratio?.toFixed(2) ?? "—"}；广度读数 ${c.breadth?.toFixed(0) ?? "—"}${r.proxy?"（ETF趋势70/30代理，非成员百分比）":"（篮子成员比例）"}。`));
@@ -127,6 +205,9 @@
     }
     if (data.last_attempt?.status === "FAILED") {
       el("rotation-asof").textContent += " · 最近构建失败，仍展示上次成功快照";
+    }
+    if (data.schema_legacy) {
+      el("rotation-asof").textContent += " · 当前为 v2.1 快照，主表已降级展示";
     }
   }
   function showFrozen() {

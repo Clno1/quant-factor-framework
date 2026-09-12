@@ -204,7 +204,8 @@ def main(argv=None):
     parser.add_argument("--themes-file", type=Path, help="Optional versioned Theme records (JSON array)")
     parser.add_argument("--context-file", type=Path, help="Optional authorized as-of evidence records (JSON array)")
     parser.add_argument("--decision-cutoff", help="Timezone-aware evidence cutoff; default source-session close")
-    parser.add_argument("--amount-verified", action="store_true", help="Only after provider price/volume adjustment audit")
+    parser.add_argument("--amount-verified", action=argparse.BooleanOptionalAction, default=True,
+                        help="Unlock production amount after the canonical close×volume audit; --no-amount-verified disables it")
     parser.add_argument("--without-candidates", action="store_true")
     args = parser.parse_args(argv)
     if args.stage == "linkage" and args.refresh:

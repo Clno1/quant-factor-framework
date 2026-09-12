@@ -27,9 +27,21 @@ SECTORS = {
     "sector_utilities": "Utilities", "sector_realestate": "Real Estate",
     "sector_communications": "Communication Services",
 }
-ACTION_ZH = {"priority": "优先核对", "price_watch": "价格领先／待广度确认",
-             "watch": "转强观察", "extended": "延伸偏大／不追涨",
-             "caution": "降温或落后", "wait": "等待确认", "unavailable": "数据不足"}
+ACTION_ZH = {
+    "unavailable": "数据不足",
+    "focus": "持续领先", "defensive": "相对抗跌", "recover": "正在修复",
+    "weak": "持续落后", "neutral": "与基准同步",
+    "priority": "优先核对", "price_watch": "价格领先／待广度确认",
+    "watch": "转强观察", "extended": "延伸偏大／不追涨",
+    "caution": "降温或落后", "wait": "等待确认",
+}
+ELIGIBLE_ACTIONS = {"focus", "recover", "priority", "price_watch", "watch"}
+LINKAGE_PENDING_REASONS = {"个股关联待后续阶段", "个股关联未启用"}
+RISK_FLAG_ZH = {
+    "EXTENDED": "延伸偏大",
+    "BELOW_ABSOLUTE_MA20": "低于绝对20日均线",
+    "ABSOLUTE_DOWNTREND": "绝对下跌",
+}
 
 
 def _number(value):
@@ -81,9 +93,20 @@ def attach_candidates(snapshot, report=None, *, unavailable_reason=None):
                                 for r in matched[:3]]
         theme["candidate_basis"] = ("FMP同板块股票，非ETF持仓名单" if sector else
                                      "已登记篮子成员" if members else "未登记ETF成分映射")
-        theme["action_name"] = ACTION_ZH[theme["production"]["action"]]
+        theme["action_name"] = ACTION_ZH.get(theme["production"]["action"], theme["production"]["action"])
         theme["confirmation"] = "观察20日相对优势能否保持，并核验成员广度与既有个股突破位"
         theme["invalidation"] = "20日相对转弱或既有突破形态失效时重新评估；不是自动止损指令"
+        gaps = list(theme.get("evidence_gaps") or theme["production"].get("evidence_gaps") or [])
+        if valid_report:
+            if not theme["candidates"] and "NO_QUALIFIED_CANDIDATE" not in gaps:
+                gaps.append("NO_QUALIFIED_CANDIDATE")
+        elif (unavailable_reason or "没有同日突破扫描产物") not in LINKAGE_PENDING_REASONS:
+            if "LINKAGE_FAILED" not in gaps:
+                gaps.append("LINKAGE_FAILED")
+        theme["evidence_gaps"] = gaps
+        production = dict(theme["production"])
+        production["evidence_gaps"] = gaps
+        theme["production"] = production
     return result
 
 
@@ -109,19 +132,28 @@ def _pct(value):
     return "—" if n is None else f"{n:+.2f}%"
 
 
+def _action_name(action):
+    return ACTION_ZH.get(action, action)
+
+
+def _risk_flags(production):
+    return [flag for flag in (production.get("risk_flags") or []) if flag]
+
+
 def rotation_payload(report, context, settings):
     fields = []
     for cohort, name in (("technology", "科技与AI"), ("sectors", "全市场板块")):
-        eligible = [r for r in report["rows"] if r["cohort"] == cohort and r["production"]["action"] in {"priority", "price_watch", "watch"}]
+        eligible = [r for r in report["rows"] if r["cohort"] == cohort and r["production"]["action"] in ELIGIBLE_ACTIONS]
         eligible.sort(key=lambda r: -(r["production"].get("rs20") or 0))
         lines = []
         for r in eligible[:2]:
             p = r["production"]
-            line = f"**{r['name']}** · {p['state_name']} · {ACTION_ZH[p['action']]}\n5日 {_pct(p['rs5'])}｜20日 {_pct(p['rs20'])}｜60日 {_pct(p['rs60'])}（相对{r['benchmark']}）"
+            label = p.get("combined_label") or p.get("state_name")
+            line = f"**{r['name']}** · {label} · {_action_name(p['action'])}\n5日 {_pct(p['rs5'])}｜20日 {_pct(p['rs20'])}｜60日 {_pct(p['rs60'])}（相对{r['benchmark']}）"
             if p.get("breadth") is not None:
                 line += f"\n站20日线 {int(p['breadth_n'])}只有效样本中的 {p['breadth']:.0f}%"
                 if p["breadth_n"] < 5:
-                    line += "（小样本，未达广度确认门槛）"
+                    line += "（小样本，广度不作为优先门槛）"
             else:
                 line += "\n真实广度未接入，仅价格观察"
             if r.get("candidates"):
@@ -129,17 +161,24 @@ def rotation_payload(report, context, settings):
             else:
                 line += "\n暂无已关联的合格个股候选"
             lines.append(line)
-        fields.append({"name": name + "｜优先观察", "value": "\n\n".join(lines) or "暂无满足条件的方向，等待确认。", "inline": False})
-    risks = [r for r in report["rows"] if r["production"]["action"] in {"extended", "caution"} and r["production"]["history_valid"]]
+        fields.append({"name": name + "｜优先观察", "value": "\n\n".join(lines) or "暂无持续领先或正在修复的方向。", "inline": False})
     risk_lines = []
     for cohort, label in (("technology", "科技"), ("sectors", "全市场")):
-        weak = sorted((r for r in risks if r["cohort"] == cohort and r["production"]["action"] == "caution"),
+        rows = [r for r in report["rows"] if r["cohort"] == cohort and r["production"]["history_valid"]]
+        weak = sorted((r for r in rows if r["production"]["action"] in {"weak", "caution"}),
                       key=lambda r: r["production"].get("rs20") or 0)
-        extended = [r for r in risks if r["cohort"] == cohort and r["production"]["action"] == "extended"]
+        extended = [r for r in rows if r["production"]["action"] == "extended"
+                    or "EXTENDED" in _risk_flags(r["production"])]
         if weak:
-            risk_lines.append(label + "降温/落后：" + "、".join(r["name"] for r in weak[:2]))
+            risk_lines.append(label + "持续落后：" + "、".join(r["name"] for r in weak[:2]))
         if extended:
             risk_lines.append(label + "延伸偏大：" + "、".join(r["name"] for r in extended[:2]))
+        flagged = [r for r in rows if set(_risk_flags(r["production"])) - {"EXTENDED"}]
+        extra = []
+        for r in flagged[:2]:
+            extra.append(r["name"] + "（" + "、".join(RISK_FLAG_ZH.get(f, f) for f in _risk_flags(r["production"]) if f != "EXTENDED") + "）")
+        if extra:
+            risk_lines.append(label + "其他风险：" + "、".join(extra))
     fields.append({"name": "风险与失效条件", "value":
                    ("；".join(risk_lines) or "无额外风险标签") +
                    "。若20日相对优势消失或原突破形态失效，重新评估；延伸偏大时不把强势当作追涨理由。", "inline": False})

@@ -3,50 +3,83 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 import hashlib
+import json
 
 import pandas as pd
 
-from src.config import CONFIG, PROJECT_ROOT
+from src.config import PROJECT_ROOT
 from ..calendar import _calendar, latest_completed_session, official_session_close
 from ..artifacts import normalize_json_value
-from . import SCHEMA_VERSION, SOURCE_PROFILE, PRODUCTION_PROFILE
+from . import (
+    AMOUNT_AUDIT_DOC,
+    AMOUNT_BASIS,
+    CACHE_PRICE_BASIS,
+    PRODUCTION_PROFILE,
+    SCHEMA_VERSION,
+    SOURCE_PROFILE,
+)
 from .context import evaluate_context, price_response
 from .engine import analyze, clean_table
 from .store import RotationStore, encoded
 from .themes import default_themes, required_symbols
 
 
+def _canonical_cache_root(cache_root=None):
+    parent = Path(cache_root) if cache_root else PROJECT_ROOT / "data" / "reference" / "group_analytics" / "rotation"
+    return parent / "canonical"
+
+
+def _basis_sidecar(parquet_path: Path) -> Path:
+    return parquet_path.with_name(parquet_path.stem + ".basis.json")
+
+
+def _price_basis_ok(sidecar: Path) -> bool:
+    if not sidecar.exists():
+        return False
+    try:
+        meta = json.loads(sidecar.read_text())
+    except (OSError, ValueError, TypeError):
+        return False
+    return meta.get("price_basis") == CACHE_PRICE_BASIS
+
+
+def _write_basis(sidecar: Path):
+    sidecar.write_text(json.dumps({
+        "price_basis": CACHE_PRICE_BASIS,
+        "amount_basis": AMOUNT_BASIS,
+    }, ensure_ascii=False, sort_keys=True))
+
+
 def load_frames(symbols, start, end, *, refresh=False, cache_root=None, fetcher=None):
-    """Group-owned cache; existing shared OHLCV files remain read-only fallback."""
-    root = Path(cache_root) if cache_root else PROJECT_ROOT / "data" / "reference" / "group_analytics" / "rotation"
-    shared = CONFIG.abs_path(CONFIG.data.raw_dir) / "ohlcv"
+    """Group-owned canonical cache. Shared raw OHLCV is never a silent fallback."""
+    root = _canonical_cache_root(cache_root)
     frames = {}
     for symbol in symbols:
         path = root / f"{symbol}.parquet"
+        sidecar = _basis_sidecar(path)
         if refresh:
             if fetcher is None:
-                from src.data.fmp import get_historical_ohlcv
-                fetcher = get_historical_ohlcv
-            frame = fetcher(symbol, start, end, dividend_adjusted=True)
+                from src.data.fmp import get_canonical_historical_ohlcv
+                fetcher = get_canonical_historical_ohlcv
+            frame = fetcher(symbol, start, end)
             if isinstance(frame, pd.DataFrame) and not frame.empty:
                 root.mkdir(parents=True, exist_ok=True)
-                # Unique atomic temp path prevents concurrent refresh corruption.
-                from uuid import uuid4
                 temp = root / f".{symbol}.{uuid4().hex}.tmp"
                 try:
                     frame.to_parquet(temp)
                     temp.replace(path)
                 finally:
                     temp.unlink(missing_ok=True)
-        candidate = path if path.exists() else shared / f"{symbol}.parquet"
-        if candidate.exists():
-            frames[symbol] = pd.read_parquet(candidate)
+                _write_basis(sidecar)
+        if path.exists() and _price_basis_ok(sidecar):
+            frames[symbol] = pd.read_parquet(path)
     return frames
 
 
 def run_rotation(*, asof="latest", refresh=False, store=None, frames=None, themes=None,
-                 now=None, calendar=None, dry_run=False, amount_verified=False,
+                 now=None, calendar=None, dry_run=False, amount_verified=True,
                  observations=(), decision_cutoff=None, cache_root=None):
     store = store or RotationStore()
     now = pd.Timestamp(now or datetime.now(timezone.utc))
@@ -74,16 +107,19 @@ def run_rotation(*, asof="latest", refresh=False, store=None, frames=None, theme
         if frames is None:
             frames = load_frames(symbols, sessions[0].date().isoformat(), source_session,
                                  refresh=refresh, cache_root=cache_root)
-        prices, volumes = {}, {}
+        prices, volumes, execution = {}, {}, {}
         for symbol, frame in frames.items():
             if symbol not in symbols or not isinstance(frame, pd.DataFrame):
                 continue
             prices[symbol] = frame.get("adj_close", frame.get("close", pd.Series(dtype=float)))
             volumes[symbol] = frame.get("volume", pd.Series(dtype=float))
+            execution[symbol] = frame.get("close", frame.get("adj_close", pd.Series(dtype=float)))
         prices = clean_table(pd.DataFrame(prices), sessions)
         volumes = clean_table(pd.DataFrame(volumes), sessions)
+        exec_px = clean_table(pd.DataFrame(execution), sessions)
         rows = analyze(prices, volumes, sessions, themes,
-                       amount_verified=amount_verified)
+                       amount_verified=amount_verified, execution_close=exec_px,
+                       schema_version=SCHEMA_VERSION)
         valid = sum(bool(row["production"]["history_valid"]) for row in rows)
         if not valid:
             raise ValueError("No theme has 61 consecutive completed sessions")
@@ -95,13 +131,16 @@ def run_rotation(*, asof="latest", refresh=False, store=None, frames=None, theme
         input_panel = normalize_json_value({
             "sessions": sessions.strftime("%Y-%m-%d").tolist(),
             "price_columns": prices.columns.tolist(), "volume_columns": volumes.columns.tolist(),
+            "execution_close_columns": exec_px.columns.tolist(),
             "prices": prices.to_numpy().tolist(), "volumes": volumes.to_numpy().tolist(),
+            "execution_close": exec_px.to_numpy().tolist(),
         })
         fingerprint = hashlib.sha256(encoded(input_panel)).hexdigest()
         snapshot = normalize_json_value({
             "schema_version": SCHEMA_VERSION, "source_session": source_session,
             "generated_at": now.isoformat(), "decision_cutoff": cutoff.isoformat(),
-            "profiles": [SOURCE_PROFILE, PRODUCTION_PROFILE], "price_basis": "adjusted_close",
+            "profiles": [SOURCE_PROFILE, PRODUCTION_PROFILE], "price_basis": CACHE_PRICE_BASIS,
+            "amount_basis": AMOUNT_BASIS, "amount_audit_doc": AMOUNT_AUDIT_DOC,
             "amount_verified": amount_verified, "input_fingerprint": fingerprint,
             "input_panel": input_panel,
             "parameters": {"history_sessions": 300, "return_windows": [1, 5, 20, 60],
@@ -110,12 +149,13 @@ def run_rotation(*, asof="latest", refresh=False, store=None, frames=None, theme
                            "extension_ma50_pct": 8, "confirmation_bars": 2,
                            "strength_deadband_log": .005, "acceleration_deadband_log": .002,
                            "min_breadth_members": 5, "min_breadth_coverage": .8,
-                           "priority_breadth_pct": 60, "price_state_version": "log-quadrants-v1"},
+                           "price_state_version": "dual-axis-v3"},
             "session_status": "FINAL", "valid_theme_count": valid,
             "total_theme_count": len(rows), "context": context, "rows": rows,
             "notes": ["日线研究观察，不是交易指令；未包含实时盘前行情",
-                      "公开版为规则级对照，未完成TradingView数值对账；评分未经样本外验证",
-                      "自建篮子历史按固定成员回看，不是历史时点可选组合"],
+                      "公开版为规则级对照，未完成TradingView数值对账；生产0–100分不在主表展示",
+                      "自建篮子历史按固定成员回看，不是历史时点可选组合",
+                      "成交额口径为拆股复权收盘价×成交量，见 " + AMOUNT_AUDIT_DOC],
         })
         run_id = None if dry_run else store.publish(snapshot)
         return {**snapshot, "run_id": run_id}

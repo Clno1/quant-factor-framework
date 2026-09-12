@@ -4,6 +4,7 @@ import copy
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import hashlib
 import tempfile
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -12,11 +13,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.group_analytics.rotation import SCHEMA_VERSION
+from src.group_analytics.rotation import CACHE_PRICE_BASIS, LEGACY_SCHEMA_VERSION, SCHEMA_VERSION
 from src.group_analytics.rotation.context import evaluate_context, price_response
-from src.group_analytics.rotation.engine import analyze, basket_index, metric_frame, add_states
-from src.group_analytics.rotation.service import run_rotation
-from src.group_analytics.rotation.store import RotationStore
+from src.group_analytics.rotation.engine import (
+    amount_direction_label, analyze, assign_priority, basket_index, classify_axes, metric_frame, add_states,
+)
+from src.group_analytics.rotation.service import load_frames, run_rotation
+from src.group_analytics.rotation.store import RotationStore, encoded
 from src.group_analytics.rotation.themes import Theme, default_themes, required_symbols
 from src.premarket_digest.rotation import attach_candidates, load_rotation_report, rotation_payload
 from src.premarket_digest.models import SourceGateError
@@ -144,21 +147,56 @@ def test_source_distribution_and_extension_precedence():
 def test_state_confirmation_gap_reset_and_replay():
     d, p, v, themes = sample(80)
     p["ETF"] = p.ETF ** 1.5  # Clearly beyond acceleration dead band.
-    frame = metric_frame(themes[0],p,v,strict=True)
-    assert frame.iloc[60].state == "pending"
-    assert frame.iloc[61].state == "leading"
+    frame = metric_frame(themes[0], p, v, strict=True)
+    first = frame.iloc[60]
+    second = frame.iloc[61]
+    assert first.history_valid and second.history_valid
+    assert first.strength_confirmed == "unavailable"
+    assert first.strength_axis == "leading"
+    assert first.priority != "wait"
+    assert second.strength_confirmed == "leading"
     repeated = frame.copy(); add_states(repeated)
-    assert frame.state.tolist() == repeated.state.tolist()
+    assert frame.strength_confirmed.tolist() == repeated.strength_confirmed.tolist()
     broken = frame.copy(); broken.iloc[-2, broken.columns.get_loc("history_valid")] = False
     add_states(broken)
-    assert broken.iloc[-1].state == "pending"
+    assert broken.iloc[-1].strength_confirmed == "unavailable"
+    assert broken.iloc[-1].strength_candidate in {"leading", "flat", "lagging"}
+
+
+def test_constant_relative_trend_is_steady_leading_not_wait():
+    n = 80
+    dates = pd.bdate_range("2026-01-05", periods=n)
+    c = np.log(1.02) / 20
+    t = np.arange(n)
+    qqq = 100 * np.exp(0.0004 * t)
+    etf = qqq * np.exp(c * t)
+    prices = pd.DataFrame({"QQQ": qqq, "ETF": etf}, index=dates)
+    volume = pd.DataFrame(1000.0, index=dates, columns=prices.columns)
+    theme = Theme("etf", "ETF测试", "technology", "QQQ", proxy="ETF")
+    frame = metric_frame(theme, prices, volume, strict=True)
+    latest = frame.iloc[-1]
+    assert latest.strength_axis == "leading"
+    assert latest.speed_axis == "steady"
+    assert latest.priority == "focus"
+    assert latest.action == "focus"
+    assert "wait" not in set(frame.loc[frame.history_valid, "action"])
+    assert abs(latest.acceleration_log) < 1e-9
 
 
 def test_state_exact_acceleration_boundary_is_stable():
-    d, p, v, themes = sample(80)
-    frame = metric_frame(themes[0], p, v, strict=True)
-    assert frame.iloc[60:].boundary.all()
-    assert set(frame.iloc[60:].state) == {"pending"}
+    n = 80
+    dates = pd.bdate_range("2026-01-05", periods=n)
+    c = np.log(1.02) / 20
+    t = np.arange(n)
+    qqq = 100 * np.exp(0.0004 * t)
+    etf = qqq * np.exp(c * t)
+    prices = pd.DataFrame({"QQQ": qqq, "ETF": etf}, index=dates)
+    volume = pd.DataFrame(1000.0, index=dates, columns=prices.columns)
+    theme = Theme("etf", "ETF测试", "technology", "QQQ", proxy="ETF")
+    frame = metric_frame(theme, prices, volume, strict=True)
+    valid = frame.iloc[60:]
+    assert (valid.speed_axis == "steady").all()
+    assert (valid.strength_axis == "leading").all()
 
 
 def test_store_immutable_repeat_tamper_and_no_date_regression(tmp_path):
@@ -321,7 +359,9 @@ def test_price_outperformance_during_absolute_decline_is_not_priority():
     p["QQQ"] = 100*np.exp(-.002*t-.00003*t*t)
     row=metric_frame(themes[0],p,v,strict=True).iloc[-1]
     assert row.rs20 > 0 and row.abs20 < 0
-    assert row.action not in {"priority","price_watch"}
+    assert row.action == "defensive"
+    assert row.priority == "defensive"
+    assert row.action not in {"priority", "price_watch", "focus"}
 
 
 def test_digest_keeps_configured_role_opt_in():
@@ -437,6 +477,10 @@ def test_rotation_page_freshness_contract():
     js = Path("src/webapp/static/js/group_rotation.js").read_text(encoding="utf-8")
     assert "rotation-asof" in html and "rotation-generated" in html and "rotation-next" in html
     assert "固定历史快照" in html
+    assert ">强弱<" in html and ">速度<" in html and ">成交活跃<" in html and ">风险<" in html
+    assert "生产分数不在主表" in html
+    assert "schema_legacy" in js
+    assert "strength_label" in js
     assert "visibilitychange" in js
     assert "5 * 60 * 1000" in js
     assert "America/New_York" in js
@@ -462,4 +506,281 @@ def test_group_rotation_price_adapter_reads_store(tmp_path):
         result = collect_research_evidence([job], now=now, observed_at=now.isoformat())
     assert result.snapshots[0].status == JobStatus.SUCCESS
     assert result.snapshots[0].job_id == "group_rotation_price"
+
+
+def _write_run(store, snapshot_payload):
+    from src.group_analytics.artifacts import normalize_json_value
+    snapshot_payload = normalize_json_value(snapshot_payload)
+    snapshot_payload.pop("run_id", None)
+    snapshot_payload.pop("schema_legacy", None)
+    data = encoded(snapshot_payload)
+    digest = hashlib.sha256(data).hexdigest()
+    run_id = "rot_" + snapshot_payload["source_session"].replace("-", "") + "_" + digest[:16]
+    target = store.root / "runs" / (run_id + ".json")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps({"sha256": digest, "snapshot": snapshot_payload}, ensure_ascii=False))
+    pointer = {"run_id": run_id, "sha256": digest, "source_session": snapshot_payload["source_session"]}
+    (store.root / "latest.json").write_text(json.dumps(pointer))
+    return run_id
+
+
+def legacy_snapshot():
+    from src.group_analytics.artifacts import normalize_json_value
+    d, p, v, themes = sample()
+    return normalize_json_value({
+        "schema_version": LEGACY_SCHEMA_VERSION, "source_session": str(d[-1].date()),
+        "generated_at": "2026-09-09T00:00:00+00:00", "session_status": "FINAL",
+        "valid_theme_count": 2, "total_theme_count": 2, "notes": [], "amount_verified": False,
+        "context": evaluate_context([], cutoff="2026-09-09T00:00:00+00:00"),
+        "rows": analyze(p, v, d, themes, schema_version=LEGACY_SCHEMA_VERSION),
+        "input_panel": {"sessions": [str(x.date()) for x in d],
+                        "price_columns": list(p.columns), "volume_columns": list(v.columns),
+                        "prices": p.to_numpy().tolist(), "volumes": v.to_numpy().tolist()},
+    })
+
+
+def test_priority_completeness_covers_every_axis_combination():
+    seen = set()
+    for strength in ("leading", "flat", "lagging"):
+        for speed in ("accelerating", "steady", "decelerating"):
+            for abs20 in (1.0, 0.0, -1.0):
+                for above in (True, False):
+                    for abs5 in (1.0, 0.0, -1.0):
+                        index, ma20 = (2.0, 1.0) if above else (1.0, 2.0)
+                        got = assign_priority(True, strength, speed, abs20, index, ma20, abs5)
+                        assert got in {"focus", "defensive", "recover", "weak", "neutral"}
+                        if strength == "leading" and abs20 > 0 and above:
+                            assert got == "focus"
+                        elif strength == "leading":
+                            assert got == "defensive"
+                            assert got != "focus"
+                        elif strength == "lagging" and speed == "accelerating" and abs5 > 0:
+                            assert got == "recover"
+                        elif strength == "lagging":
+                            assert got == "weak"
+                        else:
+                            assert got == "neutral"
+                        seen.add(got)
+    assert seen == {"focus", "defensive", "recover", "weak", "neutral"}
+    assert assign_priority(False, "leading", "accelerating", 1, 2, 1, 1) == "unavailable"
+
+
+def test_one_day_noise_does_not_change_confirmed_strength_or_priority():
+    n = 90
+    dates = pd.bdate_range("2026-01-05", periods=n)
+    c = np.log(1.10) / 20
+    t = np.arange(n)
+    qqq = 100 * np.exp(0.01 * t)
+    etf = qqq * np.exp(c * t)
+    prices = pd.DataFrame({"QQQ": qqq, "ETF": etf}, index=dates)
+    volume = pd.DataFrame(1000.0, index=dates, columns=prices.columns)
+    theme = Theme("etf", "ETF测试", "technology", "QQQ", proxy="ETF")
+    clean = metric_frame(theme, prices, volume, strict=True)
+    assert clean.iloc[-1].strength_confirmed == "leading"
+    assert clean.iloc[-1].priority == "focus"
+    noisy = prices.copy()
+    noisy.loc[dates[-1], "ETF"] = noisy.ETF.iloc[-2] * 0.90
+    changed = metric_frame(theme, noisy, volume, strict=True)
+    assert changed.iloc[-1].strength_axis == "lagging"
+    assert changed.iloc[-1].strength_confirmed == "leading"
+    assert changed.iloc[-1].priority == "focus"
+    assert changed.iloc[-1].strength_confirmation_count == 1
+    assert changed.iloc[-1].action != "wait"
+
+
+def test_speed_axis_is_not_two_bar_confirmed():
+    n = 90
+    dates = pd.bdate_range("2026-01-05", periods=n)
+    c = np.log(1.02) / 20
+    t = np.arange(n)
+    qqq = 100 * np.exp(0.0004 * t)
+    etf = qqq * np.exp(c * t)
+    prices = pd.DataFrame({"QQQ": qqq, "ETF": etf}, index=dates)
+    volume = pd.DataFrame(1000.0, index=dates, columns=prices.columns)
+    theme = Theme("etf", "ETF测试", "technology", "QQQ", proxy="ETF")
+    prices.loc[dates[-1], "ETF"] = prices.ETF.iloc[-1] * 1.04
+    frame = metric_frame(theme, prices, volume, strict=True)
+    assert frame.iloc[-2].speed_axis == "steady"
+    assert frame.iloc[-1].speed_axis == "accelerating"
+    assert frame.iloc[-1].strength_confirmed == "leading"
+    assert frame.iloc[-2].strength_confirmed == "leading"
+
+
+def test_extended_theme_can_still_be_focus():
+    n = 100
+    dates = pd.bdate_range("2026-01-05", periods=n)
+    t = np.arange(n)
+    qqq = np.full(n, 100.0)
+    etf = 100 * np.exp(0.004 * t)
+    prices = pd.DataFrame({"QQQ": qqq, "ETF": etf}, index=dates)
+    volume = pd.DataFrame(1000.0, index=dates, columns=prices.columns)
+    theme = Theme("etf", "ETF测试", "technology", "QQQ", proxy="ETF")
+    row = metric_frame(theme, prices, volume, strict=True).iloc[-1]
+    assert row.extension
+    assert "EXTENDED" in list(row.risk_flags)
+    assert row.priority == "focus"
+    assert row.action == "focus"
+
+
+def test_unlinked_etf_gap_does_not_change_priority():
+    d, p, v, themes = sample(80)
+    rows = analyze(p, v, d, (themes[0],))
+    latest = rows[0]["production"]
+    assert "ETF_HOLDINGS_NOT_LINKED" in latest["evidence_gaps"]
+    assert latest["priority"] != "unavailable" or not latest["history_valid"]
+    assert latest["action"] not in {"wait", "price_watch"}
+
+
+def test_small_basket_gap_is_independent():
+    d, p, v, _ = sample(80)
+    theme = Theme("tiny", "小篮子", "technology", "QQQ", members=("S0", "S1", "S2"))
+    rows = analyze(p, v, d, (theme,))
+    assert "SMALL_BASKET" in rows[0]["evidence_gaps"]
+    assert rows[0]["production"]["action"] != "wait"
+
+
+def test_relative_underperformance_label_is_not_decline():
+    assert amount_direction_label(1.0, 1.0, 1.4) == "放量相对走强"
+    assert amount_direction_label(-1.0, 1.0, 1.4) == "放量相对走弱"
+    assert "下跌" not in amount_direction_label(-1.0, 1.0, 1.1)
+    assert amount_direction_label(-1.0, -0.5, 0.8) == "缩量相对走弱（绝对下跌）"
+    x, y, strength, speed = classify_axes(0.4963, 2.0)
+    assert strength == "leading"
+    assert speed == "steady"
+
+
+def test_split_adjusted_close_times_volume_stays_continuous():
+    dates = pd.bdate_range("2026-01-05", periods=40)
+    close = pd.Series(np.full(40, 100.0), index=dates)
+    volume = pd.Series(np.full(40, 1000.0), index=dates)
+    close.iloc[-1] = 50.0
+    volume.iloc[-1] = 2000.0
+    prices = pd.DataFrame({"ETF": close, "QQQ": close}, index=dates)
+    volumes = pd.DataFrame({"ETF": volume, "QQQ": volume}, index=dates)
+    theme = Theme("etf", "ETF测试", "technology", "QQQ", proxy="ETF")
+    row = metric_frame(theme, prices, volumes, strict=True, amount_verified=True,
+                       execution_close=prices).iloc[-1]
+    assert row.amount_proxy == pytest.approx(100000)
+    assert row.amount_ratio == pytest.approx(1.0)
+
+
+def test_amount_uses_execution_close_not_dividend_adjusted_price():
+    dates = pd.bdate_range("2026-01-05", periods=30)
+    close = pd.Series(np.full(30, 100.0), index=dates)
+    adj = close.copy()
+    adj.iloc[-1] = 90.0
+    volume = pd.Series(np.full(30, 1000.0), index=dates)
+    prices = pd.DataFrame({"ETF": adj, "QQQ": adj}, index=dates)
+    execution = pd.DataFrame({"ETF": close, "QQQ": close}, index=dates)
+    volumes = pd.DataFrame({"ETF": volume, "QQQ": volume}, index=dates)
+    theme = Theme("etf", "ETF测试", "technology", "QQQ", proxy="ETF")
+    wrong = metric_frame(theme, prices, volumes, strict=True, amount_verified=True).iloc[-1]
+    right = metric_frame(theme, prices, volumes, strict=True, amount_verified=True,
+                         execution_close=execution).iloc[-1]
+    assert wrong.amount_proxy == pytest.approx(90000)
+    assert right.amount_proxy == pytest.approx(100000)
+
+
+def test_wrong_cache_price_basis_is_treated_as_missing(tmp_path):
+    dates = pd.bdate_range("2026-01-05", periods=5)
+    frame = pd.DataFrame({"close": 100.0, "adj_close": 100.0, "volume": 1000.0}, index=dates)
+    canonical = tmp_path / "canonical"
+    canonical.mkdir()
+    frame.to_parquet(canonical / "QQQ.parquet")
+    assert load_frames(["QQQ"], "2026-01-05", "2026-01-09", cache_root=tmp_path) == {}
+    (canonical / "QQQ.basis.json").write_text(json.dumps({"price_basis": "dividend_adjusted_legacy"}))
+    assert load_frames(["QQQ"], "2026-01-05", "2026-01-09", cache_root=tmp_path) == {}
+    (canonical / "QQQ.basis.json").write_text(json.dumps({"price_basis": CACHE_PRICE_BASIS}))
+    loaded = load_frames(["QQQ"], "2026-01-05", "2026-01-09", cache_root=tmp_path)
+    assert "QQQ" in loaded
+
+
+def test_canonical_refresh_writes_basis_sidecar(tmp_path):
+    dates = pd.bdate_range("2026-01-05", periods=3)
+
+    def fake_fetch(symbol, start, end):
+        return pd.DataFrame({"open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0,
+                             "adj_close": 1.0, "volume": 1.0}, index=dates)
+
+    loaded = load_frames(["QQQ"], "2026-01-05", "2026-01-07", refresh=True,
+                         cache_root=tmp_path, fetcher=fake_fetch)
+    assert "QQQ" in loaded
+    meta = json.loads((tmp_path / "canonical" / "QQQ.basis.json").read_text())
+    assert meta["price_basis"] == CACHE_PRICE_BASIS
+    shared = tmp_path / "raw_ohlcv"
+    shared.mkdir()
+    pd.DataFrame({"close": [9.0]}).to_parquet(shared / "SPY.parquet")
+    assert load_frames(["SPY"], "2026-01-05", "2026-01-07", cache_root=tmp_path) == {}
+
+
+def test_legacy_snapshot_load_sets_schema_legacy(tmp_path):
+    store = RotationStore(tmp_path)
+    run = _write_run(store, legacy_snapshot())
+    loaded = store.load()
+    assert loaded["run_id"] == run
+    assert loaded["schema_legacy"] is True
+    assert loaded["schema_version"] == LEGACY_SCHEMA_VERSION
+
+
+def test_v3_publish_advances_pointer_over_v2_latest(tmp_path):
+    store = RotationStore(tmp_path)
+    old = _write_run(store, legacy_snapshot())
+    assert store.load()["run_id"] == old
+    fresh = attach_candidates(snapshot())
+    fresh["source_session"] = store.load()["source_session"]
+    new = store.publish(fresh)
+    latest = store.load()
+    assert new != old
+    assert latest["run_id"] == new
+    assert latest["schema_version"] == SCHEMA_VERSION
+    assert latest["schema_legacy"] is False
+    assert store.load(old)["schema_legacy"] is True
+
+
+def test_replay_v2_uses_v2_rules_not_v3():
+    from src.group_analytics.rotation.replay import replay_snapshot
+    from src.group_analytics.artifacts import normalize_json_value
+    d, p, v, themes = sample(80)
+    rows = analyze(p, v, d, themes, schema_version=LEGACY_SCHEMA_VERSION)
+    panel = normalize_json_value({
+        "sessions": [str(x.date()) for x in d],
+        "price_columns": list(p.columns), "volume_columns": list(v.columns),
+        "prices": p.to_numpy().tolist(), "volumes": v.to_numpy().tolist(),
+    })
+    snap = normalize_json_value({
+        "schema_version": LEGACY_SCHEMA_VERSION, "source_session": str(d[-1].date()),
+        "amount_verified": False, "rows": rows, "input_panel": panel,
+        "input_fingerprint": hashlib.sha256(encoded(panel)).hexdigest(),
+    })
+    result = replay_snapshot(snap)
+    assert result["status"] == "MATCH", result["differences"][:5]
+    assert result["schema_version"] == LEGACY_SCHEMA_VERSION
+    v3 = analyze(p, v, d, themes, schema_version=SCHEMA_VERSION)
+    assert "strength_axis" not in rows[0]["production"]
+    assert "strength_axis" in v3[0]["production"]
+
+
+def test_service_records_amount_basis_and_replays(tmp_path):
+    import exchange_calendars as xcals
+    from src.group_analytics.rotation.replay import replay_snapshot
+    cal = xcals.get_calendar("XNYS")
+    dates = cal.sessions_in_range("2025-01-02", "2026-09-08")
+    frame = pd.DataFrame({
+        "adj_close": 100 * np.exp(.0001 * np.arange(len(dates))),
+        "close": 100 * np.exp(.0001 * np.arange(len(dates))),
+        "volume": 10000,
+    }, index=dates)
+    theme = Theme("etf", "测试", "technology", "QQQ", proxy="ETF")
+    result = run_rotation(asof="2026-09-08", store=RotationStore(tmp_path),
+                          frames={"ETF": frame, "QQQ": frame}, themes=[theme],
+                          now="2026-09-09T01:00:00Z", dry_run=True)
+    assert result["schema_version"] == SCHEMA_VERSION
+    assert result["amount_basis"] == "split_adjusted_close_x_volume"
+    assert result["price_basis"] == CACHE_PRICE_BASIS
+    assert result["amount_verified"] is True
+    assert "execution_close" in result["input_panel"]
+    assert "priority_breadth_pct" not in result["parameters"]
+    assert result["parameters"]["price_state_version"] == "dual-axis-v3"
+    assert replay_snapshot(result)["status"] == "MATCH"
+
 
