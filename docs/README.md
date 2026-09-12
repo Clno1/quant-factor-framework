@@ -60,6 +60,8 @@
 
 - [`sector_rotation_v3_plan_20260912.md`](sector_rotation_v3_plan_20260912.md)：**当前开发依据**。现状核查结论与 P0–P5 分阶段计划。
 - [`sector_rotation_v3_amount_audit_20260912.md`](sector_rotation_v3_amount_audit_20260912.md)：P1 成交额口径（拆股复权收盘价×成交量）对账与默认解锁条件。
+- [`sector_rotation_v3_holdings_audit_20260912.md`](sector_rotation_v3_holdings_audit_20260912.md)：P2 当前持仓观测广度；17 ETF 实盘探测仍待 SG。
+- [`sector_rotation_v3_flows_audit_20260912.md`](sector_rotation_v3_flows_audit_20260912.md)：P3 净申赎接口审计，结论 NOT_PASSED，不用成交额冒充。
 - [`sector_rotation_v2_upgrade.md`](sector_rotation_v2_upgrade.md)：V2 实现、两条算法轨道、产物契约与 SG 部署操作。
 - [`sector_rotation_v2_public_source_revision.md`](sector_rotation_v2_public_source_revision.md)：公开 Pine 源码逐条审计与分层设计修订。
 - [`sector_rotation_v2_validation_20260909.md`](sector_rotation_v2_validation_20260909.md)：真实数据验证；结论为 `NOT_APPROVED`。

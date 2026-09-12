@@ -65,6 +65,8 @@ def same_price_inputs(existing, snapshot):
     return (
         existing.get("source_session") == snapshot.get("source_session")
         and existing.get("input_fingerprint") == snapshot.get("input_fingerprint")
+        and existing.get("holdings_fingerprint") == snapshot.get("holdings_fingerprint")
+        and existing.get("flows_fingerprint") == snapshot.get("flows_fingerprint")
     )
 
 
@@ -101,11 +103,13 @@ def run_price_stage(
     themes,
     cache_root,
     without_candidates,
+    holdings_root,
 ):
     snapshot = run_rotation(
         asof=asof, refresh=refresh, store=store, dry_run=True,
         observations=observations, decision_cutoff=decision_cutoff,
         amount_verified=amount_verified, themes=themes, cache_root=cache_root,
+        holdings_root=holdings_root,
     )
     reason = "个股关联未启用" if without_candidates else LINKAGE_PENDING_REASON
     snapshot = attach_candidates(snapshot, None, unavailable_reason=reason)
@@ -200,6 +204,8 @@ def main(argv=None):
     parser.add_argument("--dry-run", action="store_true", help="No publication or Discord delivery; --refresh may update price cache")
     parser.add_argument("--output-root", type=Path)
     parser.add_argument("--cache-root", type=Path)
+    parser.add_argument("--holdings-root", type=Path,
+                        help="Independent ETF holdings observation directory; missing data never blocks price")
     parser.add_argument("--env-file", type=Path)
     parser.add_argument("--themes-file", type=Path, help="Optional versioned Theme records (JSON array)")
     parser.add_argument("--context-file", type=Path, help="Optional authorized as-of evidence records (JSON array)")
@@ -239,6 +245,7 @@ def main(argv=None):
             asof=args.asof, refresh=args.refresh, store=store, dry_run=args.dry_run,
             observations=observations, decision_cutoff=args.decision_cutoff,
             amount_verified=args.amount_verified, themes=themes, cache_root=args.cache_root,
+            holdings_root=args.holdings_root,
         )
         if args.stage == "price":
             result = run_price_stage(without_candidates=args.without_candidates, **price_kwargs)

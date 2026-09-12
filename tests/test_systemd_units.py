@@ -122,6 +122,14 @@ class SystemdUnitTests(unittest.TestCase):
             group_price_timer,
         )
         self.assertIn("Unit=quant-group-rotation-price.service", group_price_timer)
+        holdings_timer = (
+            SYSTEMD_DIR / "quant-group-rotation-holdings.timer"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "OnCalendar=Mon *-*-* 12:00:00 America/New_York",
+            holdings_timer,
+        )
+        self.assertIn("Unit=quant-group-rotation-holdings.service", holdings_timer)
 
     def test_broad_units_form_a_resource_bounded_success_chain(self):
         coverage = (
@@ -248,6 +256,19 @@ class SystemdUnitTests(unittest.TestCase):
             self.assertIn("MemoryMax=550M", content)
             self.assertIn(".broad-production.lock", content)
             self.assertNotIn("quant-broad-factor-data.service", content)
+        holdings = (
+            SYSTEMD_DIR / "quant-group-rotation-holdings.service"
+        ).read_text(encoding="utf-8")
+        holdings_root = (
+            SYSTEMD_DIR / "quant-group-rotation-holdings-root.service"
+        ).read_text(encoding="utf-8")
+        for content in (holdings, holdings_root):
+            self.assertIn("observe_rotation_holdings.py --all --refresh-members", content)
+            self.assertIn("MemoryHigh=700M", content)
+            self.assertIn("MemoryMax=900M", content)
+            self.assertIn(".rotation-holdings.lock", content)
+            self.assertNotIn("quant-broad-factor-data.service", content)
+            self.assertNotIn("--stage price", content)
         self.assertIn("--stage linkage --asof latest", linkage)
         self.assertNotIn("--refresh", next(
             line for line in linkage.splitlines() if line.startswith("ExecStart=")

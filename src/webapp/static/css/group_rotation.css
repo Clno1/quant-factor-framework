@@ -23,7 +23,7 @@
 .rotation-main button{cursor:pointer}
 .rotation-main button:focus-visible,.rotation-main a:focus-visible{outline:2px solid var(--accent-2);outline-offset:3px}
 .rotation-table-wrap{overflow:auto;border:1px solid var(--border);border-radius:10px}
-.rotation-table{width:100%;border-collapse:collapse;min-width:980px;background:var(--card-bg);font-size:13px}
+.rotation-table{width:100%;border-collapse:collapse;min-width:1100px;background:var(--card-bg);font-size:13px}
 .rotation-risk{color:var(--amber)}
 .rotation-table caption{text-align:left;padding:12px;color:var(--text-2);font-size:12px}
 .rotation-table th,.rotation-table td{padding:13px 10px;text-align:right;border-bottom:1px solid var(--border);font-variant-numeric:tabular-nums}

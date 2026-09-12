@@ -150,7 +150,15 @@ def rotation_payload(report, context, settings):
             p = r["production"]
             label = p.get("combined_label") or p.get("state_name")
             line = f"**{r['name']}** · {label} · {_action_name(p['action'])}\n5日 {_pct(p['rs5'])}｜20日 {_pct(p['rs20'])}｜60日 {_pct(p['rs60'])}（相对{r['benchmark']}）"
-            if p.get("breadth") is not None:
+            hb = r.get("holdings_breadth") or {}
+            if hb.get("breadth_kind") == "etf_holdings_observation" and hb.get("breadth_equal_weight_pct") is not None:
+                equal = hb["breadth_equal_weight_pct"]
+                weighted = hb.get("breadth_weighted_pct")
+                line += f"\n当前持仓观测广度 等权 {equal:.0f}%"
+                if weighted is not None:
+                    line += f" / 加权 {weighted:.0f}%"
+                line += "（持仓生效日未披露）"
+            elif p.get("breadth") is not None:
                 line += f"\n站20日线 {int(p['breadth_n'])}只有效样本中的 {p['breadth']:.0f}%"
                 if p["breadth_n"] < 5:
                     line += "（小样本，广度不作为优先门槛）"

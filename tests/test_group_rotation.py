@@ -427,6 +427,30 @@ def test_price_stage_duplicate_fingerprint_is_noop(tmp_path, capsys):
     assert len(list((root / "runs").glob("*.json"))) == 1
 
 
+def test_price_stage_new_holdings_fingerprint_republishes(tmp_path, capsys):
+    from scripts.run_group_rotation import main
+    from src.group_analytics.rotation.holdings import normalize_observation, save_observation
+    patches, root = _price_cli_patches(tmp_path)
+    holdings = tmp_path / "holdings"
+    nows = iter(["2026-09-09T01:00:00Z", "2026-09-09T03:00:00Z"])
+    argv = ["--stage", "price", "--asof", "2026-09-08", "--output-root", str(root),
+            "--holdings-root", str(holdings)]
+    with patches[0], patches[1], \
+         patch("scripts.run_group_rotation.run_rotation",
+               side_effect=lambda **kw: run_rotation(now=next(nows), **kw)):
+        assert main(argv) == 0
+        first = json.loads(capsys.readouterr().out)
+        data = [{"symbol": "ETF", "asset": "QQQ", "isin": "USQQQ", "weightPercentage": 100,
+                 "updatedAt": "2026-09-08 17:00:00"}]
+        save_observation(holdings, normalize_observation(data, "ETF", "2026-09-08T18:00:00Z"))
+        assert main(argv) == 0
+        second = json.loads(capsys.readouterr().out)
+    assert first["status"] == "SUCCESS"
+    assert second["status"] == "SUCCESS"
+    assert second["run_id"] != first["run_id"]
+    assert len(list((root / "runs").glob("*.json"))) == 2
+
+
 def test_linkage_unavailable_does_not_overwrite_or_mark_failure(tmp_path, capsys):
     from scripts.run_group_rotation import main
     patches, root = _price_cli_patches(tmp_path)
@@ -478,9 +502,13 @@ def test_rotation_page_freshness_contract():
     assert "rotation-asof" in html and "rotation-generated" in html and "rotation-next" in html
     assert "固定历史快照" in html
     assert ">强弱<" in html and ">速度<" in html and ">成交活跃<" in html and ">风险<" in html
+    assert ">净申赎<" in html
+    assert "当前持仓观测广度" in html
     assert "生产分数不在主表" in html
     assert "schema_legacy" in js
     assert "strength_label" in js
+    assert "holdings_breadth" in js
+    assert "net_creation" in js
     assert "visibilitychange" in js
     assert "5 * 60 * 1000" in js
     assert "America/New_York" in js

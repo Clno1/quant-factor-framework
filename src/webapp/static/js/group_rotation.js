@@ -16,9 +16,10 @@
     ETF_HOLDINGS_NOT_LINKED:"真实广度未接入", SMALL_BASKET:"小样本篮子",
     LOW_PARTICIPATION:"参与度低", STATE_CONFIRMING:"新状态确认中",
     NO_QUALIFIED_CANDIDATE:"扫描正常，暂无合格形态", LINKAGE_FAILED:"个股关联失败",
-    INSUFFICIENT_HISTORY:"历史不足"
+    INSUFFICIENT_HISTORY:"历史不足", HOLDINGS_OBSERVATION_STALE:"持仓观测过期未用",
+    HOLDINGS_MEASUREMENT_FAILED:"持仓已接入但成员价格不足"
   };
-  const v3Head = ["主题","强弱","速度","5日相对","20日相对","60日相对","趋势","成交活跃","真实广度","风险","研究优先级"];
+  const v3Head = ["主题","强弱","速度","5日相对","20日相对","60日相对","趋势","成交活跃","真实广度","净申赎","风险","研究优先级"];
   const v2Head = ["主题 / 状态","5日相对","20日相对","60日相对","真实广度","研究优先级"];
   let data, selection, detailSequence = 0;
   const query = new URLSearchParams(location.search);
@@ -42,9 +43,40 @@
     }
     return "—";
   }
+  function holdingsBreadth(r) { return r.holdings_breadth || {}; }
   function breadthText(r, p) {
-    if (p.breadth === null || p.breadth === undefined) return r.members.length ? "无有效样本" : "未接入";
+    const hb = holdingsBreadth(r);
+    if (hb.breadth_kind === "etf_holdings_observation") {
+      const equal = hb.breadth_equal_weight_pct, weighted = hb.breadth_weighted_pct;
+      if (typeof equal !== "number" || !Number.isFinite(equal)) return "当前持仓观测 · 成员价格不足";
+      const weightPart = typeof weighted === "number" && Number.isFinite(weighted) ? ` / 加权${weighted.toFixed(0)}%` : "";
+      const sample = (hb.breadth_eligible_members != null && hb.breadth_mapped_members != null)
+        ? ` · 样本${hb.breadth_eligible_members}/${hb.breadth_mapped_members}` : "";
+      return `等权${equal.toFixed(0)}%${weightPart}${sample}`;
+    }
+    if (hb.status === "HOLDINGS_OBSERVATION_STALE") return "持仓过期未用";
+    if (p.breadth === null || p.breadth === undefined) return (hb.breadth_kind === "member_above_ma" || (r.definition && r.definition.members && r.definition.members.length)) ? "无有效样本" : "未接入";
     return `${p.breadth.toFixed(0)}% · 样本${p.breadth_n}/${p.breadth_expected}${p.breadth_n < 5 ? "（小样本）" : ""}`;
+  }
+  function flowText(r) {
+    const flow = r.net_creation || {};
+    if (flow.status === "not_applicable") return "不适用";
+    if (flow.status === "available" && typeof flow.daily === "number" && Number.isFinite(flow.daily)) {
+      const label = flow.label ? `${flow.label} · ` : "";
+      return `${label}${flow.daily.toFixed(0)}`;
+    }
+    return "—";
+  }
+  function displayGaps(r, p) {
+    const hb = holdingsBreadth(r);
+    let gaps = [...(r.evidence_gaps || p.evidence_gaps || [])];
+    if (hb.breadth_kind === "etf_holdings_observation") {
+      gaps = gaps.filter(gap => gap !== "ETF_HOLDINGS_NOT_LINKED");
+    }
+    for (const extra of hb.observation_gaps || []) {
+      if (!gaps.includes(extra)) gaps.push(extra);
+    }
+    return gaps;
   }
   function appendTd(tr, text, label, cls) {
     const td = node("td", text, cls); td.dataset.label = label; tr.append(td); return td;
@@ -90,6 +122,7 @@
         appendTd(tr, r.compatibility?.source_trend || "—", "趋势");
         appendTd(tr, amountText(p), "成交活跃");
         appendTd(tr, breadthText(r, p), "真实广度");
+        appendTd(tr, flowText(r), "净申赎");
         appendTd(tr, riskText(p), "风险", riskText(p) !== "—" ? "rotation-risk" : "");
         appendTd(tr, actionName(p.action), "研究优先级");
       }
@@ -119,9 +152,19 @@
       const back=node("button","↑ 返回主题列表");back.type="button";back.addEventListener("click",()=>el("rotation-cohort").scrollIntoView({block:"start"}));box.append(back);
       box.append(node("p",`绝对5日 ${pct(p.abs5)}，绝对20日 ${pct(p.abs20)}。${r.price_response || "背景不足，独立观察价格"}`));
       if (p.amount_label) box.append(node("p", `成交活跃：${amountText(p)}`));
+      const hb = holdingsBreadth(r);
+      if (hb.breadth_kind === "etf_holdings_observation") {
+        box.append(node("p", `${hb.note || "当前持仓观测广度（持仓生效日未披露）"}：${breadthText(r, p)}`));
+      } else if (hb.note) {
+        box.append(node("p", `真实广度：${breadthText(r, p)}。${hb.note}`));
+      }
+      const flow = r.net_creation || {};
+      if (flow.status === "not_applicable") box.append(node("p", "净申赎：不适用（自建篮子没有ETF份额）"));
+      else if (flow.status === "available") box.append(node("p", `净申赎：${flowText(r)} · 数据日 ${flow.asof || "—"}`));
+      else box.append(node("p", flow.note || "净申赎未接入；不是成交额"));
       const flags = Array.isArray(p.risk_flags) ? p.risk_flags : [];
       if (flags.length) box.append(node("p", "风险标记：" + flags.map(f => riskZh[f] || f).join("、")));
-      const gaps = r.evidence_gaps || p.evidence_gaps || [];
+      const gaps = displayGaps(r, p);
       if (gaps.length) {
         const list = node("ul");
         for (const gap of gaps) list.append(node("li", gapZh[gap] || gap));

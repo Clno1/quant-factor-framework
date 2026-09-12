@@ -16,14 +16,25 @@ from . import (
     AMOUNT_AUDIT_DOC,
     AMOUNT_BASIS,
     CACHE_PRICE_BASIS,
+    FLOWS_AUDIT_DOC,
+    FLOWS_AUDIT_STATUS,
+    HOLDINGS_AUDIT_DOC,
     PRODUCTION_PROFILE,
     SCHEMA_VERSION,
     SOURCE_PROFILE,
 )
 from .context import evaluate_context, price_response
 from .engine import analyze, clean_table
+from .flows import attach_net_creation, flows_fingerprint
+from .holdings import (
+    attach_holdings_breadth,
+    default_holdings_root,
+    holding_member_symbols,
+    holdings_fingerprint,
+    load_latest_observations,
+)
 from .store import RotationStore, encoded
-from .themes import default_themes, required_symbols
+from .themes import default_themes, proxy_etf_symbols, required_symbols
 
 
 def _canonical_cache_root(cache_root=None):
@@ -80,7 +91,8 @@ def load_frames(symbols, start, end, *, refresh=False, cache_root=None, fetcher=
 
 def run_rotation(*, asof="latest", refresh=False, store=None, frames=None, themes=None,
                  now=None, calendar=None, dry_run=False, amount_verified=True,
-                 observations=(), decision_cutoff=None, cache_root=None):
+                 observations=(), decision_cutoff=None, cache_root=None,
+                 holdings_root=None):
     store = store or RotationStore()
     now = pd.Timestamp(now or datetime.now(timezone.utc))
     if now.tzinfo is None:
@@ -120,6 +132,29 @@ def run_rotation(*, asof="latest", refresh=False, store=None, frames=None, theme
         rows = analyze(prices, volumes, sessions, themes,
                        amount_verified=amount_verified, execution_close=exec_px,
                        schema_version=SCHEMA_VERSION)
+        holdings_observations = {}
+        try:
+            observed_root = Path(holdings_root) if holdings_root is not None else default_holdings_root()
+            holdings_observations = load_latest_observations(observed_root, proxy_etf_symbols(themes))
+        except Exception:
+            holdings_observations = {}
+        member_frames = {}
+        try:
+            members = holding_member_symbols(holdings_observations)
+            if members:
+                member_frames = load_frames(
+                    members, sessions[0].date().isoformat(), source_session,
+                    refresh=False, cache_root=cache_root,
+                )
+                if frames is not None:
+                    for symbol in members:
+                        frame = frames.get(symbol)
+                        if symbol not in member_frames and isinstance(frame, pd.DataFrame):
+                            member_frames[symbol] = frame
+        except Exception:
+            member_frames = {}
+        attach_holdings_breadth(rows, holdings_observations, member_frames, sessions, now=now)
+        attach_net_creation(rows)
         valid = sum(bool(row["production"]["history_valid"]) for row in rows)
         if not valid:
             raise ValueError("No theme has 61 consecutive completed sessions")
@@ -128,12 +163,15 @@ def run_rotation(*, asof="latest", refresh=False, store=None, frames=None, theme
             row["price_response"] = (price_response(context, row["production"])
                                      if context.get("target_benchmark") in {None, row["benchmark"]}
                                      else "背景证据不适用于此基准，独立观察价格")
+        holdings_fp = holdings_fingerprint(holdings_observations, now=now)
+        flows_fp = flows_fingerprint(rows)
         input_panel = normalize_json_value({
             "sessions": sessions.strftime("%Y-%m-%d").tolist(),
             "price_columns": prices.columns.tolist(), "volume_columns": volumes.columns.tolist(),
             "execution_close_columns": exec_px.columns.tolist(),
             "prices": prices.to_numpy().tolist(), "volumes": volumes.to_numpy().tolist(),
             "execution_close": exec_px.to_numpy().tolist(),
+            "holdings_fingerprint": holdings_fp, "flows_fingerprint": flows_fp,
         })
         fingerprint = hashlib.sha256(encoded(input_panel)).hexdigest()
         snapshot = normalize_json_value({
@@ -141,21 +179,26 @@ def run_rotation(*, asof="latest", refresh=False, store=None, frames=None, theme
             "generated_at": now.isoformat(), "decision_cutoff": cutoff.isoformat(),
             "profiles": [SOURCE_PROFILE, PRODUCTION_PROFILE], "price_basis": CACHE_PRICE_BASIS,
             "amount_basis": AMOUNT_BASIS, "amount_audit_doc": AMOUNT_AUDIT_DOC,
-            "amount_verified": amount_verified, "input_fingerprint": fingerprint,
-            "input_panel": input_panel,
+            "holdings_audit_doc": HOLDINGS_AUDIT_DOC, "flows_audit_doc": FLOWS_AUDIT_DOC,
+            "flows_audit_status": FLOWS_AUDIT_STATUS, "amount_verified": amount_verified,
+            "input_fingerprint": fingerprint, "holdings_fingerprint": holdings_fp,
+            "flows_fingerprint": flows_fp, "input_panel": input_panel,
             "parameters": {"history_sessions": 300, "return_windows": [1, 5, 20, 60],
                            "relative_ma": [20, 50], "amount_ma": 20,
                            "source_volume_threshold": 1.3, "extension_rs60_pct": 18,
                            "extension_ma50_pct": 8, "confirmation_bars": 2,
                            "strength_deadband_log": .005, "acceleration_deadband_log": .002,
                            "min_breadth_members": 5, "min_breadth_coverage": .8,
+                           "holdings_stale_calendar_days": 14,
                            "price_state_version": "dual-axis-v3"},
             "session_status": "FINAL", "valid_theme_count": valid,
             "total_theme_count": len(rows), "context": context, "rows": rows,
             "notes": ["日线研究观察，不是交易指令；未包含实时盘前行情",
                       "公开版为规则级对照，未完成TradingView数值对账；生产0–100分不在主表展示",
                       "自建篮子历史按固定成员回看，不是历史时点可选组合",
-                      "成交额口径为拆股复权收盘价×成交量，见 " + AMOUNT_AUDIT_DOC],
+                      "成交额口径为拆股复权收盘价×成交量，见 " + AMOUNT_AUDIT_DOC,
+                      "ETF真实广度为当前持仓观测，持仓生效日未披露，见 " + HOLDINGS_AUDIT_DOC,
+                      "净申赎审计未通过，列为空且不用成交额冒充，见 " + FLOWS_AUDIT_DOC],
         })
         run_id = None if dry_run else store.publish(snapshot)
         return {**snapshot, "run_id": run_id}
