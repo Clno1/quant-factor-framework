@@ -78,8 +78,25 @@ jobs:
       universes: [SP500, NASDAQ100, MAG7]
     description: 发布八因子、置信评估和跨股票池研究结论。
 
+  - job_id: group_rotation_price
+    display_name: 板块轮动价格层
+    category: research
+    run_type: scheduled_batch
+    adapter: group_rotation
+    service_unit: quant-group-rotation-price.service
+    timer_unit: quant-group-rotation-price.timer
+    enabled_expected: true
+    order: 35
+    schedule:
+      timezone: America/New_York
+      weekdays: [MO, TU, WE, TH, FR]
+      time: "17:30"
+      deadline_minutes: 75
+      target_policy: latest_publishable_xnys
+    description: 收盘后 1.5 小时构建主题价格快照，不依赖宽基个股链。
+
   - job_id: group_analytics
-    display_name: 板块与行业研究
+    display_name: 板块轮动个股关联
     category: research
     run_type: scheduled_batch
     adapter: group_analytics
@@ -93,7 +110,7 @@ jobs:
       time: "13:15"
       deadline_minutes: 75
       target_policy: latest_publishable_xnys
-    description: 使用正式标普500版本生成板块和子行业研究产物。
+    description: 对已发布的轮动价格快照做个股关联；失败不覆盖价格快照，盘前 07:00 ET 再试。
 
   - job_id: paper_trading
     display_name: 模拟盘日终运行

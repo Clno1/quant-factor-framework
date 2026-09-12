@@ -9,7 +9,15 @@
             <p>先看持续强弱，再核对价格与个股确认条件。</p></div>
         <a href="/group-analytics/daily">旧版单日统计 →</a>
     </header>
-    <div id="rotation-status" role="status">正在读取完整收盘快照…</div>
+    <div id="rotation-status" role="status">
+        <p id="rotation-asof">正在读取完整收盘快照…</p>
+        <p id="rotation-generated" hidden></p>
+        <p id="rotation-next" hidden></p>
+    </div>
+    <p id="rotation-frozen" class="rotation-banner" hidden>固定历史快照 · <a id="rotation-latest-link" href="/group-analytics">查看最新</a></p>
+    <p id="rotation-refresh" class="rotation-banner rotation-refresh" hidden>
+        <button type="button" id="rotation-refresh-btn">有更新的快照，点击刷新到最新</button>
+    </p>
     <div id="rotation-error" role="alert" hidden></div>
     <div id="rotation-content" hidden>
         <section class="rotation-cards" id="rotation-cards" aria-label="研究方向与分歧"></section>

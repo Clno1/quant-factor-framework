@@ -72,7 +72,84 @@
     }catch(e){if(seq===detailSequence)box.replaceChildren(node("p",e.message));}
   }
   el("rotation-cohort").addEventListener("change",render);el("rotation-sort").addEventListener("change",render);
+  const pinned = Boolean(query.get("run"));
+  const POLL_MS = 5 * 60 * 1000;
+  function nyParts(date) {
+    const map = {};
+    for (const part of new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York", hourCycle: "h23", weekday: "short",
+      year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"
+    }).formatToParts(date)) map[part.type] = part.value;
+    return map;
+  }
+  function nextPriceUpdate(now) {
+    const names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const t = nyParts(now);
+    const dow = names.indexOf(t.weekday);
+    const past = Number(t.hour) > 17 || (Number(t.hour) === 17 && Number(t.minute) >= 30);
+    let add = 0, nextDow = dow;
+    if (!(dow >= 1 && dow <= 5) || past) {
+      add = 1;
+      nextDow = (dow + 1) % 7;
+      while (nextDow === 0 || nextDow === 6) { add += 1; nextDow = (nextDow + 1) % 7; }
+    }
+    const utc = Date.UTC(Number(t.year), Number(t.month) - 1, Number(t.day) + add);
+    const day = new Date(utc);
+    const y = day.getUTCFullYear();
+    const m = String(day.getUTCMonth() + 1).padStart(2, "0");
+    const d = String(day.getUTCDate()).padStart(2, "0");
+    return `${y}-${m}-${d} 17:30 America/New_York`;
+  }
+  function ageLabel(iso, now) {
+    const then = Date.parse(iso);
+    if (!Number.isFinite(then)) return "生成时间未知";
+    const mins = Math.max(0, Math.round((now - then) / 60000));
+    if (mins < 60) return `${mins} 分钟前`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 48) return `${hours} 小时前`;
+    return `${Math.floor(hours / 24)} 天前`;
+  }
+  function fillStatus(now) {
+    if (!data) return;
+    const warn = data.freshness !== "current" || data.last_attempt?.status === "FAILED";
+    el("rotation-asof").textContent = `数据截至 ${data.source_session} 完整收盘 · 有效主题 ${data.valid_theme_count}/${data.total_theme_count} · 不含实时盘前行情`;
+    const generated = el("rotation-generated");
+    generated.hidden = false;
+    generated.textContent = `快照生成于 ${data.generated_at || "未知"} · 距今 ${ageLabel(data.generated_at, now)}`;
+    const next = el("rotation-next");
+    next.hidden = false;
+    next.textContent = pinned
+      ? "当前为固定历史快照，不会随最新发布自动切换"
+      : `下次价格层更新约 ${nextPriceUpdate(now)}；关联层 13:15 Asia/Singapore，盘前 07:00 ET 可重试`;
+    el("rotation-status").classList.toggle("warn", warn);
+    if (data.freshness !== "current") {
+      el("rotation-asof").textContent += " · 历史/新鲜度未确认，勿当作今日信号";
+    }
+    if (data.last_attempt?.status === "FAILED") {
+      el("rotation-asof").textContent += " · 最近构建失败，仍展示上次成功快照";
+    }
+  }
+  function showFrozen() {
+    el("rotation-frozen").hidden = !pinned;
+  }
+  async function checkLatest() {
+    if (document.visibilityState === "hidden" || !data) return;
+    try {
+      const latest = await get("/api/group-analytics/rotation");
+      if (latest.run_id && latest.run_id !== data.run_id) el("rotation-refresh").hidden = false;
+    } catch (_error) { /* keep the visible snapshot; retry on the next poll */ }
+  }
+  el("rotation-refresh-btn").addEventListener("click", () => { location.href = "/group-analytics"; });
   get("/api/group-analytics/rotation"+(query.get("run")?"?run="+encodeURIComponent(query.get("run")):""))
-    .then(snapshot=>{data=snapshot;el("rotation-status").textContent=`截至 ${data.source_session} 完整收盘 · 有效主题 ${data.valid_theme_count}/${data.total_theme_count} · 不含实时盘前行情${data.freshness!=="current"?" · 历史/新鲜度未确认，勿当作今日信号":""}${data.last_attempt?.status==="FAILED"?" · 最近构建失败，仍展示上次成功快照":""}`;if(data.freshness!=="current" || data.last_attempt?.status==="FAILED")el("rotation-status").classList.add("warn");el("rotation-audit").textContent=`快照 ${data.run_id} · 两个profile独立保存 · ${data.notes.join("；")}`;el("rotation-content").hidden=false;render();})
-    .catch(e=>{el("rotation-status").textContent="轮动数据尚未就绪";el("rotation-error").textContent=e.message;el("rotation-error").hidden=false;});
+    .then(snapshot=>{
+      data=snapshot;
+      el("rotation-audit").textContent=`快照 ${data.run_id} · 两个profile独立保存 · ${data.notes.join("；")}`;
+      el("rotation-content").hidden=false;
+      fillStatus(new Date());
+      showFrozen();
+      render();
+      document.addEventListener("visibilitychange", () => { fillStatus(new Date()); checkLatest(); });
+      setInterval(() => { fillStatus(new Date()); checkLatest(); }, POLL_MS);
+    })
+    .catch(e=>{el("rotation-asof").textContent="轮动数据尚未就绪";el("rotation-error").textContent=e.message;el("rotation-error").hidden=false;});
 })();
