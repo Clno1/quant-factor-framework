@@ -262,6 +262,7 @@ def test_digest_gate_stale_and_payload_budget(tmp_path):
     payload = rotation_payload(report,ctx,PremarketDigestSettings(dashboard_base_url="https://example.com"))
     assert "不含实时盘前" in payload["embeds"][0]["description"]
     assert "固定快照" in payload["embeds"][0]["description"]
+    assert report["kind"] == "rotation_v3"
     assert payload["embeds"][0]["url"].startswith("https://example.com/group-analytics?run=")
     assert any(field["name"] == "页面入口" and "https://example.com/group-analytics" in field["value"]
                and "?run=" not in field["value"] for field in payload["embeds"][0]["fields"])
@@ -286,6 +287,19 @@ def test_discord_stale_holdings_does_not_say_unlinked():
     text = payload["embeds"][0]["fields"][0]["value"]
     assert "过期未用" in text
     assert "真实广度未接入" not in text
+
+
+def test_v3_digest_kind_does_not_fall_back_to_daily_group_embed():
+    from src.premarket_digest.render import build_sector_rotation_payload
+    s = snapshot()
+    s["kind"] = "rotation_v3"
+    s["run_id"] = "rot_20260515_aaaaaaaaaaaaaaaa"
+    payload = build_sector_rotation_payload(
+        s, SimpleNamespace(target_session="2026-09-09"),
+        PremarketDigestSettings(dashboard_base_url="https://example.com"),
+    )
+    assert "不含实时盘前" in payload["embeds"][0]["description"]
+    assert "今日分类涨跌" not in str(payload)
 
 
 def test_service_calendar_holiday_future_and_no_publish_dry_run(tmp_path):
@@ -504,6 +518,10 @@ def test_linkage_success_advances_latest_and_keeps_old_run(tmp_path):
     replayed = store.load(old["run_id"])
     assert replayed["candidate_linkage"]["status"] == "unavailable"
     assert len(list((root / "runs").glob("*.json"))) == 2
+    from src.group_analytics.rotation.replay import replay_snapshot
+    assert "NO_QUALIFIED_CANDIDATE" in latest["rows"][0]["evidence_gaps"]
+    assert "NO_QUALIFIED_CANDIDATE" not in latest["rows"][0]["production"]["evidence_gaps"]
+    assert replay_snapshot(latest)["status"] == "MATCH"
 
 
 def test_linkage_rejects_refresh_and_without_candidates(tmp_path):

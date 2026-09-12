@@ -48,6 +48,7 @@ V2 已完成的 **SMH 试点**（见 [V2 验证文档 §4](sector_rotation_v2_va
 - 等权 &lt; 60 只进入 `observation_gaps.LOW_PARTICIPATION`，不写回 `production.evidence_gaps`（避免污染 replay / 关联层）
 - `validation.py` 不引用持仓观测；`make_panel` 继续拒绝 current-member 回看
 - 带 overlay 的快照 `replay_snapshot` 仍为 MATCH（只比 production/compatibility）
+- 关联层缺口只写在行级 `evidence_gaps`，不写回 `production.evidence_gaps`
 
 ## 4. 存储与排期
 

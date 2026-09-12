@@ -104,9 +104,8 @@ def attach_candidates(snapshot, report=None, *, unavailable_reason=None):
             if "LINKAGE_FAILED" not in gaps:
                 gaps.append("LINKAGE_FAILED")
         theme["evidence_gaps"] = gaps
-        production = dict(theme["production"])
-        production["evidence_gaps"] = gaps
-        theme["production"] = production
+        # Linkage/display gaps stay on the row. production.evidence_gaps remains
+        # the engine snapshot so replay MATCH still holds after association.
     return result
 
 
@@ -124,7 +123,11 @@ def load_rotation_report(source_session, *, store=None, now=None):
             raise SourceGateError("ROTATION_FUTURE", "轮动快照生成时间异常")
     if report.get("valid_theme_count", 0) < max(1, report.get("total_theme_count", 0) * .8):
         raise SourceGateError("ROTATION_LOW_COVERAGE", "有效主题不足80%，暂停盘前摘要")
-    return {**report, "kind": "rotation_v2"}
+    # Discord renderer switches on this kind (not schema_version). Keep both
+    # labels so a v3 snapshot is not mistaken for the old single-day group digest.
+    schema = str(report.get("schema_version") or "")
+    kind = "rotation_v3" if schema.startswith("rotation.v3") else "rotation_v2"
+    return {**report, "kind": kind}
 
 
 def _pct(value):
