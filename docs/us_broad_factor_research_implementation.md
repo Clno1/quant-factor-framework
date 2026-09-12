@@ -1405,3 +1405,219 @@ IBTA/UAN/WBI分钟证据不足，不是09-10日线合同过期或八因子任务
 未抢跑、未重复重建648分片、未修改Web默认开关。11:45巡检应读取常态任务真实结果和新正式绑定，
 不能因为旧factor service的exit0就认为新目标已发布。
 宽基data shadow保存的09-10连续1/5记录不等于新目标验收通过，更不能与茶杯柄v3的0/5混用。
+
+### 30.7 2026-09-12 下午：退市历史分页预算不足及受控恢复
+
+本节更新30.6的“等待日更”：11:30初跑和12:06重试现已真实FAILED，12:41达到StartLimit。
+两个运行均在SECURITY_MASTER阶段报`delisted history does not reach history_start`，未运行
+后续coverage/PIT，不是尚未调度，也不是内存不足。重试证据为
+`outputs/data_audits/broad_daily_pipeline/target=2026-09-11/run=20260912T040601Z_5ad8b665.json`。
+主表审计为`outputs/data_audits/security_master_candidates/asof=2026-09-11/run=20260912T040602Z_01d52901/audit.json`：
+100页、stop_reason=max_pages、oldest_loaded=2019-12-05、history_boundary_reached=false，
+未达要求的2019-01-01；峰值RSS572.754MiB。质量失败时正式版本未被该候选替换。
+
+对更后页的有限探测确认page=100已有2018年真实记录。不同查询时刻的分页内容可能变化，
+不将事后探测拼接进中午冻结源。本轮仅把`configs/default.yaml`中的
+`data.security_master.delisted_max_pages`从100增至200；保留历史起点、身份校验和发布门槛。
+SG部署前核对配置SHA-256并确认YAML唯一差异，备份到
+`outputs/deploy_backups/cup_shadow_20260912_pagination/default.yaml.before`。
+新配置SHA-256=`928b391ecf519a4edf4dd6b892e0a29b79c7e1ee654d7523f7bed1f340d22325`。
+
+16:56:28启动独立`quant-cup-upstream-recheck-20260912.service`，运行现有正式pipeline，
+target=09-11，保留`.broad-production.lock`及700M/900M内存软硬限制、TasksMax=64、Nice=10。
+此独立unit不触发原coverage service的八因子OnSuccess，不将旧八因子exit0说成09-11发布。
+17:02:02主表阶段已PASS并正式发布：
+
+- generation=`5c738854ad504f1c863c47cf15bb4a63`，target=09-11，10791证券、5354活跃普通股。
+- manifest SHA-256=`d9d00cf2b7db5c47bbf9ef00c28aea06507414c7bfa0f89a5dac9672531fc3ed`。
+- 新鲜抓取102页，oldest_loaded=2018-07-31，stop_reason=history_start_reached，
+  history_boundary_reached=true；边界外数据不混入要求范围内的正式记录。
+- 主表审计`outputs/data_audits/security_master_candidates/asof=2026-09-11/run=20260912T085629Z_1e820d52/audit.json`，
+  SHA-256=`1f22da60a7d62c170c96becb29dccb7e41119749039fc4918c74591799e4758a`，峰值RSS553.652MiB。
+
+这修复的是本次上游分页截断，不解决茶杯柄UAN/WBI/IBTA分钟证据不足，也不追认09-08/11失败或
+09-04/09/10缺跑。候选必须另行验证新coverage/PIT，不能仅凭主表PASS就宣称下周已准备完成。
+茶杯柄仍严格v3 0/5、delivery=false；全链路恢复终态见下方记录。
+
+#### 17:30至17:38终态：主表恢复，行情认证仍失败
+
+受控任务于17:30:56退出1，不是超时或OOM。正式pipeline报告
+`outputs/data_audits/broad_daily_pipeline/target=2026-09-11/run=20260912T085628Z_f6572f89.json`
+状态FAILED，SHA-256=`2398cc9551d6f6bc5813c69cd63438cfe04b040676393d6f4fc68fbb92bd2985`。
+主表阶段333.455秒SUCCESS；coverage阶段1734.567秒FAILED，PIT未执行。总耗时34分28秒，
+CPU349.723秒、cgroup峰值701.9MiB、swap0，报告进程峰值RSS629.566MiB，两种峰值口径不可混用。
+中途仅将独立恢复unit的临时时限延长到一小时，内存限制和生产锁未变，进程没有重启。
+
+真实阻断为5295只证券未通过重叠窗口认证，只有463只认证通过；不存在新coverage/PIT发布。
+审计位于`data/lake/staging/us_equity_coverage_incremental/asof=2026-09-11/run=20260912T090204Z_59396a5f/overlap_scope_audit.json`，
+SHA-256=`0b1d42593c8d332a126188db88539bf630bc11e704b4aacc6bbb7644b0b6985a`。
+按每只证券首先触发的失败字段：open2674、high1118、volume863、low587、close43、adj_close10；
+均标为recoverable，但该标记只是进入显式全历史修复的资格，不表示已经修复或可以放行。
+
+进一步只读对比这5295只的正式父版本和本轮冻结bulk：父版本79274行，按已审计当前ticker
+匹配79262行，另12行未匹配，不能当成一致；共6767个匹配行有变化。
+其中4680只在匹配范围内仅09-10发生变化，615只还涉及更早日期。此分析按绝对差1e-9定位变化，
+不是新的生产容差，不替代身份映射、价格语义或正式认证。不能将全部5295只简单归类为单日修订。
+
+三个有界逐票历史重查样本支持“已发布末日后来发生源修订”，而非CPU故障或必须统一缩放：
+
+| 股票 / 09-10字段 | 正式父版本 | 本轮冻结bulk及当前逐票历史源 |
+| --- | ---: | ---: |
+| BRBS low | 4.035 | 4.03 |
+| UNCY open | 5.06 | 5.07 |
+| NKE volume | 29559153 | 29961018 |
+
+三个样本的更早重叠日期一致，当前bulk与逐票历史源一致；这只是三个样本的交叉核对，
+不证明所有5295只的修订原因或最终性。现有认证路径只允许可证明的统一尺度调整，遇到非统一
+修订要求显式全证券历史重建，因此供应商后续修订会持续阻断日更。
+冻结样本及全范围日期分布保存在`reviews/2026-09-12-cup-shadow-investigation/`。
+
+正式coverage仍`76e68448ccea48f5b5e1dbf871c9f6c9`、target=09-10；PIT仍
+`857031854a554d9bbfee942a6bfc3919`，绑定旧主表`496db448b54e4ae49701512b3acfd64c`，
+不能虚假拼接到新主表。八因子仍09-10的`b6108d673ac447dab5e7be88e7f76ca1`，本轮没有触发重算。
+17:32纯构建函数隔离检查09-14/source=09-11候选，明确BLOCKED：
+`[US_EQUITY_COVERAGE] target 2026-09-10 is stale; expected 2026-09-11`。
+候选表及四张cup表总行数前后完全一致，没有持久化未来候选或补记观察。
+
+后续修复建议：先按冻结差异、身份与公司行动证据分流，设计可审计的逐日源修订认证路径，
+验证允许替换的真实源行、修订边界和不可变父版本；对更早日期变化及未匹配行保留更严格调查，
+必要时按现有显式整票历史恢复机制重建。不得将三个样本外推为整批通过，不能放宽容差、
+无证据覆盖历史、跳过认证，或直接盲跑5295只全历史重建。本轮在真实FAIL处停止，没有新成功日。
+
+### 30.8 2026-09-12 18:13：严格末日修订审计与完整前缀认证
+
+已实现并部署`src/data/coverage_revisions.py`和`scripts/audit_coverage_revisions.py`，仅审计，
+没有`--publish`入口。现有统一尺度容差、全历史修复和发布门槛均未改变；历史修复辅助函数
+只新增默认关闭的`cache_only`参数，审计读取421份canonical缓存时禁止抓取、创建或覆盖缓存。
+先验证失败scope SHA、不可变父版本manifest、正式主表、历史身份映射、完整XNYS日期列表和
+逐日冻结artifact SHA，再按完全相等逐字段分类；不按1e-9过滤差异，也不按当前ticker直连。
+
+| 本轮5295只失败范围的分类 | 数量 | 证据边界 |
+| --- | ---: | --- |
+| LOCAL_REVISION_CANDIDATE | 4844 | 重叠范围仅父版本末日09-10变化，仍须逐票完整历史核验 |
+| FULL_HISTORY_REQUIRED | 450 | 更早日期也有差异，不能按末日修订替换 |
+| BLOCKED | 1 | CEPS父版本缺09-10，而冻结源新增该日；09-09 volume另由52026变52033 |
+
+该口径复现生产历史身份映射和421份canonical覆盖，与30.7初步current-ticker bulk连接的
+4680/615/12行未匹配不同；后者保留为历史诊断，不再用于认证结论。450只更早差异可能涉及
+不同修订机制，不能未经逐票证据就全部解释为公司行动或精度变化。
+
+三个指定样本两次真实源回查均通过，第二次使用实际部署模块：
+
+| 股票 | 全历史行数 | 逐字段相同的保留前缀行数 | 09-10真实修订 |
+| --- | ---: | ---: | --- |
+| BRBS | 1934 | 1932 | low4.035到4.03，volume1095746到1095796 |
+| UNCY | 1299 | 1297 | open5.06到5.07，high5.61到5.62，volume1241799到1241816 |
+| NKE | 1934 | 1932 | volume29559153到29961018 |
+
+全历史核验范围分别始于2019-01-02、2021-07-12、2019-01-02，止于2026-09-11。要求所有
+父版本日期保留、历史别名一致、六个行情字段完全相同（09-10允许已绑定的真实修订），
+已有名义收盘价前缀也必须相同；canonical与冻结源的修订及新日逐字段一致，缺失/额外日期、
+无效行情、窗口外变化、源冲突、绑定变更均阻断。三只共5161行保留前缀零差异，零缺失、零
+隔离、零源冲突，状态VERIFIED_LOCAL_REVISION。该标签是认证证据，不是发布许可；publishable=false。
+剩余4841只候选尚未全前缀核验。不能把三只通过当成4844只或5295只通过。
+
+最终报告：`outputs/data_audits/coverage_revisions/target=2026-09-11/run=20260912T101242Z_7fc766f6/audit.json`，
+SHA-256=`343ac33a37b5c1cf7f937c912604f60e35975644c3ac5b0a59fe26a29dcb4615`。
+绑定原scope SHA=`0b1d42593c8d332a126188db88539bf630bc11e704b4aacc6bbb7644b0b6985a`，
+父版本`76e68448ccea48f5b5e1dbf871c9f6c9`、主表`5c738854ad504f1c863c47cf15bb4a63`，
+同时保留输入缓存、主表/父manifest、覆盖政策和三个代码文件的SHA及完整逐票证明路径。
+本地摘要及部署证据：`reviews/2026-09-12-coverage-revision-authentication/`。
+
+SG单次审计18:10:13到18:13:06成功结束，2分53.099秒，CPU157.209秒、峰值571.5MiB、swap0；
+使用MemoryHigh=650M、MemoryMax=750M、TasksMax=64、RuntimeMaxSec=900和Nice=10。
+退出0/AUDITED仅表示审计完成，不表示coverage发布成功。71项测试覆盖历史修复、coverage、
+修订前缀、日期/身份/源冲突、缓存只读和哈希篡改、禁止发布和有界CLI；SG隔离模块10.92秒全过，
+实际部署模块9.90秒再次全过，本轮没有在本地项目venv执行。
+
+正式coverage/PIT仍09-10，PIT仍`857031854a554d9bbfee942a6bfc3919`；没有重算八因子、
+新候选或生产日结。本次部署备份`outputs/deploy_backups/coverage_revision_audit_20260912/`，
+不包含并行EP修改，也未改动任何发送开关。
+
+后续恢复需完成逐票认证和可断点的受控取证；更早修订/CEPS按全历史真实源、日期与身份合同
+单独处理。再审查带expected-parent校验的不可变发布接入、验证PIT重建及09-14候选。
+当前工具刻意不承担发布，不能因样本认证成功跳过这些步骤。分钟缺口仍是独立阻断，详见茶杯柄36。
+
+### 30.9 2026-09-12 20:15：有界全量认证与受控发布准备
+
+用户批准继续完整逐票认证、受控发布及PIT/候选验证。本轮复用原有整票canonical替换路径，
+不把修订价拼入旧前缀。writer新增`--repair-only`、只准备时允许的offset/limit、1或2个worker、
+`--expected-scope-sha256`及`--repair-cache-only`。部分范围不能发布；缓存模式拒绝所有新增
+provider请求，包括bulk、identity delta、canonical refresh、替换历史及月末名义价格。
+每批最多25只父历史，报告每10只/错误落盘；某票失败不掩盖其他票，但整批不得发布。
+
+绑定固定target=09-11，父coverage=`76e68448ccea48f5b5e1dbf871c9f6c9`、当前主表=
+`5c738854ad504f1c863c47cf15bb4a63`，scope SHA=
+`0b1d42593c8d332a126188db88539bf630bc11e704b4aacc6bbb7644b0b6985a`。
+固定范围5295只，不能仅认证4844候选后跳过450更早修订或CEPS。已审核隔离与查询映射规则未改。
+
+先50只试点全过，报告`run=20260912T114207Z_b0506f0b/full_history_repair.json`，SHA=
+`227bb699260d0707914e25e82b5e3deae3f8c6dac3950fd95727b5792999ee94`，208.489秒、701.9MiB峰值，
+未发布。19:46完整任务启动，报告目录为
+`data/lake/staging/us_equity_coverage_incremental/asof=2026-09-11/run=20260912T114630Z_0da7917a/`。
+20:14检查点740完成、738通过、TEAD/SNYR失败，仍RUNNING；此处不是终态或发布许可。
+
+TEAD的OB历史到2025-06-09缺88个父版本日期；按同窗口查询TEAD，full/dividend-adjusted/
+non-split-adjusted三个端点均只返回2025-05-14..06-09的18日，OB三端点均空。更名映射不能
+补齐余下70日。SEC文件证明收购与正式换代码时间，但不证明缺失OHLCV；没有加新映射、拼旧
+前缀或删日期。SNYR新源无效bar不与已审核隔离一致，也不能直接加入白名单。原始响应和来源
+链接保存在本轮review，必须取得完整真实源证明才能解除发布阻断。
+
+130项coverage/整票修复/基础数据/PIT/适配器回归在SG实际部署模块通过（21.52秒）。缺失父身份
+反例先失败，再将批量父读收紧为精确身份集合；更严格helper于19:51部署，准备进程此前已加载
+旧代码。任何后续发布必须用新helper重新验证全部缓存，不信任早期报告的PASS标签。writer、
+前后helper、报告及备份SHA见`reviews/2026-09-12-coverage-controlled-recovery/README.md`。
+
+正式指针仍为09-10 coverage/PIT，八因子没有重算。20:11不发布的PIT检查实际报当前主表代际
+不一致；纯候选构建09-14/source=09-11报日线stale，未写候选或cup表。全范围认证成功后才可
+执行cache-only完整发布，再绑定新coverage重建PIT并验证候选；当前存在明确失败，不能仅等
+五天、声称PIT就绪或自动开消息。分钟缺口与v3后验代理另见茶杯柄37，不受日线认证通过替代。
+
+### 30.10 2026-09-12 23:36：5295只终态、31项修复及四项发布阻断
+
+原策略全量认证23:08:04结束：5295全部检查，5260通过、35失败，未中断。原报告SHA=
+`7cee92f0f7051ed95c2d456926de2ef8fd65f734d3d1298be3db5bcd6f752d3a`；完整失败清单SHA=
+`c0a7317280e63de081e2c5c6debf2a145ad99d4fe5d52c1e2c6fb7ec8c8b9b3b`。原报告不覆盖。
+
+逐项复查后部署candidate3修复规则，保持现有校验器和所有门槛不变：16条查询映射含原HSON，
+新增15只为INEO、BCIC、GXAI、HYPD、IMDX、NXH、TONX、GDYN、CHAI、VRXA、SMRT、
+FGNX、LUXE、WLY、PAMT。仅改变已证明的provider查询键，保留历史ticker/security_id和
+正式有效期，重新下载并验证整票历史。NXH限定原Overstock同一发行人链，不混入旧破产BBBY；
+GDYN/SMRT保持原SPAC身份，WLY只用Class A。来源及各窗口见review的映射文件和README。
+WLY换代码日期由发行人公告/OCC确认，SEC年报仅确认身份，证据角色分开，未伪称SEC提供日期。
+
+既有隔离来源切换至09-04版本`562967c01bb54e2ab39454804cc4ac73`，manifest SHA=
+`7388933abb12306b88ebe05bf51c2eb9fa15b29e1ac51c3af273e29af1326579`、quarantine SHA=
+`e5ea49cc797694e27cc5c02c21f1e54449cf917a8f1a30cde6cca6dc3b2cba4f`。只选120个精确键：
+原6行加16只失败股票的114行，逐字段匹配旧隔离且移除有效父日期0。不是全账本白名单，也不是
+新增坏数据豁免。SNYR/QVCG等早期“未在已审核规则中”已经此真实账本证明解决，旧失败仍保留。
+
+policy SHA=`050371ca4001ad8c6e050fc5db118b055e8728cd704d8348fb8e0b92d6c1057f`，
+23:13:50生产锁下旧SHA校验、备份、原子部署；23:14:12至23:35:35以严格父身份helper
+`09c2256ba03a95ebdffd2f3f818344f2042b375977068793b68d296f58407f1b`重新认证5295只。
+最终5291通过、4失败，原失败消除31项（15条别名修复、16只既有隔离继承）；5276只通过项重用
+冻结原始字节并重新校验，15只查询映射变化重新抓取整票，绝非借用旧PASS。CEPS 151/151、
+MDB 1934/1934日期真实认证通过，不能再把CEPS列为未处理，也不能据此宣布MDB回放通过。
+
+复验报告`run=20260912T151414Z_5c8711d0/full_history_repair.json`，SHA=
+`8f65155994b3f813c888745d01840cc4de81af88ef13cda3edc97de36b7e9042`。scope仍完整固定5295只，
+SHA=`0b1d42593c8d332a126188db88539bf630bc11e704b4aacc6bbb7644b0b6985a`；更早修订没有跳过。
+
+| 剩余股票 | 当前原始失败 | 独立证据与修复条件 |
+| --- | --- | --- |
+| TEAD | OB缺88个父日期 | TEAD只能返回其中18日，仍缺70日；要求供应商恢复三类完整真实价格序列 |
+| BGMS | CYCC缺190日，2024-12-06..2025-09-11 | BGMS三个端点同窗口全空；换代码身份已证明但行情缺失未解 |
+| STEX | BSGM缺313日，2024-06-12..2025-09-11 | STEX三个端点同窗口全空；不拼旧前缀或删除日期 |
+| XMAX | NVFY缺2025-11-06/07两日 | XWIN真实数据已存在，但尚缺充分独立的11-10交易代码切换证据，映射未批准 |
+
+因此正式coverage发布为BLOCKED_NOT_ATTEMPTED，不用5291只部分发布。正式coverage仍
+`76e68448ccea48f5b5e1dbf871c9f6c9`（09-10），当前主表仍`5c738854ad504f1c863c47cf15bb4a63`，
+PIT仍`857031854a554d9bbfee942a6bfc3919`，绑定旧代际。23:36实际PIT检查仍报代际不一致，
+09-14/source09-11候选仍报日线stale，MDB实际回放仍报PIT代际不一致；没有生成正式候选。
+
+后续先解决上述源/身份阻断，按当时正式父版本/主表重新核对冻结合同与scope；若合同漂移必须
+重新准备，不盲用此次缓存。完整范围全部通过后才可cache-only受控发布并保留expected-parent
+CAS及全局质量门槛，再绑定精确新coverage重建PIT、验候选、重跑MDB。八因子没有重算，旧失败
+交易日不补记，分钟缺口独立处理。数据链135项、运维/cup/后验41项回归通过；资源见SG55。
+本地和SG审计产物：`reviews/2026-09-12-coverage-controlled-recovery/`，包含完整两轮报告、
+逐票修复证明、原始源响应和未发送的供应商修复请求草稿。发送仍false、v3仍0/5。

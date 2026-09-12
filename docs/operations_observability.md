@@ -1017,3 +1017,104 @@ operations Web昨夜23:43有序停止/启动，journal无warning/error；盘中�
 healthz 200且快照新鲜、watchdog成功、资源PASS，不能将业务质量FAIL归为基础设施故障。
 专项主表/行情/PIT/八因子因目标日推进暂显STALE，版本仍09-10；11:30日更未到时，详见宽基30.6。
 本轮只追加真实证据与根因建议，不改写日结、不重分类缺口、不开启发送。详见茶杯柄34和SG运维51。
+
+## 49. 2026-09-12 下午：区分历史失败、查询时刻与恢复运行
+
+17:01:44运维快照的target_session已推进09-14，但intraday_momentum仍为
+DEGRADED/completed_session，明确保留09-11的两个质量失败原因、daily-cup-5m-handle-shadow-v3
+和0/5。不能因目标为下周就显示为仅SCHEDULED；也不能借用legacy日结PASS或旧v2记录。
+17:02 healthz为ok，快照年龄56秒低于180秒阈值；watchdog/Web正常，分钟服务是成功完成后inactive。
+
+16:47供应商重查与历史台账是不同事实：WBI两个桶事后出现native 5min，不能覆盖09-11
+实时缺口；UAN九桶和IBTA一桶仍无记录。历史分类保留12个UNRESOLVED_SOURCE_GAP，另两种
+确认分类均0，不把重复评估77次累计成77个缺口，也不把空响应当成确认无成交。
+零信号的误报代理为不可估计，不得格式化为0%。详细源响应/合同/测试见茶杯柄35。
+
+11:30和12:06的上游SECURITY_MASTER失败及12:41 StartLimit应保留：退市历史100页未抵达
+2019-01-01，既不是尚未调度，也不是内存不足。本轮配置改为200页后以独立
+`quant-cup-upstream-recheck-20260912.service`恢复，保留旧失败journal；主表17:02质量PASS。
+新恢复任务与原service的失败退出状态应分别解释，不能用原exit0或单一新主表PASS代替行情/PIT
+全链路验收。阶段结果、正式版本、资源及后续风险统一记录在宽基30.7。
+
+17:30:56恢复任务最终FAILED：主表成功，coverage因5295只重叠认证失败而停止，PIT未执行。
+不能用新主表PASS覆盖整条上游失败，也不能将临时任务正常完成取数等同于发布成功。
+17:32候选隔离检查明确旧target=09-10、expected=09-11，候选和cup表行数未变化。
+详情及4680末日差异/615更早差异/12未匹配行的边界见宽基30.7。
+
+合同完整性聚合已从any收紧为非空且all，先以隔离测试复现、后部署，相关62项测试通过，
+包括保留最近完整日FAIL的运维回归。09-11本来70批全部完整，因此这不是当日失败原因，
+也不改写其FAIL、0/5或缺口分类。历史版本切换和原上游失败journal均保留。
+
+17:42收尾实测：target=09-14而状态仍DEGRADED/completed_session，明确指向09-11两个失败原因。
+healthz为ok、快照36秒新鲜，发送false、v3 0/5。独立恢复已退出，临时/run时限配置已清理。
+
+## 50. 2026-09-12 18:13：AUDITED不得覆盖正式失败
+
+新修订工具只写独立审计证据，不写正式发布、候选、cup日结或运维快照。受控单次任务
+18:13:06退出0/AUDITED，含4844只待完整认证候选、450只更早修订、CEPS日期覆盖阻断及三只
+VERIFIED_LOCAL_REVISION样本；每只样本publishable=false。该成功不覆盖17:30正式pipeline
+FAILED，也不将仍停09-10的coverage/PIT显示成09-11成功。正式报告及边界见宽基30.8。
+
+18:11读取四张cup表，行数与上轮一致；最新完整日09-11的两个质量失败原因、算法v3、
+参数2026-09-01.1及0/5均保留。18:13认证API仍DEGRADED/completed_session，即使目标推进09-14，
+也未被SCHEDULED或旧动量PASS覆盖。healthz正常、快照68秒低于180秒阈值；未认证401正常。
+本轮没有重启Web/watchdog，没有改写历史版本或失败记录，发送仍false。
+
+新增审计报告同时记录父数据/主表/冻结scope及源artifact/政策/实现SHA，逐票保存前缀检查行数、
+缺失或额外日期、源冲突与异常信息。API、服务journal、部署哈希和审计摘要保存在
+`reviews/2026-09-12-coverage-revision-authentication/`。SG部署后71项回归通过，
+单次审计资源峰值571.5MiB、CPU157.209秒、无swap；任务正常结束不等于业务门槛通过。
+
+## 51. 2026-09-12 20:15：逐票检查点和发布状态分离
+
+完整5295只canonical认证以独立systemd单次任务运行，每10只或失败时写结构化检查点，
+保留逐票manifest/hash、实际错误和中断原因。PREPARED_BATCH/RUNNING不是正式coverage PASS；
+仅当完整固定scope通过，后续缓存只读发布再次认证全部父历史和源artifact，并通过原子
+expected-parent校验及所有全局质量门槛，才能推进正式版本。没有自动成功回调。
+
+20:14检查点740完成、738通过、TEAD/SNYR两失败，仍在运行。TEAD源日期缺失及SNYR无效
+行情分别保留，不覆盖17:30 pipeline FAILED；当前coverage/PIT仍09-10。20:11前置验证实际
+返回PIT代际不一致、09-14候选日线stale。正式失败、数据版本切换、最新完整交易日FAIL都必须
+保留，不由准备进度、SCHEDULED、旧动量PASS或后验审计成功覆盖。
+
+后验新报告绑定原始v3信号、候选payload和原始分钟响应SHA，counts_for_shadow_promotion=false。
+NKTR的STOP_FIRST、VTS的NONPOSITIVE_OHLCV未决分别展示，resolved-only与all-signal分母分开；
+未决或零信号的全样本误报率为null，不显示0%。不改写旧signal、gap或日结表。详情见茶杯柄37。
+本轮独立证据在`reviews/2026-09-12-coverage-controlled-recovery/`，发送保持false。
+
+20:15认证API实测healthz=ok、快照13.7秒；target=09-14而仍为DEGRADED/completed_session，
+保留09-11 FAIL和v3 0/5。四张表v3行数140/5560/2/25已冻结哈希，仅用于后续不可变核对，
+不作为五日验收数量。两天各70批合同完整，cup delivery=false。
+
+## 52. 2026-09-12 23:36：修复规则部署不等于正式数据发布
+
+原策略全量5295只终态5260通过/35失败；新策略严格复验同一完整范围后5291通过/4失败。
+31项修复具备整票原始源及父历史证明；其余TEAD/XMAX/BGMS/STEX阻断完整发布。两个独立
+FAIL报告不可变保留，不能被新准备任务、规则部署、局部修复成功或后续计划覆盖。
+policy candidate3已部署并记录旧/新SHA、备份和时间；coverage/PIT指针没有切换，没有因规则
+哈希变化自动生成新候选、重算历史观察或宣布上游健康。完整证据见宽基30.10。
+
+23:36认证API实测healthz=ok、快照10.2秒；target=09-14，仍DEGRADED/completed_session，
+明确保留09-11 v3 FAIL、两个失败原因、0/5以及版本信息。四张cup表v3哈希与20:15完全相同，
+对应140/5560/2/25行仅作不可变审计，五日统计仅09-04/08/09/10/11，不复用旧算法或旧动量。
+09-08/11失败、09-04/09/10缺失，无通过日期。发送仍false；运维/cup/后验41项回归通过。
+
+展示零信号或存在未决样本时，误报率必须为null，不显示0%。09-08两信号仅NKTR可判定且
+STOP_FIRST，VTS零量未决；09-11无信号。12个唯一分钟缺口全为UNRESOLVED_SOURCE_GAP，
+NO_TRADE_CONFIRMED与PROVIDER_GAP_CONFIRMED均0，重查结果不回写旧日验收。
+
+最终只读检查实际运行指定status、四服务与timer/journal、四张v3表、PIT、候选和MDB回放。
+PIT/候选/MDB依次仍报主表代际不一致、日线stale、PIT代际不一致。失败不是仅等待五天可解；
+必须获得缺失真实源/确切身份边界，再走完整认证、受控发布、PIT重建和候选验证。没有工单
+自动外发、订阅购买或通知开启。证据`reviews/2026-09-12-coverage-controlled-recovery/closeout-final.json`。
+
+## 53. 2026-09-13 00:10：未完成验收项与已完成检查分开
+
+认证API实测healthz=ok、快照42秒；target仍09-14，状态DEGRADED/completed_session，
+保留09-11 FAIL、v3、两个失败原因及0/5，未被后续SCHEDULED覆盖。四张v3表本轮只读行数
+140/5560/2/25；正式status仍无通过日期，09-08/11失败、09-04/09/10缺失，发送false。
+
+原要求的剩余项见茶杯柄39：新交易日正式数据/候选、分钟质量、MDB v3/未决后验证据及五日
+验收。PIT、候选、MDB实际重试仍被同一上游链阻断，不能把三次报错描述成三个新增根因，
+也不能以之前已部署代码和5291只认证通过声称正式数据已发布。本轮没有新发布或版本切换。
+已有服务检查、成交量保护、失败保留和统计展示不是待开发项；不将零信号或未决样本显示成0%误报。

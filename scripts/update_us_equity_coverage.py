@@ -47,7 +47,7 @@ from src.data.fmp import (  # noqa: E402
 from src.data.price_semantics import build_price_semantics_contract  # noqa: E402
 from src.data.broad_history_repair import (  # noqa: E402
     REPAIR_METHOD, audit_overlap, fetch_replacement, replace_month, verify_repaired_rows, load_repair_rules,
-    refresh_canonical_sources,
+    refresh_canonical_sources, collect_replacements,
 )
 from src.data.foundation import (  # noqa: E402
     DataFoundationError,
@@ -103,6 +103,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="explicitly refetch and replace entire histories of semantic-drift securities")
     parser.add_argument("--reuse-frozen-repair-inputs", action="store_true",
                         help="revalidate hash-bound full raw responses after a reviewed quarantine policy change")
+    parser.add_argument("--repair-only", action="store_true",
+                        help="prepare authenticated histories only; never build or publish partitions")
+    parser.add_argument("--repair-offset", type=int, default=0)
+    parser.add_argument("--repair-limit", type=int,
+                        help="bounded scope slice, permitted only with --repair-only")
+    parser.add_argument("--repair-workers", type=int, choices=(1, 2), default=1)
+    parser.add_argument("--repair-cache-only", action="store_true",
+                        help="require authenticated caches and forbid all new provider reads")
+    parser.add_argument("--expected-scope-sha256",
+                        help="refuse a changed frozen failure scope before full-history work")
     parser.add_argument("--json", action="store_true")
     return parser.parse_args(argv)
 
@@ -592,10 +602,35 @@ def _attach_month_end_nominal_close(
     return out
 
 
-def run(args: argparse.Namespace) -> tuple[dict, int]:
-    started = time.perf_counter()
+def _validate_repair_options(args):
+    repair = bool(getattr(args, "repair_full_history", False))
+    prepare = bool(getattr(args, "repair_only", False))
+    offset, limit = getattr(args, "repair_offset", 0), getattr(args, "repair_limit", None)
+    if (prepare or getattr(args, "repair_cache_only", False) or offset or limit is not None) and not repair:
+        raise ValueError("bounded/cache-only preparation requires --repair-full-history")
+    if prepare and args.publish:
+        raise ValueError("--repair-only cannot publish")
+    if offset < 0 or (limit is not None and limit < 1):
+        raise ValueError("repair offset/limit is invalid")
+    if (offset or limit is not None) and not prepare:
+        raise ValueError("partial repair scope is allowed only with --repair-only")
+    if getattr(args, "repair_workers", 1) not in (1, 2):
+        raise ValueError("repair workers must be one or two")
+    if getattr(args, "repair_cache_only", False) and not getattr(args, "expected_scope_sha256", None):
+        raise ValueError("--repair-cache-only requires --expected-scope-sha256")
     if getattr(args, "reuse_frozen_repair_inputs", False) and not getattr(args, "repair_full_history", False):
         raise ValueError("--reuse-frozen-repair-inputs requires --repair-full-history")
+
+
+def _refuse_provider_fetch(*_args, **_kwargs):
+    raise DataFoundationError("cache-only recovery forbids new provider reads")
+
+
+def run(args: argparse.Namespace) -> tuple[dict, int]:
+    started = time.perf_counter()
+    _validate_repair_options(args)
+    cache_only = bool(getattr(args, "repair_cache_only", False))
+    history_fetcher = _refuse_provider_fetch if cache_only else get_coverage_historical_ohlcv
     target = (
         pd.Timestamp(args.target_session).normalize()
         if args.target_session
@@ -723,6 +758,7 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
         security_ids=identity_delta_ids,
         history_start=str(settings.history_start),
         history_end=history_delta_end,
+        fetcher=history_fetcher,
     )
     identity_delta_audit = {
         "schema_version": 1,
@@ -779,6 +815,7 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
         frame, cache_hit, _cache_manifest = _load_or_fetch_eod_bulk_session(
             cache_dir=provider_cache_dir,
             session=session,
+            fetcher=_refuse_provider_fetch if cache_only else get_eod_bulk,
         )
         if cache_hit:
             bulk_cache_hits += 1
@@ -861,7 +898,10 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
             if not check.passed
         )
         raise DataFoundationError(f"provider bad-bar quarantine rejected: {detail}")
-    mapped = _attach_month_end_nominal_close(mapped, after=parent_target, target=target)
+    mapped = _attach_month_end_nominal_close(
+        mapped, after=parent_target, target=target,
+        fetcher=_refuse_provider_fetch if cache_only else get_unadjusted_historical_close,
+    )
     broad_reader = BroadCoverageReader(market_reader=market_reader)
     previous_overlap = broad_reader.load_bars(start=refresh_start, end=parent_target, version=parent)
     canonical_ids = set(parent_manifest.get("quality_lineage", {}).get("canonical_history_security_ids", []))
@@ -870,7 +910,7 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
         mapped=mapped, previous_overlap=previous_overlap, security_ids=canonical_ids,
         cache_dir=provider_cache_dir, contract=_provider_cache_contract,
         universe=security_universe, symbols=security_frames["symbols"],
-        refresh_start=refresh_start, target=target, fetcher=get_coverage_historical_ohlcv,
+        refresh_start=refresh_start, target=target, fetcher=history_fetcher, cache_only=cache_only,
     )
     adjustment_audit, overlap_failures = audit_overlap(previous_overlap, mapped, parent_presence_ids)
     scope_path = run_dir / "overlap_scope_audit.json"
@@ -884,6 +924,9 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
         "affected_count": len(overlap_failures), "failures": overlap_failures,
     }
     atomic_save_json(scope, scope_path)
+    expected_scope = getattr(args, "expected_scope_sha256", None)
+    if expected_scope and _sha256(scope_path) != expected_scope:
+        raise DataFoundationError("frozen repair scope SHA-256 changed; no repair or publication allowed")
     if getattr(args, "audit_overlap_only", False):
         return {"status": "AUDITED", "report_path": str(scope_path),
                 "affected_count": len(overlap_failures)}, 2 if overlap_failures else 0
@@ -907,40 +950,39 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
             catalog=catalog, market_reader=market_reader,
         )
         repair_contract["reviewed_rules"] = rules_contract
-    # Sequential per-security downloads and on-disk checkpoints bound memory.
-    # A failed security keeps the entire publication closed, not just its rows.
-    for index, item in enumerate(overlap_failures):
-        sid = item["security_id"]
-        try:
-            previous = broad_reader.load_bars(security_ids=[sid], version=parent)
-            path, proof = fetch_replacement(
+    if overlap_failures:
+        def replace_security(sid, previous):
+            return fetch_replacement(
                 cache_dir=provider_cache_dir, contract=repair_contract, security_id=sid,
                 universe=security_universe, symbols=security_frames["symbols"],
                 previous=previous, recent=mapped.loc[mapped.security_id.eq(sid)],
                 history_start=str(settings.history_start), target=target,
-                fetcher=get_coverage_historical_ohlcv,
+                fetcher=history_fetcher,
                 query_mappings=query_mappings, approved_quarantine=approved_quarantine,
                 rules_contract=rules_contract,
                 reuse_frozen_inputs=bool(getattr(args, "reuse_frozen_repair_inputs", False)),
+                cache_only=cache_only,
             )
-            repair_paths.append(path)
-            repair_proofs.append({"security_id": sid, "ticker": item["ticker"], **proof})
-        except DataFoundationError as exc:
-            repair_errors.append({"security_id": sid, "ticker": item["ticker"], "error": str(exc)})
-        atomic_save_json({"method": REPAIR_METHOD, "contract": repair_contract,
-                          "total": len(repaired_ids), "completed": index + 1,
-                          "status": "RUNNING", "validated": repair_proofs,
-                          "errors": repair_errors}, repair_report_path)
-        print(f"Full-history repair {index + 1}/{len(repaired_ids)}: "
-              f"{item['ticker']}; validated={len(repair_proofs)} failed={len(repair_errors)}",
-              file=sys.stderr, flush=True)
-    if repaired_ids:
-        atomic_save_json({"method": REPAIR_METHOD, "contract": repair_contract,
-                          "total": len(repaired_ids), "completed": len(overlap_failures),
-                          "status": "FAIL" if repair_errors else "VALIDATED",
-                          "validated": repair_proofs, "errors": repair_errors}, repair_report_path)
+        def progress(completed, total, ticker, validated, failed):
+            print(f"Full-history repair {completed}/{total}: {ticker}; "
+                  f"validated={validated} failed={failed}", file=sys.stderr, flush=True)
+        repair_paths, repair_report = collect_replacements(
+            failures=overlap_failures,
+            load_previous=lambda ids: broad_reader.load_bars(security_ids=ids, version=parent),
+            replace_security=replace_security, report_path=repair_report_path, contract=repair_contract,
+            workers=getattr(args, "repair_workers", 1), offset=getattr(args, "repair_offset", 0),
+            limit=getattr(args, "repair_limit", None), progress=progress,
+        )
+        repair_proofs, repair_errors = repair_report["validated"], repair_report["errors"]
     if repair_errors:
         raise DataFoundationError(f"full-history repair rejected {len(repair_errors)} securities; audit={repair_report_path}")
+    if getattr(args, "repair_only", False):
+        return {"status": "PREPARED" if len(repair_proofs) == len(overlap_failures) else "PREPARED_BATCH",
+                "target_session": target.date().isoformat(), "publication": None,
+                "scope_total": len(overlap_failures), "validated_count": len(repair_proofs),
+                "offset": getattr(args, "repair_offset", 0), "report_path": str(repair_report_path),
+                "report_sha256": _sha256(repair_report_path) if overlap_failures else None,
+                "elapsed_seconds": round(time.perf_counter() - started, 3)}, 0
     if repair_proofs:
         inherited = pd.concat([pd.read_parquet(proof["quarantine_path"]) for proof in repair_proofs], ignore_index=True)
         repair_checks = coverage_bar_quarantine_checks(

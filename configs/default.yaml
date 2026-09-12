@@ -91,7 +91,7 @@ data:
     profile_parts: [0, 1, 2, 3]
     symbol_change_limit: 10000
     delisted_page_size: 100
-    delisted_max_pages: 100
+    delisted_max_pages: 200
     minimum_active_stocks: 3000
     minimum_name_coverage: 0.99
     minimum_classification_coverage: 0.95

@@ -921,7 +921,7 @@ class IntradayMonitorState:
                 (int(row["daily_evaluated_count"] or 0) for row in cycles),
                 default=0,
             )
-            contract_complete = any(
+            contract_complete = bool(cycles) and all(
                 int(row["data_contract_complete"] or 0) == 1 for row in cycles
             )
             reasons: list[str] = []

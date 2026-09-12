@@ -197,6 +197,48 @@ def test_bounded_query_mapping_preserves_historical_identity(tmp_path):
         fetch_replacement(**kw, fetcher=fetch)
 
 
+def test_whole_alias_query_mapping_preserves_identity_and_full_parent(tmp_path):
+    kw = args(tmp_path)
+    kw["symbols"] = pd.DataFrame([
+        {"security_id": "a", "ticker": "OLD", "effective_from": "2024-01-30", "effective_to": "2024-01-31"},
+        {"security_id": "a", "ticker": "A", "effective_from": "2024-02-01", "effective_to": None}])
+    mapping = {"security_id": "a", "historical_ticker": "OLD", "query_ticker": "A",
+               "start": "2024-01-30", "end": "2024-01-31", "next_alias_start": "2024-02-01"}
+    kw["query_mappings"] = [mapping]
+    calls = []
+    def fetch(ticker, start, end):
+        calls.append((ticker, start, end))
+        return raw().loc[start:end]
+    path, _ = fetch_replacement(**kw, fetcher=fetch)
+    assert calls == [("A", "2024-01-30", "2024-01-31"), ("A", "2024-02-01", "2024-02-01")]
+    result = pd.read_parquet(path)
+    assert result.ticker.tolist() == ["OLD", "OLD", "A"]
+    assert result.security_id.eq("a").all()
+    assert result.date.tolist() == bars().date.tolist()
+    kw["contract"] = {"parent": "another-parent"}
+    with pytest.raises(DataFoundationError, match="loses 1 authenticated dates"):
+        fetch_replacement(**kw, fetcher=lambda *a: fetch(*a).loc["2024-01-31":])
+
+
+@pytest.mark.parametrize("field,value", [
+    ("start", "2024-01-29"), ("end", "2024-02-01"),
+    ("next_alias_start", "2024-02-02"), ("query_ticker", "UNRELATED"),
+])
+def test_whole_alias_mapping_rejects_unapproved_identity_or_boundary(tmp_path, field, value):
+    from src.data.broad_history_repair import query_segments
+    aliases = pd.DataFrame([
+        {"security_id": "a", "ticker": "OLD", "fetch_start": pd.Timestamp("2024-01-30"),
+         "fetch_end": pd.Timestamp("2024-01-31")},
+        {"security_id": "a", "ticker": "A", "fetch_start": pd.Timestamp("2024-02-01"),
+         "fetch_end": pd.Timestamp("2024-02-01")},
+    ])
+    mapping = {"security_id": "a", "historical_ticker": "OLD", "query_ticker": "A",
+               "start": "2024-01-30", "end": "2024-01-31", "next_alias_start": "2024-02-01"}
+    mapping[field] = value
+    with pytest.raises(DataFoundationError, match="alias contract drifted"):
+        query_segments(aliases, "a", [mapping])
+
+
 def test_repaired_history_forces_pit_rebuild_even_without_master_change():
     from types import SimpleNamespace
     from scripts.build_us_liquid_pit import _incremental_inputs_match
@@ -384,6 +426,16 @@ def test_writer_end_to_end_full_history_or_no_publication(tmp_path, monkeypatch,
             writer.run(args)
         assert catalog.latest_version("US_EQUITY_COVERAGE").version_id == parent.version_id
         return
+    args.publish, args.repair_only, args.repair_workers = False, True, 2
+    prepared, code = writer.run(args)
+    assert code == 0 and prepared["status"] == "PREPARED" and prepared["publication"] is None
+    assert catalog.latest_version("US_EQUITY_COVERAGE").version_id == parent.version_id
+    import json
+    from pathlib import Path
+    args.expected_scope_sha256 = json.loads(Path(prepared["report_path"]).read_text())["contract"]["scope_sha256"]
+    args.publish, args.repair_only, args.repair_cache_only = True, False, True
+    monkeypatch.setattr(writer, "get_coverage_historical_ohlcv",
+                        lambda *_: pytest.fail("publication must reuse fully authenticated raw caches"))
     report, code = writer.run(args)
     assert code == 0 and report["publication"]["version_id"] != parent.version_id
     result = BroadCoverageReader(market_reader=MarketDataReader(catalog=catalog)).load_bars()
@@ -406,6 +458,7 @@ def test_writer_end_to_end_full_history_or_no_publication(tmp_path, monkeypatch,
     monkeypatch.setattr(writer, "get_coverage_historical_ohlcv", canonical_increment)
     args.target_session = "2024-02-05"
     args.repair_full_history = False
+    args.repair_cache_only, args.expected_scope_sha256 = False, None
     updated, code = writer.run(args)
     assert code == 0 and updated["publication"]["version_id"] != report["publication"]["version_id"]
     assert calls == [("AAA", "2024-01-31", "2024-02-05")]

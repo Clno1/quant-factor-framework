@@ -67,6 +67,13 @@ outputs/
 /reviews/*-ep-*/**/*.json
 /reviews/*-ep-*/**/*.xml
 
+# Generated cup-shadow source evidence stays local/SG; retain hashes and reviewed rules.
+/reviews/2026-09-12-coverage-controlled-recovery/**/*.json
+/reviews/2026-09-12-coverage-controlled-recovery/**/*.parquet
+!/reviews/2026-09-12-coverage-controlled-recovery/additional_query_mappings.json
+/reviews/2026-09-12-coverage-revision-authentication/**/*.json
+/reviews/2026-09-12-cup-shadow-investigation/**/*.json
+
 # Generated EP review outputs (source scripts and sanitized test fixtures remain tracked)
 /reviews/2026-09-10-ep-span-selection/brief-review*/
 /reviews/2026-09-10-ep-span-selection/observation-review/

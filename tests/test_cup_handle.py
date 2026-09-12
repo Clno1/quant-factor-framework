@@ -368,6 +368,43 @@ class CupHandleAlgorithmTests(unittest.TestCase):
         )
         self.assertLess(evaluation.details["handle_volume_ratio"], 0.85)
 
+    def test_nonpositive_volume_never_produces_ratios_or_signals(self):
+        settings = IntradayMonitorSettings()
+        candidate = _candidate(settings)
+        valid_bars = _handle_bars(candidate)
+        now = datetime(2026, 4, 9, 10, 35, 1, tzinfo=NEW_YORK)
+        detector = CupHandleDetector(settings)
+        positive = detector.evaluate(
+            candidate, _quote(valid_bars), {"bars": valid_bars, "error": None},
+            now=now, session_date="2026-04-09", market_open=True,
+        )
+        self.assertEqual(positive.outcome, "MATCH")
+        handle_time = pd.Timestamp(positive.details["handle_start"]).tz_localize(None)
+        handle_start = next(
+            index for index, bar in enumerate(valid_bars)
+            if pd.Timestamp(bar["timestamp"]) == handle_time
+        )
+        regions = {
+            "baseline": range(handle_start - settings.cup_volume_baseline_bars, handle_start),
+            "handle": range(handle_start, len(valid_bars) - 1),
+            "breakout": [len(valid_bars) - 1],
+        }
+        for region, indices in regions.items():
+            for volume in (0.0, -1.0):
+                with self.subTest(region=region, volume=volume):
+                    bars = [dict(bar) for bar in valid_bars]
+                    for index in indices:
+                        bars[index]["volume"] = volume
+                    result = detector.evaluate(
+                        candidate, _quote(bars), {"bars": bars, "error": None},
+                        now=now, session_date="2026-04-09", market_open=True,
+                    )
+                    self.assertEqual(result.outcome, "REJECTED")
+                    self.assertEqual(result.rejection_reason, "INSUFFICIENT_VOLUME_EVIDENCE")
+                    self.assertIsNone(result.signal)
+                    self.assertNotIn("handle_volume_ratio", result.details)
+                    self.assertNotIn("breakout_volume_ratio", result.details)
+
     def test_non_contracting_handle_is_rejected_with_reason(self):
         settings = IntradayMonitorSettings()
         candidate = _candidate(settings)
@@ -478,6 +515,49 @@ class CupHandleAlgorithmTests(unittest.TestCase):
             self.assertFalse(legacy["eligible"])
             self.assertTrue(cup["eligible"])
             self.assertEqual(cup["passed_sessions"], 5)
+
+    def test_shadow_gate_requires_complete_contract_for_every_cycle(self):
+        for contracts in ((True, True), (True, False), (False, True), (False, False)):
+            with self.subTest(contracts=contracts), tempfile.TemporaryDirectory() as temporary:
+                state = IntradayMonitorState(Path(temporary) / "state.sqlite3")
+                session_date = "2026-04-09"
+                for index, complete in enumerate(contracts):
+                    timestamp = f"{session_date}T14:{30 + index * 5}:08+00:00"
+                    state.record_cup_handle_cycle({
+                        "session_date": session_date,
+                        "observed_at": timestamp,
+                        "algorithm_version": CUP_HANDLE_ALGORITHM_VERSION,
+                        "parameter_version": CUP_HANDLE_PARAMETER_VERSION,
+                        "daily_evaluated_count": 500,
+                        "daily_candidate_count": 10,
+                        "data_contract_complete": complete,
+                    }, [{
+                        "ticker": "TEST",
+                        "outcome": "REJECTED",
+                        "rejection_reason": "RIM_NOT_BROKEN",
+                        "evaluated_at": timestamp,
+                        "latency_ms": 1.2,
+                        "bar_count": 10,
+                        "details": {},
+                        "signal": None,
+                    }])
+                result = state.finalize_cup_handle_observation(
+                    session_date=session_date,
+                    algorithm_version=CUP_HANDLE_ALGORITHM_VERSION,
+                    parameter_version=CUP_HANDLE_PARAMETER_VERSION,
+                    expected_open_cycles=2,
+                    min_cycle_coverage=0.85,
+                    max_error_cycle_ratio=0.05,
+                    max_detection_p95_ms=250.0,
+                    min_evaluable_ticker_coverage=0.95,
+                    max_gap_ticker_ratio=0.05,
+                    max_bar_count=96,
+                )
+                self.assertEqual(result["status"], "PASS" if all(contracts) else "FAIL")
+                self.assertEqual(
+                    result["failure_reasons"],
+                    [] if all(contracts) else ["MISSING_DATA_CONTRACT"],
+                )
 
     def test_gap_event_is_deduplicated_and_fails_coverage_gate(self):
         with tempfile.TemporaryDirectory() as temporary:
