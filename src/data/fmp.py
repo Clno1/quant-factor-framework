@@ -299,6 +299,26 @@ def get_ep_minute_day(symbol: str, day: str, *, timeout: float = 10) -> list[dic
     return _ep_records('/historical-chart/1min', {'symbol': symbol, 'from': day, 'to': day}, timeout=timeout)
 
 
+def get_ep_price_batch(symbols: list[str], *, premarket: bool, timeout: float = 10) -> list[dict[str, Any]]:
+    if premarket:
+        return get_ep_extended_batch(symbols, kind='trade', timeout=timeout)
+    normalized = [_normalize_us_ticker(s) for s in symbols]
+    if not 1 <= len(normalized) <= 100 or any(not re.fullmatch(r'[A-Z0-9][A-Z0-9-]{0,19}', s) for s in normalized):
+        raise ValueError('INVALID_EP_PRICE_BATCH')
+    return _ep_records('/batch-quote', {'symbols': ','.join(dict.fromkeys(normalized))}, timeout=timeout)
+
+
+def get_ep_symbol_news(symbol: str, feed: str, start: str, end: str, *, timeout: float = 10) -> list[dict[str, Any]]:
+    from datetime import date
+    symbol = _normalize_us_ticker(symbol)
+    if feed not in {'stock', 'press'} or not re.fullmatch(r'[A-Z0-9][A-Z0-9-]{0,19}', symbol):
+        raise ValueError('INVALID_EP_SYMBOL_NEWS')
+    if date.fromisoformat(start) > date.fromisoformat(end):
+        raise ValueError('INVALID_EP_NEWS_WINDOW')
+    return _ep_records('/news/stock' if feed == 'stock' else '/news/press-releases',
+                       {'symbols': symbol, 'from': start, 'to': end, 'page': 0, 'limit': 25}, timeout=timeout)
+
+
 def _records_frame(payload: Any, *, endpoint: str) -> pd.DataFrame:
     """Normalize an FMP records payload while rejecting opaque responses."""
     if isinstance(payload, list):

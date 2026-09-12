@@ -5,6 +5,7 @@ from collections import defaultdict
 from dataclasses import asdict
 from datetime import date, datetime, timedelta, timezone
 import time
+import threading
 from typing import Any, Callable
 
 from .classifier import classify
@@ -22,16 +23,22 @@ class CollectionBudget:
         self.ends_at = monotonic() + settings.deadline_seconds
         self.requests = 0
         self.stop_reason: str | None = None
+        self._lock = threading.Lock()
+
+    def available(self):
+        with self._lock:
+            return not self.stop_reason and self.clock() < self.ends_at and self.requests < self.settings.max_requests
 
     def call(self, function: Callable[..., Any], *args: Any) -> tuple[Any, str]:
-        remaining = self.ends_at - self.clock()
-        if self.stop_reason:
-            return None, self.stop_reason
-        if remaining <= 0:
-            return None, "TIME_BUDGET_EXCEEDED"
-        if self.requests >= self.settings.max_requests:
-            return None, "REQUEST_BUDGET_EXCEEDED"
-        self.requests += 1
+        with self._lock:
+            remaining = self.ends_at - self.clock()
+            if self.stop_reason:
+                return None, self.stop_reason
+            if remaining <= 0:
+                return None, "TIME_BUDGET_EXCEEDED"
+            if self.requests >= self.settings.max_requests:
+                return None, "REQUEST_BUDGET_EXCEEDED"
+            self.requests += 1
         try:
             value = function(*args, timeout=min(remaining, self.settings.request_timeout_seconds))
             return value, "OK"
@@ -39,7 +46,8 @@ class CollectionBudget:
             # Persist codes only: provider exception text can contain sensitive URLs.
             http = getattr(getattr(exc, "response", None), "status_code", None)
             if http in {401, 403, 429}:
-                self.stop_reason = f"PROVIDER_HTTP_{http}"
+                with self._lock:
+                    self.stop_reason = f"PROVIDER_HTTP_{http}"
                 return None, self.stop_reason
             return None, f"PROVIDER_ERROR_{type(exc).__name__}"
 

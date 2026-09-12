@@ -1,0 +1,10 @@
+[Unit]
+Description=Shared resource budget for EP data consumers
+
+[Slice]
+CPUAccounting=true
+MemoryAccounting=true
+CPUQuota=75%
+MemoryHigh=512M
+MemoryMax=640M
+TasksMax=96

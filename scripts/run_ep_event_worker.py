@@ -29,6 +29,15 @@ def main():
     collect.add_argument('--execute', action='store_true')
     commands.add_parser("status")
     commands.add_parser("pipeline")
+    commands.add_parser('source-plan')
+    price = commands.add_parser('price-scan')
+    price.add_argument('--execute', action='store_true')
+    price_status = commands.add_parser('price-status')
+    price_status.add_argument('ticker')
+    timings = commands.add_parser('latency')
+    timings.add_argument('ticker')
+    timings.add_argument('--session', required=True)
+    timings.add_argument('--as-of')
     explain = commands.add_parser("explain")
     explain.add_argument("ticker")
     explain.add_argument('--as-of', help='Timezone-aware historical cutoff; no future state backfill')
@@ -51,7 +60,38 @@ def main():
         raise ValueError("WORKER_CONFIG_TOO_LARGE")
     config = WorkerConfig.model_validate_json(args.config.read_text())
     store = EpStore(config.database, read_only=True)
-    if args.command == 'watch-input':
+    if args.command == 'latency':
+        from src.breakouts.ep.latency import report as latency_report
+        from src.breakouts.ep.pipeline import queue_path
+        from src.breakouts.ep.queue import PipelineQueue
+        result = latency_report(PipelineQueue(queue_path(config), read_only=True), args.ticker, args.session,
+            datetime.fromisoformat(args.as_of) if args.as_of else datetime.now(timezone.utc))
+    elif args.command == 'price-status':
+        from src.breakouts.ep.price_discovery import price_status
+        result = price_status(config.price_database, args.ticker, datetime.now(timezone.utc))
+    elif args.command == 'price-scan' and config.independent_consumers_enabled:
+        from src.breakouts.ep.consumers import run_lane
+        result = run_lane(config, 'price', execute=args.execute)
+    elif args.command == 'price-scan':
+        if not args.execute:
+            result = {'status': 'PLAN_ONLY', 'enabled': config.price_discovery_enabled,
+                      'maximum_symbols_per_cycle': 100 * config.price_batches_per_cycle,
+                      'deadline_seconds': config.price_deadline_seconds, 'external_requests': 0}
+        else:
+            if not config.price_discovery_enabled:
+                raise ValueError('EXPLICIT_PRICE_DISCOVERY_ENABLE_REQUIRED')
+            from src.breakouts.ep.price_discovery import discover, PriceStore
+            from src.breakouts.ep.identity import load_identity_snapshot
+            from src.breakouts.ep.queue import PipelineQueue
+            from src.breakouts.ep.pipeline import queue_path
+            from src.breakouts.ep.provider import FmpEpProvider
+            with file_lock(Path(queue_path(config)).with_suffix('.ingest.lock')):
+                now = datetime.now(timezone.utc)
+                snapshot = load_identity_snapshot(now, catalog_path=config.identity_catalog_path or None,
+                    snapshot_root=config.identity_snapshot_root or None, source_root=config.identity_source_root or None)
+                result = discover(PipelineQueue(queue_path(config)), PriceStore(config.price_database), snapshot,
+                                  FmpEpProvider(), config, clock=lambda: datetime.now(timezone.utc))
+    elif args.command == 'watch-input':
         from src.breakouts.ep.queue import PipelineQueue
         from src.breakouts.ep.pipeline import queue_path
         from src.breakouts.ep.watch import ingest_watch_file
@@ -97,7 +137,7 @@ def main():
             filename = result["started_at"].replace(":", "-") + ".json"
             atomic_save_json(result, directory / "history" / filename)
             atomic_save_json(result, directory / "latest.json")
-    elif args.command in {'pipeline', 'explain'}:
+    elif args.command in {'pipeline', 'explain', 'source-plan'}:
         from src.breakouts.ep.pipeline import queue_path
         from src.breakouts.ep.queue import PipelineQueue
         path = Path(queue_path(config))
@@ -105,10 +145,13 @@ def main():
             queue = PipelineQueue(path, read_only=True)
             result = (queue.timeline(args.ticker, datetime.fromisoformat(args.as_of)) if args.command == 'explain' and args.as_of
                       else queue.explain(args.ticker) if args.command == 'explain' else queue.summary())
+            if args.command == 'source-plan':
+                from src.breakouts.ep.pipeline import source_plan
+                result = source_plan(queue, datetime.now(timezone.utc), config.source_jobs_per_cycle)
         else:
             result = {'status': 'QUEUE_NOT_INITIALIZED'}
         result['external_requests'] = 0
-        if config.outbox_database and Path(config.outbox_database).is_file() and not getattr(args, 'as_of', None):
+        if args.command != 'source-plan' and config.outbox_database and Path(config.outbox_database).is_file() and not getattr(args, 'as_of', None):
             import sqlite3
             with sqlite3.connect(Path(config.outbox_database).resolve().as_uri() + '?mode=ro', uri=True) as db:
                 db.row_factory = sqlite3.Row

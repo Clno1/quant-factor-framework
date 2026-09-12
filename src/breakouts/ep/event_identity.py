@@ -29,7 +29,7 @@ def earnings_period(title, introduction=''):
     # Official headings sometimes omit "fiscal" (RH). Do not use arbitrary
     # datelines or table years to infer the period.
     if not y and q:
-        match = re.search(r'\b(?:quarter|q[1-4])\s+(20\d{2})\s+(?:financial\s+)?results', title, re.I)
+        match = re.search(r'\b(?:quarter|q[1-4])\s+(20\d{2})\s+(?:(?:financial\s+)?results|earnings\b)', title, re.I)
         y = match[1] if match else None
     return (y, q) if y and q else None
 
@@ -42,7 +42,8 @@ def event_descriptor(symbol, event):
     earnings = bool(re.search(r'earnings|financial results|quarter.*results|results.*quarter', title, re.I)
                     or re.search(r'reported .*quarter.*results', intro, re.I))
     session = event_window(datetime.fromisoformat(event['published_at']))['session']
-    if period and earnings and hint not in {'M_AND_A', 'DEAL_TERMINATION', 'COMMERCIAL_CONTRACT'}:
+    if period and earnings and hint not in {'M_AND_A', 'DEAL_TERMINATION', 'COMMERCIAL_CONTRACT',
+                                           'EARNINGS_PREVIEW', 'OWNERSHIP_UPDATE', 'LEGAL_NOTICE'}:
         identity = [symbol, 'EARNINGS', session, *period]
         scope = 'ISSUER_FISCAL_PERIOD_HINT'
         hint = 'EARNINGS'

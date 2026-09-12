@@ -125,12 +125,13 @@ def record_watch(queue, observation, now):
 
 
 def source_priority(queue, symbol, now):
+    from .price_discovery import price_priority
     snapshot = queue.checkpoint('market:' + symbol)
     if not snapshot or snapshot.get('status') != 'WATCH':
-        return 0
+        return price_priority(queue, symbol, now)
     at = datetime.fromisoformat(snapshot['price_at'])
     if not timedelta(0) <= now - at <= timedelta(seconds=120):
-        return 0
+        return price_priority(queue, symbol, now)
     return 100 + min(snapshot['gap_pct'], 100)
 
 

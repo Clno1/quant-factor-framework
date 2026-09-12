@@ -194,7 +194,9 @@ def test_source_fetch_slots_prioritize_event_hints_without_starving_other_news(t
     from src.breakouts.ep.pipeline import select_source_jobs
     queue = PipelineQueue(tmp_path / 'queue.sqlite3')
     for i in range(16):
-        queue.enqueue('SOURCE', 'TEST', str(i), 'v1', {'event': {
+        queue.enqueue('SOURCE', 'T' + chr(65 + i), str(i), 'v1', {'event': {
+            'document_id': str(i), 'revision_id': 'v1', 'published_at': NOW.isoformat(),
+            'evidence': {'title': 'Business update'},
             'event_type_hint': 'UNKNOWN' if i < 8 else 'EARNINGS'}},
             NOW + timedelta(seconds=i), NOW + timedelta(days=1))
     selected = select_source_jobs(queue, NOW + timedelta(minutes=1), 8)

@@ -1,6 +1,7 @@
 {
   "version": "ep-official-domains-v1",
   "issuers": {
+    "ORCL": {"name": "Oracle Corporation", "cik": "0001341439", "root_url": "https://www.oracle.com/corporate/", "ir_host": "investor.oracle.com", "index_urls": ["https://investor.oracle.com/Home/", "https://investor.oracle.com/investor-news/default.aspx"]},
     "DSGX": {"name": "The Descartes Systems Group Inc.", "cik": "0001050140", "root_url": "https://www.descartes.com/", "ir_host": "www.descartes.com", "index_urls": ["https://www.descartes.com/news-events/financial-news"]},
     "KR": {"name": "The Kroger Co.", "cik": "0000056873", "root_url": "https://www.thekrogerco.com/", "ir_host": "www.thekrogerco.com", "index_urls": ["https://www.thekrogerco.com/", "https://www.thekrogerco.com/newsroom/"]},
     "MNY": {"name": "MoneyHero Limited", "cik": "0001974044", "root_url": "https://www.moneyherogroup.com/", "ir_host": "investors.moneyherogroup.com", "index_urls": ["https://investors.moneyherogroup.com/"]},

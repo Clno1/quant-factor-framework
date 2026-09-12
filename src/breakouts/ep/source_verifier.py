@@ -126,14 +126,50 @@ def verify_document(event: dict[str, Any], parsed: dict[str, Any], identity: dic
                             "NO_EVENT_MATERIALITY_OR_MARKET_CONFIRMATION"]}
 
 
+def release_period_evidence(parsed, symbol):
+    """Find the period in the issuer's release statement, never in a data table."""
+    from .event_identity import earnings_period
+    found = []
+    for paragraph in parsed['paragraphs'][:30]:
+        text = paragraph['text']
+        # Bind the ticker, past-tense publication verb and period to one clause.
+        match = re.search(r'\b' + re.escape(symbol) + r'\b[^.;]{0,120}?\b(?:announced|reported|released)\b'
+                          r'([^.;]{0,250}?\bresults\b)', text, re.I)
+        if not match or re.search(r'\b(?:will|expects?|plans?|previously|last year)\b', match[0], re.I):
+            continue
+        period = earnings_period(match[1])
+        if period:
+            found.append({'paragraph_id': paragraph['id'], 'fiscal_period': list(period)})
+    return found
+
+
 def verify_sec_event(event, parsed, identity, symbol, label):
     """Called only after the registered CIK/ticker/accession chain is checked."""
-    from .event_identity import earnings_period
+    from .event_identity import earnings_period, quarter, fiscal_year
     from .sec_source import clean_text
     result = verify_document(event, parsed, identity)
     title = event['evidence']['title']
-    expected = earnings_period(title, event['evidence'].get('text', '')[:1500])
+    introduction = event['evidence'].get('text', '')[:1500]
+    if any(left and right and left != right for left, right in (
+            (quarter(title), quarter(introduction)), (fiscal_year(title), fiscal_year(introduction)))):
+        result.update(status='DOCUMENT_UNVERIFIED', period_conflict=True)
+        return result
+    expected = earnings_period(title, introduction)
     actual = earnings_period(parsed['title'], clean_text(label))
+    period_evidence = release_period_evidence(parsed, symbol)
+    periods = {tuple(p['fiscal_period']) for p in period_evidence}
+    if actual:
+        periods.add(actual)
+    title_quarter, title_year = quarter(parsed['title']), fiscal_year(parsed['title'])
+    title_conflict = any((title_quarter and title_quarter != p[1]) or
+                         (title_year and title_year != p[0]) for p in periods)
+    if len(periods) > 1 or title_conflict:
+        result.update(status='DOCUMENT_UNVERIFIED', period_conflict=True,
+                      period_evidence=period_evidence)
+        return result
+    actual = next(iter(periods)) if periods else actual
+    result.update(expected_fiscal_period=list(expected) if expected else None,
+                  original_fiscal_period=list(actual) if actual else None)
     issuer = re.search(r'\b' + re.escape(symbol) + r'\b',
                        ' '.join(p['text'] for p in parsed['paragraphs'][:15]), re.I)
     earnings = re.search(r'earnings|financial results|quarter.*results|results.*quarter', title, re.I) or re.search(
@@ -141,7 +177,7 @@ def verify_sec_event(event, parsed, identity, symbol, label):
     if result['status'] != 'DOCUMENT_MATCHED' and expected and expected == actual and issuer and earnings:
         if parsed['status'] == 'EXTRACTED':
             result.update(status='DOCUMENT_MATCHED', alignment_method='SEC_ISSUER_AND_FISCAL_PERIOD',
-                          fiscal_period=list(actual))
+                          fiscal_period=list(actual), period_evidence=period_evidence)
     # Matching a headline is not allowed to override an explicit period conflict.
     if expected and actual and expected != actual:
         result.update(status='DOCUMENT_UNVERIFIED', period_conflict=True)

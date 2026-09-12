@@ -49,11 +49,22 @@ class WorkerConfig(StrictModel):
     identity_catalog_path: str = ''
     identity_snapshot_root: str = ''
     identity_fallback_requests: int = Field(default=20, ge=0, le=100)
+    identity_jobs_per_cycle: int = Field(default=128, ge=1, le=5000)
     source_jobs_per_cycle: int = Field(default=8, ge=1, le=20)
     news_pages_per_feed: int = Field(default=4, ge=2, le=20)
     official_registry_path: str = ''
     watch_input_path: str = ''
     financial_input_path: str = ''
+    price_discovery_enabled: bool = False
+    price_database: str = ''
+    price_batches_per_cycle: int = Field(default=60, ge=1, le=100)
+    price_deadline_seconds: int = Field(default=60, ge=5, le=120)
+    price_gap_threshold: float = Field(default=4, ge=1, le=30, allow_inf_nan=False)
+    price_news_jobs: int = Field(default=32, ge=1, le=64)
+    price_news_concurrency: int = Field(default=2, ge=1, le=3)
+    price_news_deadline_seconds: int = Field(default=40, ge=5, le=90)
+    independent_consumers_enabled: bool = False
+    source_deadline_seconds: int = Field(default=45, ge=10, le=110)
     analysis_protocol: Literal['event-claims', 'event-context'] = 'event-claims'
     commentary_style: Literal['annotated', 'personal'] = 'annotated'
 
@@ -64,6 +75,10 @@ class WorkerConfig(StrictModel):
         paths += [Path(value) for value in (self.queue_database, self.identity_source_root,
                   self.identity_catalog_path, self.identity_snapshot_root, self.official_registry_path,
                   self.watch_input_path, self.financial_input_path) if value]
+        if self.price_database:
+            paths.append(Path(self.price_database))
+        if self.price_discovery_enabled and not self.price_database:
+            raise ValueError('DEDICATED_PRICE_DATABASE_REQUIRED')
         if not self.queue_database:
             paths.append(Path(self.database + '.pipeline.sqlite3'))
         if any(not p.is_absolute() for p in paths) or len({p.resolve() for p in paths}) != len(paths):

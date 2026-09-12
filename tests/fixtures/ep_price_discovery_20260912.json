@@ -1,0 +1,267 @@
+{
+  "scope": "REAL_REGULAR_SESSION_RECEIPTS_NOT_PREMARKET_REPLAY",
+  "session": "2026-09-11",
+  "records": [
+    {
+      "adjustment_verified": false,
+      "baseline": {
+        "close": 7.22,
+        "contract_id": "b0fdafaad75e7582bd5185982cb5a06e24661de0624af322897b356f512dae64",
+        "session": "2026-09-10",
+        "version_id": "76e68448ccea48f5b5e1dbf871c9f6c9"
+      },
+      "catalyst_status": "UNKNOWN",
+      "change_basis": "CURRENT_PRICE_VS_PREVIOUS_SESSION_EXECUTION_CLOSE",
+      "eligible_for_rating": false,
+      "indicative_gap_pct": 44.52908587257618,
+      "is_trade_signal": false,
+      "market_phase": "REGULAR",
+      "observed_at": "2026-09-11T18:20:05.363215+00:00",
+      "price_age_seconds": 2.363215,
+      "price_at": "2026-09-11T18:20:03.000000+00:00",
+      "price_contract_verified": false,
+      "raw": {
+        "price": 10.435,
+        "timestamp": 1789150803
+      },
+      "reason": "PRICE_AND_CORPORATE_ACTIONS_PENDING_ACCEPTANCE",
+      "receipt_id": "17194e9e71d101321f0758677607bb532da640f1433c54d88bd138cb34698a21",
+      "session": "2026-09-11",
+      "status": "PRICE_WATCH",
+      "ticker": "ACVA",
+      "volume_status": "UNKNOWN"
+    },
+    {
+      "adjustment_verified": false,
+      "baseline": {
+        "close": 153.17,
+        "contract_id": "b0fdafaad75e7582bd5185982cb5a06e24661de0624af322897b356f512dae64",
+        "session": "2026-09-10",
+        "version_id": "76e68448ccea48f5b5e1dbf871c9f6c9"
+      },
+      "catalyst_status": "UNKNOWN",
+      "change_basis": "CURRENT_PRICE_VS_PREVIOUS_SESSION_EXECUTION_CLOSE",
+      "eligible_for_rating": false,
+      "indicative_gap_pct": -0.5157667950642986,
+      "is_trade_signal": false,
+      "market_phase": "REGULAR",
+      "observed_at": "2026-09-11T18:20:50.430328+00:00",
+      "price_age_seconds": 1.430328,
+      "price_at": "2026-09-11T18:20:49.000000+00:00",
+      "price_contract_verified": false,
+      "raw": {
+        "price": 152.38,
+        "timestamp": 1789150849
+      },
+      "reason": "PRICE_AND_CORPORATE_ACTIONS_PENDING_ACCEPTANCE",
+      "receipt_id": "36353fd6b1d5c2f134f81c77599ab15f5d143bac7af481a6504f9fab9eda0cd3",
+      "session": "2026-09-11",
+      "status": "BELOW_THRESHOLD",
+      "ticker": "ORCL",
+      "volume_status": "UNKNOWN"
+    },
+    {
+      "adjustment_verified": false,
+      "baseline": {
+        "close": 30.75,
+        "contract_id": "b0fdafaad75e7582bd5185982cb5a06e24661de0624af322897b356f512dae64",
+        "session": "2026-09-10",
+        "version_id": "76e68448ccea48f5b5e1dbf871c9f6c9"
+      },
+      "catalyst_status": "UNKNOWN",
+      "change_basis": "CURRENT_PRICE_VS_PREVIOUS_SESSION_EXECUTION_CLOSE",
+      "eligible_for_rating": false,
+      "indicative_gap_pct": -3.4666666666666623,
+      "is_trade_signal": false,
+      "market_phase": "REGULAR",
+      "observed_at": "2026-09-11T18:20:20.610975+00:00",
+      "price_age_seconds": 4.610975,
+      "price_at": "2026-09-11T18:20:16.000000+00:00",
+      "price_contract_verified": false,
+      "raw": {
+        "price": 29.684,
+        "timestamp": 1789150816
+      },
+      "reason": "PRICE_AND_CORPORATE_ACTIONS_PENDING_ACCEPTANCE",
+      "receipt_id": "452c4c9c434b711b4248ae8ec269d13895ee702d3ea00cfbd11024271f373c8f",
+      "session": "2026-09-11",
+      "status": "BELOW_THRESHOLD",
+      "ticker": "CPRT",
+      "volume_status": "UNKNOWN"
+    },
+    {
+      "adjustment_verified": false,
+      "baseline": {
+        "close": 133.89,
+        "contract_id": "b0fdafaad75e7582bd5185982cb5a06e24661de0624af322897b356f512dae64",
+        "session": "2026-09-10",
+        "version_id": "76e68448ccea48f5b5e1dbf871c9f6c9"
+      },
+      "catalyst_status": "UNKNOWN",
+      "change_basis": "CURRENT_PRICE_VS_PREVIOUS_SESSION_EXECUTION_CLOSE",
+      "eligible_for_rating": false,
+      "indicative_gap_pct": 1.0904473821794047,
+      "is_trade_signal": false,
+      "market_phase": "REGULAR",
+      "observed_at": "2026-09-11T18:20:55.965934+00:00",
+      "price_age_seconds": 17.965934,
+      "price_at": "2026-09-11T18:20:38.000000+00:00",
+      "price_contract_verified": false,
+      "raw": {
+        "price": 135.35,
+        "timestamp": 1789150838
+      },
+      "reason": "PRICE_AND_CORPORATE_ACTIONS_PENDING_ACCEPTANCE",
+      "receipt_id": "60839b4cef98396006e3b9fdc4af1ac16cf243894a1a0ac3aa57860ef09bab52",
+      "session": "2026-09-11",
+      "status": "BELOW_THRESHOLD",
+      "ticker": "RH",
+      "volume_status": "UNKNOWN"
+    },
+    {
+      "adjustment_verified": false,
+      "baseline": {
+        "close": 48.62,
+        "contract_id": "b0fdafaad75e7582bd5185982cb5a06e24661de0624af322897b356f512dae64",
+        "session": "2026-09-10",
+        "version_id": "76e68448ccea48f5b5e1dbf871c9f6c9"
+      },
+      "catalyst_status": "UNKNOWN",
+      "change_basis": "CURRENT_PRICE_VS_PREVIOUS_SESSION_EXECUTION_CLOSE",
+      "eligible_for_rating": false,
+      "indicative_gap_pct": 4.057795146030441,
+      "is_trade_signal": false,
+      "market_phase": "REGULAR",
+      "observed_at": "2026-09-11T18:20:51.554626+00:00",
+      "price_age_seconds": 11.554626,
+      "price_at": "2026-09-11T18:20:40.000000+00:00",
+      "price_contract_verified": false,
+      "raw": {
+        "price": 50.5929,
+        "timestamp": 1789150840
+      },
+      "reason": "PRICE_AND_CORPORATE_ACTIONS_PENDING_ACCEPTANCE",
+      "receipt_id": "c5d1eb46e3f6f239216d4831d7a749fbec744683cfc8d6a07365c707a68102b4",
+      "session": "2026-09-11",
+      "status": "PRICE_WATCH",
+      "ticker": "PENG",
+      "volume_status": "UNKNOWN"
+    },
+    {
+      "adjustment_verified": false,
+      "baseline": {
+        "close": 8.43,
+        "contract_id": "b0fdafaad75e7582bd5185982cb5a06e24661de0624af322897b356f512dae64",
+        "session": "2026-09-10",
+        "version_id": "76e68448ccea48f5b5e1dbf871c9f6c9"
+      },
+      "catalyst_status": "UNKNOWN",
+      "change_basis": "CURRENT_PRICE_VS_PREVIOUS_SESSION_EXECUTION_CLOSE",
+      "eligible_for_rating": false,
+      "indicative_gap_pct": 6.109134045077114,
+      "is_trade_signal": false,
+      "market_phase": "REGULAR",
+      "observed_at": "2026-09-11T18:20:58.116420+00:00",
+      "price_age_seconds": 2.11642,
+      "price_at": "2026-09-11T18:20:56.000000+00:00",
+      "price_contract_verified": false,
+      "raw": {
+        "price": 8.945,
+        "timestamp": 1789150856
+      },
+      "reason": "PRICE_AND_CORPORATE_ACTIONS_PENDING_ACCEPTANCE",
+      "receipt_id": "5926a93a8fc557970d949bafe0a3a1f346aed75b22b83e65f04ba760331281f9",
+      "session": "2026-09-11",
+      "status": "PRICE_WATCH",
+      "ticker": "SBET",
+      "volume_status": "UNKNOWN"
+    },
+    {
+      "adjustment_verified": false,
+      "baseline": {
+        "close": 14.97,
+        "contract_id": "b0fdafaad75e7582bd5185982cb5a06e24661de0624af322897b356f512dae64",
+        "session": "2026-09-10",
+        "version_id": "76e68448ccea48f5b5e1dbf871c9f6c9"
+      },
+      "catalyst_status": "UNKNOWN",
+      "change_basis": "CURRENT_PRICE_VS_PREVIOUS_SESSION_EXECUTION_CLOSE",
+      "eligible_for_rating": false,
+      "indicative_gap_pct": 1.831663326653299,
+      "is_trade_signal": false,
+      "market_phase": "REGULAR",
+      "observed_at": "2026-09-11T18:20:06.988932+00:00",
+      "price_age_seconds": 2.988932,
+      "price_at": "2026-09-11T18:20:04.000000+00:00",
+      "price_contract_verified": false,
+      "raw": {
+        "price": 15.2442,
+        "timestamp": 1789150804
+      },
+      "reason": "PRICE_AND_CORPORATE_ACTIONS_PENDING_ACCEPTANCE",
+      "receipt_id": "5194e6f5431488182a4b89210c80059dcb26294ab2b7b890784baa34b37567df",
+      "session": "2026-09-11",
+      "status": "BELOW_THRESHOLD",
+      "ticker": "AEVA",
+      "volume_status": "UNKNOWN"
+    },
+    {
+      "adjustment_verified": false,
+      "baseline": {
+        "close": 171.11,
+        "contract_id": "b0fdafaad75e7582bd5185982cb5a06e24661de0624af322897b356f512dae64",
+        "session": "2026-09-10",
+        "version_id": "76e68448ccea48f5b5e1dbf871c9f6c9"
+      },
+      "catalyst_status": "UNKNOWN",
+      "change_basis": "CURRENT_PRICE_VS_PREVIOUS_SESSION_EXECUTION_CLOSE",
+      "eligible_for_rating": false,
+      "indicative_gap_pct": -2.3820349482788994,
+      "is_trade_signal": false,
+      "market_phase": "REGULAR",
+      "observed_at": "2026-09-11T18:20:49.317370+00:00",
+      "price_age_seconds": 4.31737,
+      "price_at": "2026-09-11T18:20:45.000000+00:00",
+      "price_contract_verified": false,
+      "raw": {
+        "price": 167.0341,
+        "timestamp": 1789150845
+      },
+      "reason": "PRICE_AND_CORPORATE_ACTIONS_PENDING_ACCEPTANCE",
+      "receipt_id": "9219db7253bc595ed16ff9d4de8d7affa94b8e693566e4a183d3937c1e716fec",
+      "session": "2026-09-11",
+      "status": "BELOW_THRESHOLD",
+      "ticker": "OKTA",
+      "volume_status": "UNKNOWN"
+    },
+    {
+      "adjustment_verified": false,
+      "baseline": {
+        "close": 100.32,
+        "contract_id": "b0fdafaad75e7582bd5185982cb5a06e24661de0624af322897b356f512dae64",
+        "session": "2026-09-10",
+        "version_id": "76e68448ccea48f5b5e1dbf871c9f6c9"
+      },
+      "catalyst_status": "UNKNOWN",
+      "change_basis": "CURRENT_PRICE_VS_PREVIOUS_SESSION_EXECUTION_CLOSE",
+      "eligible_for_rating": false,
+      "indicative_gap_pct": 3.020334928229662,
+      "is_trade_signal": false,
+      "market_phase": "REGULAR",
+      "observed_at": "2026-09-11T18:20:36.863204+00:00",
+      "price_age_seconds": 2.863204,
+      "price_at": "2026-09-11T18:20:34.000000+00:00",
+      "price_contract_verified": false,
+      "raw": {
+        "price": 103.35,
+        "timestamp": 1789150834
+      },
+      "reason": "PRICE_AND_CORPORATE_ACTIONS_PENDING_ACCEPTANCE",
+      "receipt_id": "9ad8a086c92fcef1a8d78981a43278b0f6631303b14c31d7190bda8d80ef1787",
+      "session": "2026-09-11",
+      "status": "BELOW_THRESHOLD",
+      "ticker": "INTC",
+      "volume_status": "UNKNOWN"
+    }
+  ]
+}

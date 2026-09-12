@@ -13,6 +13,14 @@ class EpProvider(Protocol):
 class FmpEpProvider:
     scope = "FMP_GLOBAL_LATEST_FEEDS_AND_DAILY_CALENDAR_NOT_MARKET_COMPLETE"
 
+    def prices(self, symbols, *, premarket, timeout):
+        from src.data.fmp import get_ep_price_batch
+        return get_ep_price_batch(symbols, premarket=premarket, timeout=timeout)
+
+    def symbol_news(self, symbol, feed, start, end, *, timeout):
+        from src.data.fmp import get_ep_symbol_news
+        return get_ep_symbol_news(symbol, feed, start, end, timeout=timeout)
+
     def calendar(self, day: str, *, timeout: float) -> list[dict[str, Any]]:
         from src.data.fmp import get_ep_earnings_calendar_day
         return get_ep_earnings_calendar_day(day, timeout=timeout)

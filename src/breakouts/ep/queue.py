@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from .models import digest, encode, ticker, timestamp
 
-STAGES = {"IDENTITY", "SOURCE", "ANALYSIS", "DELIVERY", "MARKET"}
+STAGES = {"IDENTITY", "SOURCE", "ANALYSIS", "DELIVERY", "MARKET", "NEWS"}
 TERMINAL = {"COMPLETE", "EXCLUDED", "EXPIRED"}
 
 
@@ -51,6 +51,10 @@ class PipelineQueue:
                 raise ValueError("UNSUPPORTED_EP_PIPELINE_SCHEMA")
             if not read_only:
                 db.executescript('''
+                    CREATE TABLE IF NOT EXISTS latency_events(
+                        id TEXT PRIMARY KEY, ticker TEXT NOT NULL, session TEXT NOT NULL,
+                        kind TEXT NOT NULL, observed_at TEXT NOT NULL, payload TEXT NOT NULL);
+                    CREATE INDEX IF NOT EXISTS latency_ticker ON latency_events(ticker,session,observed_at);
                     CREATE TABLE IF NOT EXISTS events(
                         event_id TEXT PRIMARY KEY, ticker TEXT NOT NULL, descriptor TEXT NOT NULL,
                         first_seen TEXT NOT NULL);
@@ -211,7 +215,7 @@ class PipelineQueue:
         with self.connection() as db:
             rows = db.execute("""SELECT * FROM jobs WHERE stage=? AND due_at<=? AND expires_at>?
                 AND (state IN ('PENDING','RETRY') OR (state='RUNNING' AND lease_until<=?))
-                ORDER BY created_at,job_id LIMIT ?""", (stage, instant, instant, instant, limit)).fetchall()
+                ORDER BY CASE WHEN stage='NEWS' THEN due_at ELSE created_at END,created_at,job_id LIMIT ?""", (stage, instant, instant, instant, limit)).fetchall()
         return [self._row(r) for r in rows]
 
     def claim(self, stage, now, *, lease_seconds=600, job_id=None):
@@ -294,6 +298,7 @@ class PipelineQueue:
             rows = db.execute("""SELECT stage,state,reason,COUNT(*) AS count,MIN(created_at) AS oldest_at
                                  FROM jobs GROUP BY stage,state,reason ORDER BY stage,state,reason""").fetchall()
         return {'groups': [dict(r) for r in rows], 'discovery': self.checkpoint('discovery:last'),
+                'source_selection': self.checkpoint('source:selection'),
                 'market_complete': False}
 
     def timeline(self, symbol, as_of):

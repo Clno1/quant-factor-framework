@@ -1001,3 +1001,19 @@ WBI2/UAN6共8个唯一未决缺口不等于14次不可评估，更不能累加ob
 22:50 IBTA零突破成交量已REJECTED、无signal/比例，未发现非正成交量绕过保护。
 healthz 200、快照约25秒新鲜、watchdog成功，盘中持续运行无重启，资源PASS。
 详细门槛、五日排除原因、前八拒绝原因、MDB及v3后验代理缺口见茶杯柄33、SG运维50。
+
+## 48. 2026-09-12 10:41：完整日FAIL必须覆盖盘中暂时达标
+
+正式日结04:05:09生成，09-11 cup v3 FAIL。独立只读复算与日结完全一致：70周期、2800次、
+P95=0.588805ms、最大77根、cup错误0、可评估53/56、缺口3/56；唯一未决事件12（UAN9/WBI2/IBTA1）。
+不能继续使用昨日22:50盘中的96%/4%宣布合格，也不能把旧动量390/390 PASS借给cup。
+
+10:41:20实际API为DEGRADED、completed_session、target/最近完整日/证据日均09-11，
+保留INSUFFICIENT_EVALUABLE_TICKER_COVERAGE及EXCESSIVE_MINUTE_DATA_GAPS、算法v3、0/5。
+当前已到周末仍未被SCHEDULED遮盖；09-08历史FAIL也留在独立日结表。heartbeat是结束时快照，
+其中market_open=true不能被当成周六当前仍在交易；systemd已在04:05:09正常结束。
+
+operations Web昨夜23:43有序停止/启动，journal无warning/error；盘中服务零重启。
+healthz 200且快照新鲜、watchdog成功、资源PASS，不能将业务质量FAIL归为基础设施故障。
+专项主表/行情/PIT/八因子因目标日推进暂显STALE，版本仍09-10；11:30日更未到时，详见宽基30.6。
+本轮只追加真实证据与根因建议，不改写日结、不重分类缺口、不开启发送。详见茶杯柄34和SG运维51。

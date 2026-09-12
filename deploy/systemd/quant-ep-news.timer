@@ -1,0 +1,11 @@
+[Unit]
+Description=EP queued evidence lookup each market minute
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 04..15:*:15 America/New_York
+AccuracySec=1s
+Persistent=false
+Unit=quant-ep-consumer@news.service
+
+[Install]
+WantedBy=timers.target

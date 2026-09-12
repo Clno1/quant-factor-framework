@@ -1,0 +1,11 @@
+[Unit]
+Description=EP original-source verification each market minute
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 04..15:*:35 America/New_York
+AccuracySec=1s
+Persistent=false
+Unit=quant-ep-consumer@source.service
+
+[Install]
+WantedBy=timers.target

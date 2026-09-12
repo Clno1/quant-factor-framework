@@ -1,0 +1,11 @@
+[Unit]
+Description=EP price discovery each market minute
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 04..15:*:00 America/New_York
+AccuracySec=1s
+Persistent=false
+Unit=quant-ep-consumer@price.service
+
+[Install]
+WantedBy=timers.target
