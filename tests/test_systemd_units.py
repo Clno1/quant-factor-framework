@@ -283,6 +283,12 @@ class SystemdUnitTests(unittest.TestCase):
             prepare_root,
         )
         self.assertIn("--stage linkage --asof latest", prepare_root)
+        for content in (prepare, prepare_root):
+            self.assertIn("Environment=GROUP_ANALYTICS_ENABLED=true", content)
+            self.assertGreater(
+                content.index("Environment=GROUP_ANALYTICS_ENABLED=true"),
+                content.index("EnvironmentFile=/etc/quant/premarket-digest.env"),
+            )
 
     def test_operations_site_is_independent_and_read_only(self):
         web = (

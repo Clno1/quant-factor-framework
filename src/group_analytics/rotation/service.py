@@ -6,6 +6,7 @@ from pathlib import Path
 from uuid import uuid4
 import hashlib
 import json
+import logging
 
 import pandas as pd
 
@@ -36,10 +37,20 @@ from .holdings import (
 from .store import RotationStore, encoded
 from .themes import default_themes, proxy_etf_symbols, required_symbols
 
+LOOKBACK_CALENDAR_DAYS = 550
+LOOKBACK_SESSIONS = 300
+CANONICAL_CACHE_LEAF = "canonical"
+HOLDINGS_CACHE_LEAF = "holdings_canonical"
+logger = logging.getLogger(__name__)
 
-def _canonical_cache_root(cache_root=None):
+
+def _canonical_cache_root(cache_root=None, *, leaf=CANONICAL_CACHE_LEAF):
     parent = Path(cache_root) if cache_root else PROJECT_ROOT / "data" / "reference" / "group_analytics" / "rotation"
-    return parent / "canonical"
+    return parent / leaf
+
+
+def holdings_canonical_root(cache_root=None):
+    return _canonical_cache_root(cache_root, leaf=HOLDINGS_CACHE_LEAF)
 
 
 def _basis_sidecar(parquet_path: Path) -> Path:
@@ -63,9 +74,14 @@ def _write_basis(sidecar: Path):
     }, ensure_ascii=False, sort_keys=True))
 
 
-def load_frames(symbols, start, end, *, refresh=False, cache_root=None, fetcher=None):
-    """Group-owned canonical cache. Shared raw OHLCV is never a silent fallback."""
-    root = _canonical_cache_root(cache_root)
+def load_frames(symbols, start, end, *, refresh=False, cache_root=None,
+                 cache_leaf=CANONICAL_CACHE_LEAF, fetcher=None):
+    """Group-owned canonical cache. Shared raw OHLCV is never a silent fallback.
+
+    ``cache_leaf='holdings_canonical'`` keeps weekly ETF-member refreshes off the
+    theme price cache so a short holdings lookback cannot truncate 61-bar history.
+    """
+    root = _canonical_cache_root(cache_root, leaf=cache_leaf)
     frames = {}
     for symbol in symbols:
         path = root / f"{symbol}.parquet"
@@ -110,8 +126,9 @@ def run_rotation(*, asof="latest", refresh=False, store=None, frames=None, theme
         raise ValueError("Invalid evidence decision cutoff")
     try:
         cal = _calendar(calendar)
-        sessions = cal.sessions_in_range((target - pd.Timedelta(days=550)).date().isoformat(), source_session)
-        sessions = pd.DatetimeIndex(sessions).tz_localize(None)[-300:]
+        sessions = cal.sessions_in_range(
+            (target - pd.Timedelta(days=LOOKBACK_CALENDAR_DAYS)).date().isoformat(), source_session)
+        sessions = pd.DatetimeIndex(sessions).tz_localize(None)[-LOOKBACK_SESSIONS:]
         themes = tuple(themes or default_themes())
         if len({t.id for t in themes}) != len(themes):
             raise ValueError("Duplicate theme ids")
@@ -136,7 +153,8 @@ def run_rotation(*, asof="latest", refresh=False, store=None, frames=None, theme
         try:
             observed_root = Path(holdings_root) if holdings_root is not None else default_holdings_root()
             holdings_observations = load_latest_observations(observed_root, proxy_etf_symbols(themes))
-        except Exception:
+        except Exception as exc:
+            logger.warning("rotation holdings observations skipped: %s", type(exc).__name__)
             holdings_observations = {}
         member_frames = {}
         try:
@@ -144,17 +162,24 @@ def run_rotation(*, asof="latest", refresh=False, store=None, frames=None, theme
             if members:
                 member_frames = load_frames(
                     members, sessions[0].date().isoformat(), source_session,
-                    refresh=False, cache_root=cache_root,
+                    refresh=False, cache_root=cache_root, cache_leaf=HOLDINGS_CACHE_LEAF,
                 )
                 if frames is not None:
                     for symbol in members:
                         frame = frames.get(symbol)
                         if symbol not in member_frames and isinstance(frame, pd.DataFrame):
                             member_frames[symbol] = frame
-        except Exception:
+        except Exception as exc:
+            logger.warning("rotation holdings member prices skipped: %s", type(exc).__name__)
             member_frames = {}
-        attach_holdings_breadth(rows, holdings_observations, member_frames, sessions, now=now)
-        attach_net_creation(rows)
+        try:
+            attach_holdings_breadth(rows, holdings_observations, member_frames, sessions, now=now)
+        except Exception as exc:
+            logger.warning("rotation holdings overlay skipped: %s", type(exc).__name__)
+        try:
+            attach_net_creation(rows)
+        except Exception as exc:
+            logger.warning("rotation net-creation overlay skipped: %s", type(exc).__name__)
         valid = sum(bool(row["production"]["history_valid"]) for row in rows)
         if not valid:
             raise ValueError("No theme has 61 consecutive completed sessions")

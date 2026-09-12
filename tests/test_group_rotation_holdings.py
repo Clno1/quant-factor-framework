@@ -128,6 +128,7 @@ def test_stale_observation_is_unused(tmp_path):
     frames = {f"S{i}": pd.DataFrame({"adj_close": prices[f"S{i}"]}, index=dates) for i in range(5)}
     attach_holdings_breadth(rows, loaded, frames, dates, now="2026-04-16T00:00:00Z")
     assert rows[0]["holdings_breadth"]["status"] == "HOLDINGS_OBSERVATION_STALE"
+    assert "HOLDINGS_OBSERVATION_STALE" in rows[0]["holdings_breadth"]["observation_gaps"]
     assert rows[0]["holdings_breadth"]["breadth_equal_weight_pct"] is None
     assert rows[0]["breadth_kind"] == "unavailable"
     assert pd.isna(rows[0]["production"]["breadth"])
@@ -171,38 +172,57 @@ def test_validation_module_does_not_import_holdings():
     assert "current-member" in text
 
 
-def rows():
-    return [{"symbol":"SMH","asset":s,"isin":"US"+s,"weightPercentage":20,
-             "updatedAt":"2026-09-08 17:00:00"} for s in ("NVDA","AMD","TSM","AVGO","INTC")]
+def test_close_only_member_frames_still_measure():
+    obs = normalize_observation(rows(), "SMH", "2026-09-08T18:00:00Z")
+    dates = pd.bdate_range("2026-08-01", periods=21)
+    frames = {m["ticker"]: pd.DataFrame({"close": range(100, 121)}, index=dates) for m in obs["members"]}
+    result = observation_breadth(obs, frames, dates)
+    assert result["above_ma20_pct"] == 100
+    assert result["eligible_members"] == 5
 
 
-def test_update_timestamp_never_becomes_holding_effective_date():
-    obs=normalize_observation(rows(),"SMH","2026-09-08T18:00:00Z")
-    assert obs["holdings_effective_at"] is None
-    assert not obs["point_in_time"]
-    dates=pd.bdate_range("2026-08-01",periods=21)
-    frames={m["ticker"]:pd.DataFrame({"adj_close":range(100,121)},index=dates) for m in obs["members"]}
-    frames["AMD"].loc[dates[-2],"adj_close"]=float("nan")
-    result=observation_breadth(obs,frames,dates)
-    assert result["above_ma20_pct"]==100
-    assert result["eligible_members"]==4
-    assert result["member_coverage"]==.8
-    assert not result["measurement_complete"]  # five minimum
-    assert not result["production_eligible"]
+def test_overlay_price_exception_does_not_abort_later_rows():
+    from unittest.mock import patch
+    dates, prices, volume, themes = _sample_frames()
+    rows = analyze(prices, volume, dates, themes)
+    with patch(
+        "src.group_analytics.rotation.holdings.observation_breadth",
+        side_effect=AttributeError("adj_close"),
+    ):
+        attach_holdings_breadth(
+            rows, {"ETF": _etf_observation()}, {}, dates, now="2026-04-24T00:00:00Z",
+        )
+    overlay = rows[0]["holdings_breadth"]
+    assert overlay["status"] == "HOLDINGS_MEASUREMENT_FAILED"
+    assert "HOLDINGS_MEASUREMENT_FAILED" in overlay["observation_gaps"]
+    assert rows[1]["holdings_breadth"]["breadth_kind"] == "member_above_ma"
 
 
-@pytest.mark.parametrize("change", ["fund","duplicate","partial","negative"])
-def test_reject_ambiguous_holdings(change):
-    data=rows()
-    if change=="fund": data[0]["symbol"]="SPY"
-    elif change=="duplicate": data[0]["asset"]="AMD"
-    elif change=="partial": data.pop()
-    else: data[0]["weightPercentage"]=-1
-    with pytest.raises(ValueError): normalize_observation(data,"SMH","2026-09-08T18:00:00Z")
+def test_run_rotation_survives_holdings_overlay_crash(tmp_path):
+    from unittest.mock import patch
+    import numpy as np
+    import exchange_calendars as xcals
+    cal = xcals.get_calendar("XNYS")
+    dates = cal.sessions_in_range("2025-01-02", "2026-09-08")
+    close = 100 * np.exp(.0001 * np.arange(len(dates)))
+    frame = pd.DataFrame({"adj_close": close, "close": close, "volume": 10000}, index=dates)
+    theme = Theme("etf", "测试", "technology", "QQQ", proxy="ETF")
+    with patch(
+        "src.group_analytics.rotation.service.attach_holdings_breadth",
+        side_effect=RuntimeError("overlay-boom"),
+    ):
+        result = run_rotation(
+            asof="2026-09-08", store=RotationStore(tmp_path / "out"),
+            frames={"ETF": frame, "QQQ": frame}, themes=[theme],
+            now="2026-09-09T01:00:00Z", dry_run=True,
+        )
+    assert result["valid_theme_count"] == 1
+    assert result["source_session"] == "2026-09-08"
 
 
-def test_unmapped_weight_never_disappears():
-    data=rows();data[-1]["asset"]="1234.T"
-    obs=normalize_observation(data,"SMH","2026-09-08T18:00:00Z")
-    assert len(obs["members"])==4
-    assert obs["excluded"][0]["weight_pct"]==20
+def test_observe_script_isolates_holdings_canonical_cache():
+    text = Path("scripts/observe_rotation_holdings.py").read_text(encoding="utf-8")
+    assert "LOOKBACK_CALENDAR_DAYS" in text
+    assert "HOLDINGS_CACHE_LEAF" in text
+    assert "Timedelta(days=70)" not in text
+    assert "holdings_canonical" in text

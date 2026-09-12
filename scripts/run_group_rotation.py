@@ -61,6 +61,13 @@ def resolve_source_session(asof):
     return pd.Timestamp(asof).tz_localize(None).normalize().date().isoformat()
 
 
+def failure_source_session(asof):
+    try:
+        return resolve_source_session(asof)
+    except Exception:
+        return asof
+
+
 def same_price_inputs(existing, snapshot):
     return (
         existing.get("source_session") == snapshot.get("source_session")
@@ -258,14 +265,14 @@ def main(argv=None):
         return 0
     except RotationStageError as exc:
         if not args.dry_run and exc.record_failure:
-            store.failure(args.asof, exc.code)
+            store.failure(failure_source_session(args.asof), exc.code)
         print(json.dumps({"status": "FAILED", "error_type": exc.code,
                           "message": "轮动构建失败；检查缓存、日期和配置。未覆盖成功快照。"}, ensure_ascii=False),
               file=sys.stderr)
         return 1
     except Exception as exc:
         if not args.dry_run:
-            store.failure(args.asof, type(exc).__name__)
+            store.failure(failure_source_session(args.asof), type(exc).__name__)
         print(json.dumps({"status": "FAILED", "error_type": type(exc).__name__,
                           "message": "轮动构建失败；检查缓存、日期和配置。未覆盖成功快照。"}, ensure_ascii=False),
               file=sys.stderr)

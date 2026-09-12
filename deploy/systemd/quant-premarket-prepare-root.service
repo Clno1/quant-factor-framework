@@ -22,6 +22,8 @@ Environment=VECLIB_MAXIMUM_THREADS=1
 Environment=BLIS_NUM_THREADS=1
 Environment=PREMARKET_SECTOR_ROTATION_ENABLED=true
 EnvironmentFile=/etc/quant/premarket-digest.env
+Environment=GROUP_ANALYTICS_ENABLED=true
+Environment=GROUP_ANALYTICS_WEB_ENABLED=false
 ExecStartPre=/home/projects/quant/.venv/bin/python -c "import sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
 ExecStartPre=-/usr/bin/flock --exclusive --wait 60 /home/projects/quant/data/lake/.broad-production.lock /home/projects/quant/.venv/bin/python /home/projects/quant/scripts/run_group_rotation.py --stage linkage --asof latest
 ExecStart=/home/projects/quant/.venv/bin/python /home/projects/quant/scripts/run_premarket_digest.py --env-file /etc/quant/premarket-digest.env --prepare --channel all

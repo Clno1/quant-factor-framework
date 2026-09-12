@@ -270,6 +270,24 @@ def test_digest_gate_stale_and_payload_budget(tmp_path):
         load_rotation_report("2000-01-01",store=store)
 
 
+def test_discord_stale_holdings_does_not_say_unlinked():
+    s = snapshot()
+    s["run_id"] = "rot_20260515_aaaaaaaaaaaaaaaa"
+    s["rows"][0]["production"]["action"] = "focus"
+    s["rows"][0]["holdings_breadth"] = {
+        "breadth_kind": "unavailable",
+        "status": "HOLDINGS_OBSERVATION_STALE",
+        "breadth_equal_weight_pct": None,
+    }
+    payload = rotation_payload(
+        s, SimpleNamespace(target_session="2026-09-09"),
+        PremarketDigestSettings(dashboard_base_url="https://example.com"),
+    )
+    text = payload["embeds"][0]["fields"][0]["value"]
+    assert "过期未用" in text
+    assert "真实广度未接入" not in text
+
+
 def test_service_calendar_holiday_future_and_no_publish_dry_run(tmp_path):
     import exchange_calendars as xcals
     cal = xcals.get_calendar("XNYS")
@@ -496,6 +514,17 @@ def test_linkage_rejects_refresh_and_without_candidates(tmp_path):
     assert not RotationStore(tmp_path).initialized
 
 
+def test_cli_failure_records_iso_session_not_latest(tmp_path):
+    from scripts.run_group_rotation import main
+    with patch("src.group_analytics.settings.load_group_analytics_settings",
+               return_value=SimpleNamespace(enabled=False)):
+        assert main(["--asof", "latest", "--output-root", str(tmp_path)]) == 1
+    attempt = RotationStore(tmp_path).last_attempt()
+    assert attempt["status"] == "FAILED"
+    assert attempt["source_session"] != "latest"
+    assert len(str(attempt["source_session"])) == 10
+
+
 def test_rotation_page_freshness_contract():
     html = Path("src/webapp/templates/group_rotation.html").read_text(encoding="utf-8")
     js = Path("src/webapp/static/js/group_rotation.js").read_text(encoding="utf-8")
@@ -512,6 +541,8 @@ def test_rotation_page_freshness_contract():
     assert "visibilitychange" in js
     assert "5 * 60 * 1000" in js
     assert "America/New_York" in js
+    assert 'overlayStatus === "HOLDINGS_OBSERVATION_STALE"' in js
+    assert 'overlayStatus === "HOLDINGS_MEASUREMENT_FAILED"' in js
 
 
 def test_group_rotation_price_adapter_reads_store(tmp_path):
@@ -739,6 +770,22 @@ def test_canonical_refresh_writes_basis_sidecar(tmp_path):
     shared.mkdir()
     pd.DataFrame({"close": [9.0]}).to_parquet(shared / "SPY.parquet")
     assert load_frames(["SPY"], "2026-01-05", "2026-01-07", cache_root=tmp_path) == {}
+
+
+def test_holdings_cache_leaf_does_not_share_theme_canonical(tmp_path):
+    from src.group_analytics.rotation.service import HOLDINGS_CACHE_LEAF
+
+    dates = pd.bdate_range("2026-01-05", periods=3)
+
+    def fake_fetch(symbol, start, end):
+        return pd.DataFrame({"open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0,
+                             "adj_close": 1.0, "volume": 1.0}, index=dates)
+
+    loaded = load_frames(["NVDA"], "2026-01-05", "2026-01-07", refresh=True,
+                         cache_root=tmp_path, cache_leaf=HOLDINGS_CACHE_LEAF, fetcher=fake_fetch)
+    assert "NVDA" in loaded
+    assert (tmp_path / "holdings_canonical" / "NVDA.parquet").exists()
+    assert not (tmp_path / "canonical" / "NVDA.parquet").exists()
 
 
 def test_legacy_snapshot_load_sets_schema_legacy(tmp_path):

@@ -158,6 +158,10 @@ def rotation_payload(report, context, settings):
                 if weighted is not None:
                     line += f" / 加权 {weighted:.0f}%"
                 line += "（持仓生效日未披露）"
+            elif hb.get("status") == "HOLDINGS_OBSERVATION_STALE":
+                line += "\n持仓观测过期未用，仅价格观察"
+            elif hb.get("status") == "HOLDINGS_MEASUREMENT_FAILED":
+                line += "\n持仓已接入但成员价格不足，仅价格观察"
             elif p.get("breadth") is not None:
                 line += f"\n站20日线 {int(p['breadth_n'])}只有效样本中的 {p['breadth']:.0f}%"
                 if p["breadth_n"] < 5:

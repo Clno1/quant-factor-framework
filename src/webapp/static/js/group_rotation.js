@@ -70,7 +70,10 @@
   function displayGaps(r, p) {
     const hb = holdingsBreadth(r);
     let gaps = [...(r.evidence_gaps || p.evidence_gaps || [])];
-    if (hb.breadth_kind === "etf_holdings_observation") {
+    const overlayStatus = hb.status || "";
+    if (hb.breadth_kind === "etf_holdings_observation"
+        || overlayStatus === "HOLDINGS_OBSERVATION_STALE"
+        || overlayStatus === "HOLDINGS_MEASUREMENT_FAILED") {
       gaps = gaps.filter(gap => gap !== "ETF_HOLDINGS_NOT_LINKED");
     }
     for (const extra of hb.observation_gaps || []) {

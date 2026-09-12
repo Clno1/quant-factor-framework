@@ -57,7 +57,7 @@ V2 已完成的 **SMH 试点**（见 [V2 验证文档 §4](sector_rotation_v2_va
 data/reference/group_analytics/rotation/holdings/<ETF>/<YYYYMMDDTHHMMSSZ>.json
 ```
 
-日常 `run_rotation(..., holdings_root=)` **只读**最近一次观测，失败不阻断价格层。成员价格从 group-owned canonical 缓存 `load_frames(..., refresh=False)` 读取，不在 17:30 价格 job 里拉上百只成分。
+日常 `run_rotation(..., holdings_root=)` **只读**最近一次观测，失败不阻断价格层。成员价格优先从独立缓存 `rotation/holdings_canonical/` 读取，缺失时才回退到当日已注入/主题 canonical 的重叠标的；**不得**把周更 refresh 写进主题 `rotation/canonical/`，否则会截断 61 根历史。
 
 每周一 **12:00 America/New_York**（早于 17:30 价格层）跑 `scripts/observe_rotation_holdings.py --all --refresh-members`：
 

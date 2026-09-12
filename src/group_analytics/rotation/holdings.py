@@ -73,6 +73,16 @@ def normalize_observation(rows, symbol, captured_at):
             "members": members, "excluded": excluded, "reported_weight_pct": total}
 
 
+def _member_price_series(frame):
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return None
+    if "adj_close" in frame.columns:
+        return frame["adj_close"]
+    if "close" in frame.columns:
+        return frame["close"]
+    return None
+
+
 def observation_breadth(observation, frames, sessions):
     """Evaluate member MA20 on a completed price date, not on a claimed holding date."""
     if observation.get("status") != "OBSERVATION_ONLY_NO_PROVIDER_DATE":
@@ -80,7 +90,14 @@ def observation_breadth(observation, frames, sessions):
     if len(sessions) < 20:
         raise ValueError("Need 20 exchange sessions")
     symbols = [m["ticker"] for m in observation["members"]]
-    table = clean_table(pd.DataFrame({s: f.adj_close for s, f in frames.items() if s in symbols}), sessions)
+    series = {}
+    for symbol, frame in (frames or {}).items():
+        if symbol not in symbols:
+            continue
+        prices = _member_price_series(frame)
+        if prices is not None:
+            series[symbol] = prices
+    table = clean_table(pd.DataFrame(series), sessions)
     table = table.reindex(columns=symbols).where(lambda f: f > 0)
     ma = table.rolling(20, min_periods=20).mean().iloc[-1]
     last = table.iloc[-1]
@@ -246,74 +263,87 @@ def _etf_unavailable(status, note, gaps):
 def attach_holdings_breadth(rows, observations, frames, sessions, *, now):
     """Overlay dual-calibre observation onto rows; never writes production.breadth."""
     for row in rows:
-        members = row.get("definition", {}).get("members") or row.get("members") or []
-        has_basket_members = bool(row.get("definition", {}).get("members"))
-        if has_basket_members:
-            overlay = _basket_overlay(row)
-            row["holdings_breadth"] = overlay
-            row["breadth_kind"] = "member_above_ma"
-            continue
-        proxy = row.get("proxy")
-        observation = observations.get(proxy) if proxy else None
-        if observation is None:
-            overlay = _etf_unavailable(
-                "ETF_HOLDINGS_NOT_LINKED",
-                "ETF真实持仓广度未接入，不能将趋势代理当成成员比例",
-                ["ETF_HOLDINGS_NOT_LINKED"],
-            )
-            row["holdings_breadth"] = overlay
-            row["breadth_kind"] = "unavailable"
-            continue
-        if is_observation_stale(observation, now):
-            overlay = _etf_unavailable(
-                "HOLDINGS_OBSERVATION_STALE",
-                "持仓观测超过14个日历日，已停用，不使用旧持仓",
-                ["HOLDINGS_OBSERVATION_STALE"],
-            )
-            overlay["holdings_captured_at"] = observation.get("captured_at")
-            row["holdings_breadth"] = overlay
-            row["breadth_kind"] = "unavailable"
-            continue
         try:
-            measured = observation_breadth(observation, frames or {}, sessions)
-        except (ValueError, TypeError, KeyError):
-            overlay = _etf_unavailable(
-                "HOLDINGS_MEASUREMENT_FAILED",
-                HOLDINGS_NOTE + "；成员价格不足以完成测量",
-                [],
-            )
-            overlay["holdings_captured_at"] = observation.get("captured_at")
-            overlay["breadth_kind"] = "etf_holdings_observation"
-            row["holdings_breadth"] = overlay
-            row["breadth_kind"] = "etf_holdings_observation"
-            _mark_holdings_linked(row)
-            continue
-        equal = _finite(measured.get("above_ma20_pct"))
-        gaps = []
-        if equal is not None and equal < 60:
-            gaps.append("LOW_PARTICIPATION")
-        overlay = {
-            "breadth_kind": "etf_holdings_observation",
-            "status": measured.get("status"),
-            "breadth_equal_weight_pct": equal,
-            "breadth_weighted_pct": _finite(measured.get("weighted_above_ma20_pct")),
-            "breadth_eligible_members": measured.get("eligible_members"),
-            "breadth_mapped_members": measured.get("mapped_equity_members"),
-            "breadth_member_coverage": _finite(measured.get("member_coverage")),
-            "breadth_weight_coverage": _finite(measured.get("weight_coverage")),
-            "holdings_captured_at": measured.get("holdings_captured_at"),
-            "holdings_effective_at": measured.get("holdings_effective_at"),
-            "point_in_time": False,
-            "measurement_complete": bool(measured.get("measurement_complete")),
-            "production_eligible": False,
-            "excluded": list(observation.get("excluded") or []),
-            "observation_gaps": gaps,
-            "note": HOLDINGS_NOTE,
-        }
+            _attach_one_holdings_row(row, observations, frames, sessions, now=now)
+        except Exception:
+            if "holdings_breadth" not in row:
+                row["holdings_breadth"] = _etf_unavailable(
+                    "HOLDINGS_MEASUREMENT_FAILED",
+                    HOLDINGS_NOTE + "；持仓观测叠加失败",
+                    ["HOLDINGS_MEASUREMENT_FAILED"],
+                )
+                if not row.get("breadth_kind"):
+                    row["breadth_kind"] = "unavailable"
+    return rows
+
+
+def _attach_one_holdings_row(row, observations, frames, sessions, *, now):
+    has_basket_members = bool(row.get("definition", {}).get("members"))
+    if has_basket_members:
+        overlay = _basket_overlay(row)
+        row["holdings_breadth"] = overlay
+        row["breadth_kind"] = "member_above_ma"
+        return
+    proxy = row.get("proxy")
+    observation = observations.get(proxy) if proxy else None
+    if observation is None:
+        overlay = _etf_unavailable(
+            "ETF_HOLDINGS_NOT_LINKED",
+            "ETF真实持仓广度未接入，不能将趋势代理当成成员比例",
+            ["ETF_HOLDINGS_NOT_LINKED"],
+        )
+        row["holdings_breadth"] = overlay
+        row["breadth_kind"] = "unavailable"
+        return
+    if is_observation_stale(observation, now):
+        overlay = _etf_unavailable(
+            "HOLDINGS_OBSERVATION_STALE",
+            "持仓观测超过14个日历日，已停用，不使用旧持仓",
+            ["HOLDINGS_OBSERVATION_STALE"],
+        )
+        overlay["holdings_captured_at"] = observation.get("captured_at")
+        row["holdings_breadth"] = overlay
+        row["breadth_kind"] = "unavailable"
+        return
+    try:
+        measured = observation_breadth(observation, frames or {}, sessions)
+    except Exception:
+        overlay = _etf_unavailable(
+            "HOLDINGS_MEASUREMENT_FAILED",
+            HOLDINGS_NOTE + "；成员价格不足以完成测量",
+            ["HOLDINGS_MEASUREMENT_FAILED"],
+        )
+        overlay["holdings_captured_at"] = observation.get("captured_at")
+        overlay["breadth_kind"] = "etf_holdings_observation"
         row["holdings_breadth"] = overlay
         row["breadth_kind"] = "etf_holdings_observation"
         _mark_holdings_linked(row)
-    return rows
+        return
+    equal = _finite(measured.get("above_ma20_pct"))
+    gaps = []
+    if equal is not None and equal < 60:
+        gaps.append("LOW_PARTICIPATION")
+    overlay = {
+        "breadth_kind": "etf_holdings_observation",
+        "status": measured.get("status"),
+        "breadth_equal_weight_pct": equal,
+        "breadth_weighted_pct": _finite(measured.get("weighted_above_ma20_pct")),
+        "breadth_eligible_members": measured.get("eligible_members"),
+        "breadth_mapped_members": measured.get("mapped_equity_members"),
+        "breadth_member_coverage": _finite(measured.get("member_coverage")),
+        "breadth_weight_coverage": _finite(measured.get("weight_coverage")),
+        "holdings_captured_at": measured.get("holdings_captured_at"),
+        "holdings_effective_at": measured.get("holdings_effective_at"),
+        "point_in_time": False,
+        "measurement_complete": bool(measured.get("measurement_complete")),
+        "production_eligible": False,
+        "excluded": list(observation.get("excluded") or []),
+        "observation_gaps": gaps,
+        "note": HOLDINGS_NOTE,
+    }
+    row["holdings_breadth"] = overlay
+    row["breadth_kind"] = "etf_holdings_observation"
+    _mark_holdings_linked(row)
 
 
 def _mark_holdings_linked(row):

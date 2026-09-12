@@ -3,7 +3,8 @@
 
 Writes independent files under
 ``data/reference/group_analytics/rotation/holdings/<ETF>/<captured_at>.json``.
-Member prices go into the group-owned canonical cache (refresh optional).
+Member prices go into ``rotation/holdings_canonical/``, never the theme
+``rotation/canonical/`` cache used by the daily price job.
 Per-ETF failures are recorded and do not abort the remaining funds.
 """
 from __future__ import annotations
@@ -26,7 +27,11 @@ from src.group_analytics.rotation.holdings import (
     observation_breadth,
     save_observation,
 )
-from src.group_analytics.rotation.service import load_frames
+from src.group_analytics.rotation.service import (
+    HOLDINGS_CACHE_LEAF,
+    LOOKBACK_CALENDAR_DAYS,
+    load_frames,
+)
 from src.group_analytics.rotation.store import encoded
 from src.group_analytics.rotation.themes import default_themes, proxy_etf_symbols
 
@@ -51,14 +56,14 @@ def _observe_one(etf, *, holdings_root, cache_root, sessions, end, max_members, 
     if refresh_members and members:
         frames = load_frames(
             members, sessions[0].date().isoformat(), end.date().isoformat(),
-            refresh=True, cache_root=cache_root,
+            refresh=True, cache_root=cache_root, cache_leaf=HOLDINGS_CACHE_LEAF,
         )
         errors = [{"symbol": symbol, "error_type": "MissingCanonicalPrice"}
                   for symbol in members if symbol not in frames]
     elif members:
         frames = load_frames(
             members, sessions[0].date().isoformat(), end.date().isoformat(),
-            refresh=False, cache_root=cache_root,
+            refresh=False, cache_root=cache_root, cache_leaf=HOLDINGS_CACHE_LEAF,
         )
     measured = None
     try:
@@ -98,8 +103,9 @@ def main(argv=None):
         args.output.mkdir(parents=True)
     end = latest_completed_session()
     sessions = pd.DatetimeIndex(
-        _calendar().sessions_in_range((end - pd.Timedelta(days=70)).date().isoformat(),
-                                      end.date().isoformat())
+        _calendar().sessions_in_range(
+            (end - pd.Timedelta(days=LOOKBACK_CALENDAR_DAYS)).date().isoformat(),
+            end.date().isoformat())
     ).tz_localize(None)
     results = []
     for etf in _symbols(args.etf, args.all):
