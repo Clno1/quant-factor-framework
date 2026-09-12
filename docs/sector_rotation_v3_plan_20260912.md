@@ -118,7 +118,7 @@ RandomizedDelaySec=30s
 
 ### 2.4 算法反例：稳定领先被永久判为"等待"（最严重的设计缺陷）
 
-```166:180:src/group_analytics/rotation/engine.py
+```165:171:src/group_analytics/rotation/engine.py
     confirmed, pending, count, since = "unavailable", None, 0, None
     records = []
     for date, row in frame.iterrows():
@@ -136,9 +136,13 @@ ln(1 + RS5/100)       = 5c
 y  = 5c − (20c − 5c)/3 = 5c − 5c = 0
 ```
 
+推导前提：`q = 主题指数 / 基准`，`RS_k = 100 × (q_t/q_{t−k} − 1)`，因此 `ln(1 + RS_k/100) = ln(q_t/q_{t−k})` 恰好等于 k 个交易日相对对数收益之和。恒定速率即该日收益恒为 `c`。
+
 **`y` 对任何恒定速率的相对趋势都恒等于 0**，不是近似为 0，是构造上必然为 0。
 
-数值验证：20 日跑赢 2% → `c = 0.00099`，`y ≈ −9e-7`。
+数值验证：20 日跑赢 2% → `c = ln(1.02)/20 = 0.00099013`，`RS20 = 2.0000%`、`RS5 = 0.4963%`，`y = 9.4e-17` —— 机器精度量级，即严格为零。`boundary` 判定为 `True`。
+
+（`δx = 0.005` 对应 `RS20 ≈ 0.501%`，即月度相对强弱死区约 ±0.5%。）
 
 而 `boundary` 是 **OR** 逻辑，`|y| <= 0.002` 成立即整体落入边界带 → `candidate = "neutral"` → `action = "wait"`。
 
@@ -240,13 +244,15 @@ X 轴（月度相对强弱）与 Y 轴（近 5 日相对前 15 日速度）**独
 | | 加速 | 平稳 | 减速 |
 |---|---|---|---|
 | **领先** | 领先且加速 | **稳定领先** | 领先但降温 |
-| **持平** | 边界转强 | 与基准同步 | 边界转弱 |
+| **持平** | 持平转强 | 与基准同步 | 持平转弱 |
 | **落后** | 落后但改善 | 稳定落后 | 落后且减速 |
 
 死区语义修正：
 
 - `|x| <= δx` → **持平**（不是"无法判断"）
 - `|y| <= δy` → **平稳**（不是"无法判断"）
+
+"边界"一词不再用于状态命名，只保留在审计字段中描述数值落在死区内。
 
 这直接修复 §2.4 的反例：稳定领先 = 领先 + 平稳，是一个明确且有用的结论。
 
@@ -266,11 +272,14 @@ X 轴（月度相对强弱）与 Y 轴（近 5 日相对前 15 日速度）**独
 
 ### 4.4 用现有 09-10 数据的表达对照
 
-| 主题 | 现有数据 | 当前显示 | 目标显示 |
-|---|---|---|---|
-| 能源（相对 SPY） | 20日 +8.45%，60日 +16.97% | 延伸偏大 | 中期领先 · 近期降温 · 延伸风险 |
-| 存储（相对 QQQ） | 20日 +4.67%，60日 −13.39% | 价格领先／待广度 | 短中期修复 · 长期仍弱 · 仅 3 只篮子股票 |
-| 半导体（相对 QQQ） | 5日 +1.86%，20日 −2.17% | 等待确认 | 短期改善 · 中期未转强 · 真实成员广度未知 |
+| 主题 | 现有数据 | 当前显示 | 目标显示 | 证据来源 |
+|---|---|---|---|---|
+| 存储（相对 QQQ） | 5日 +4.01%，20日 +4.67%，60日 −13.39%；样本 3/3 | 价格领先／待广度 | 短中期修复 · 长期仍弱 · 仅 3 只篮子股票 | 页面截图，已核对 |
+| 半导体（相对 QQQ） | 5日 +1.86%，20日 −2.17%，60日 −9.20% | 等待确认 | 短期改善 · 中期未转强 · 真实成员广度未知 | 页面截图，已核对 |
+| 云计算（相对 QQQ） | 5日 −1.62%，20日 −1.62%，60日 +20.11% | 延伸偏大 | 长期领先 · 近期回落 · 延伸风险（RS60 > 18） | 页面截图，已核对 |
+| 能源（相对 SPY） | 20日 +8.45%，60日 +16.97% | 延伸偏大 | 待补 RS5 与 dist50 后确定 | **待 SG 核对** |
+
+前三行可由截图字段完整推导。**能源行不能直接采用**：`extension = (rs60 > 18) or (dist50 > 8)`，而 `rs60 = 16.97 < 18`，因此"延伸偏大"必然来自 `dist50 > 8`，该字段未在截图中给出；"近期降温"也需要 RS5，同样缺失。P1 开工前必须从 SG 快照补齐 `rs5`、`rs1`、`dist50`、`abs20`、`absolute_ma20` 再回填本行，不得凭两个数字给结论。
 
 同样的数据，表达清晰度差距明显。这是 P1 不需要任何新数据就能拿到的收益。
 
@@ -301,6 +310,21 @@ X 轴（月度相对强弱）与 Y 轴（近 5 日相对前 15 日速度）**独
 - 若 `candidate_linkage.status == "available"` 且 `input_fingerprint` 未变 → 直接返回 `NOOP`，不产生新 run。
 - 若动量报告仍不可用 → 记录失败原因码，**不覆盖**现有快照。
 - 重复执行不产生重复 run。
+- `store.load()` 返回值带 `run_id`，重新 `publish` 前必须 `snapshot.pop("run_id", None)`（现有 `run_group_rotation.py` 已有此处理，拆分阶段后不能丢）。
+
+#### P0.1.1 重复 run 抑制（必做，否则每天产生冗余快照）
+
+快照包含 `"generated_at": now.isoformat()`，因此**即使输入完全相同，每次构建的 digest 也不同**，会生成一个新的 `run_id`。在美股休市日、或同一交易日重复触发时，`price` 阶段会为同一个 `source_session` 反复产出内容等价的 run。
+
+`price` 阶段发布前必须先比对：
+
+```text
+若 latest 快照的 source_session 相同
+且 latest 快照的 input_fingerprint 相同
+→ 跳过发布，返回 NOOP
+```
+
+`input_fingerprint` 已经是输入面板的 sha256（不含 `generated_at`），正是这个判断的正确键。休市日因此自然收敛为 NOOP，不需要在 timer 里单独判断交易所假日。
 
 #### P0.2 定时器调整
 
@@ -401,16 +425,26 @@ speed_axis    = "accelerating" if y >  δy
 
 #### P1.4 研究优先级重新定义
 
-优先级只做**排序建议**，不再吸收风险和缺失信息：
+优先级只做**排序建议**，不再吸收风险和缺失信息。按顺序判断，首个命中即停止：
 
 ```text
-1. focus     持续领先   strength_confirmed=leading 且 abs20>0 且 index>absolute_ma20
-2. recover   正在修复   strength_confirmed=lagging 且 speed=accelerating 且 abs5>0
-3. cooling   领先降温   strength_confirmed=leading 且 speed=decelerating
-4. weak      持续落后   strength_confirmed=lagging 且 speed 非 accelerating
-5. neutral   与基准同步 strength_confirmed=flat
-6. unavailable 数据不足 history_valid=false
+0. unavailable  数据不足    history_valid = false
+1. focus        持续领先    strength=leading 且 abs20>0 且 index>absolute_ma20
+2. defensive    相对抗跌    strength=leading 且 (abs20<=0 或 index<=absolute_ma20)
+3. recover      正在修复    strength=lagging 且 speed=accelerating 且 abs5>0
+4. weak         持续落后    strength=lagging
+5. neutral      与基准同步  strength=flat
 ```
+
+**完备性证明**（必须在测试中断言）：`history_valid=true` 时 `strength ∈ {leading, flat, lagging}`。leading 被规则 1/2 完全覆盖且互斥；lagging 被规则 3/4 完全覆盖；flat 由规则 5 覆盖。**无未命中分支。**
+
+三点必须注意：
+
+- `unavailable` **排在第一位**，不是最后。历史不足时其余字段无意义，先判断才能避免用残缺数据得出方向性结论。
+- **没有 `cooling` 档**。"领先但降温"由 `speed_axis=decelerating` 独立表达，不占用优先级档位 —— 这正是"一个标签只回答一个问题"。降温的领先主题仍属 `focus`，排序时靠 RS20 和速度列自然下沉。
+- `defensive`（相对抗跌）对应 [V2 研究稿 §6.3](sector_rotation_v2_research.md) 已确立的约束：相对排名第一但绝对趋势向下时只报"相对抗跌"，不进默认强势方向。此档不可省略，否则"跑赢但在跌"会被误读成可研究方向。
+
+档内排序沿用当前默认的 RS20 降序，可切 RS5/RS60。优先级只决定分组，不决定组内顺序。
 
 关键差异：
 
@@ -434,9 +468,46 @@ speed_axis    = "accelerating" if y >  δy
 3. 对比 `adj_close × volume` 与 `close × volume` 的差异分布
 4. 结果写入 `docs/sector_rotation_v3_amount_audit_<date>.md`
 
-对账通过后，`amount_verified` 默认改为 `true`，`--amount-verified` 参数保留但反转为 `--no-amount-verified`。
+对账通过后，`amount_verified` 默认改为 `true`，`--amount-verified` 参数保留但反转为 `--no-amount-verified`。快照中必须记录 `amount_basis`（取值 `split_adjusted_close_x_volume`）与对账文档的 commit，使任一历史 run 都能追溯其成交额口径。
 
 成交额方向标签按 [V2 修订稿 §5.1](sector_rotation_v2_public_source_revision.md) 的反例要求：必须写"放量相对走强/走弱"，需要写"放量下跌"时另行检查绝对收益。
+
+**解锁成交额不等于恢复 0–100 分。** `sufficient` 还要求 `breadth.notna() & breadth_n>=5`，17 个 ETF 主题在 P2 之前仍然拿不到分数。而且按设计原则 5 与 §4.1 的目标主表，**生产 0–100 分在本轮全程保持不展示**；成交额解锁只服务于"成交活跃"这一展示列。开发时不要顺手把分数列加回主表。
+
+#### P1.5.1 三个价格表与函数签名变更
+
+`get_canonical_historical_ohlcv` 返回的 frame 里，`close` 是拆股复权可成交价，`adj_close` 是分红复权总收益价。当前 `service.py` 只向下游传 `prices`（取 `adj_close`）与 `volumes` 两张表：
+
+```81:82:src/group_analytics/rotation/service.py
+            prices[symbol] = frame.get("adj_close", frame.get("close", pd.Series(dtype=float)))
+            volumes[symbol] = frame.get("volume", pd.Series(dtype=float))
+```
+
+必须新增第三张 `execution_close` 表并贯穿 `analyze()` → `metric_frame()`。相对收益继续用 `adj_close`，成交额改用 `execution_close × volume`。两者字段名必须区分，禁止复用 `prices`。
+
+连带影响：`input_panel` 增加一张表 → `input_fingerprint` 改变 → `replay.py` 的冻结重放口径改变。**v2.1 旧 run 只能按 v2 规则重放**，`replay.py` 需按快照的 `schema_version` 分派，不得用 v3 规则重放 v2 快照并报告 MATCH。
+
+#### P1.5.2 价格缓存必须失效（否则首次部署静默取到旧口径）
+
+```20:45:src/group_analytics/rotation/service.py
+def load_frames(symbols, start, end, *, refresh=False, cache_root=None, fetcher=None):
+    """Group-owned cache; existing shared OHLCV files remain read-only fallback."""
+    root = Path(cache_root) if cache_root else PROJECT_ROOT / "data" / "reference" / "group_analytics" / "rotation"
+    shared = CONFIG.abs_path(CONFIG.data.raw_dir) / "ohlcv"
+```
+
+现存缓存 `rotation/<SYMBOL>.parquet` 全部是 dividend-adjusted 口径（`close == adj_close`），共享回退目录 `data/raw/ohlcv/` 口径同样未经核验。换 fetcher 后若沿用同一路径：
+
+- 单只标的刷新失败时旧文件保留 → 与新文件混合口径
+- 走共享回退的标的永远是旧口径
+- 两种情况都**不会报错**，只会产出错误的成交额
+
+必须做的处理：
+
+1. 缓存路径加口径版本段：`rotation/canonical/<SYMBOL>.parquet`
+2. 缓存文件内必须含 `price_basis` 标记，读取时校验，不符即视为缺失
+3. 共享 `data/raw/ohlcv` 回退在新口径下**停用**（读不到就报缺失，不降级）
+4. 部署时旧目录保留但不再读取，便于回退
 
 #### P1.6 compat 维度升到主表
 
@@ -455,17 +526,45 @@ speed_axis    = "accelerating" if y >  δy
 - `publish()` 只接受当前 `SCHEMA_VERSION`
 - `load()` 接受 `READABLE_SCHEMA_VERSIONS = {"rotation.v2.1", "rotation.v3.0"}`，读到旧版本时在返回值上标 `schema_legacy=true`，页面据此降级展示，不报错
 
+**这不是可选项，否则 v3 首次发布必然失败。** `publish()` 内部会调用 `self.load()` 读取旧指针：
+
+```52:56:src/group_analytics/rotation/store.py
+            pointer = {"run_id": run_id, "sha256": digest, "source_session": snapshot["source_session"]}
+            old = self.load() if (self.root / "latest.json").exists() else None
+            if old is None or old["source_session"] <= snapshot["source_session"]:
+                _atomic_json(self.root / "latest.json", pointer)
+```
+
+而 `load()` 当前对版本是硬校验：
+
+```89:90:src/group_analytics/rotation/store.py
+        if snapshot.get("schema_version") != SCHEMA_VERSION or not isinstance(snapshot.get("rows"), list):
+            raise ValueError("Unsupported rotation schema")
+```
+
+`SCHEMA_VERSION` 一旦升到 `rotation.v3.0`，SG 上 `latest.json` 仍指向 v2.1 run，`publish()` → `load()` → `ValueError` → **第一次 v3 构建直接失败**，而且 `store.failure()` 会把 `last_attempt` 标成 FAILED。
+
+必须在**同一个提交**里完成读版本放宽与写版本升级，不能分两次合并。部署前在 SG 上用真实 `outputs/group_analytics/rotation/` 目录做一次只读 `load()` 验证。
+
+对应测试：以 v2.1 快照为 latest 时，v3 `publish()` 必须成功且指针正确前移。
+
 **交付物**：双轴状态、独立风险/缺失数组、新优先级、成交额解锁、趋势列、v3 schema。
 
 **测试**（新增，`tests/test_group_rotation.py` 扩展）：
 
 - **§2.4 反例回归**：构造恒定速率相对趋势序列，断言 `strength_axis == "leading"`、`speed_axis == "steady"`、`priority == "focus"`，且**不出现** `wait`
+- **优先级完备性**：对 `strength × speed × abs20符号 × index/MA20符号` 的全部组合遍历，断言每一组都命中且仅命中一个档位，无 `None`
+- `leading` + `abs20 <= 0` → `defensive`，不得落入 `focus`，也不得无命中
 - 一天噪声不改变已确认 `strength_axis`，也不改变 `priority`
 - 延伸主题仍能获得 `focus`，同时 `EXTENDED` 在 `risk_flags` 中
 - 无成员 ETF 的 `evidence_gaps` 含 `ETF_HOLDINGS_NOT_LINKED`，且不影响 `priority`
 - 3 只成员篮子 `evidence_gaps` 含 `SMALL_BASKET`
 - `speed_axis` 每日直出，不受两日确认影响
+- **v2.1 快照作为 latest 时，v3 `publish()` 成功且指针前移**
 - v2.1 旧快照仍可 `load()` 并标 `schema_legacy`
+- `replay.py` 对 v2.1 快照按 v2 规则重放，不用 v3 规则报 MATCH
+- 缓存文件 `price_basis` 不符时视为缺失，不静默使用
+- `input_fingerprint` 相同时 `price` 阶段返回 NOOP，不产生新 run
 - 主题涨 1% / 基准涨 2% 时标签为"相对走弱"而非"下跌"
 
 **验收**：用 09-10 真实快照重算，逐条核对 §4.4 三个主题的目标表达；22 个主题中"等待确认"占比显著下降且每个剩余的"等待"都有明确原因码。
@@ -505,7 +604,7 @@ holdings_effective_at         持仓生效日（供应商未提供时为 null）
 point_in_time                 恒为 false
 ```
 
-`breadth_kind` 枚举：`member_above_ma`（自建篮子）、`etf_holdings_observation`（ETF 当前持仓观测）、`unavailable`。**不设 `etf_trend_proxy`** —— 参考版的 70/30 永远不进这个字段。
+生产轨道的 `breadth_kind` 枚举：`member_above_ma`（自建篮子）、`etf_holdings_observation`（ETF 当前持仓观测）、`unavailable`。**不设 `etf_trend_proxy`** —— 参考版的 70/30 永远不进这个字段。对照轨道产出的 70/30 继续保留在行内 `compatibility` 字段中，只在"方法对照"区展示。
 
 #### P2.3 资格边界
 
@@ -661,10 +760,11 @@ X/Y 已在快照中，`history` 已存 120 个交易日，仅缺前端。
 2. RS60
 3. RS20/60 组合
 4. `source_v1_compat` 积分
-5. V2 生产价格状态（历史对照）
-6. V3 双轴优先级（P1 产物）
-7. V3 + 真实广度（P2 产物）
-8. V3 + 广度 + 净申赎（P3 产物）
+5. V3 双轴优先级（P1 产物）
+6. V3 + 真实广度（P2 产物）
+7. V3 + 广度 + 净申赎（P3 产物）
+
+V2 生产价格状态**不重新实现**。P1 之后该代码路径已移除，其历史对照数值直接引用 [V2 验证文档 §3](sector_rotation_v2_validation_20260909.md) 的已记录结果（科技 −2.57pp、行业 −0.45pp，相对 RS20，25bp 成本）。为做对照而保留一份死代码违反"不增加复杂度"。
 
 要求沿用既有实验设计：T+1 复权开盘入场、T+h 复权收盘退出，h = 20 为主检验、5 为辅助；不重叠持有期；0/10/25/50bp 双边成本；交易日块自助法；开发/验证/回看三段切分且标签跨段剔除。
 
@@ -679,26 +779,31 @@ X/Y 已在快照中，`history` 已存 120 个交易日，仅缺前端。
 ## 6. 阶段依赖与追踪
 
 ```text
-P0 时效与闭环 ──┐
-                ├──> P1 判断层重构 ──> P2 真实广度 ──> P3 净申赎 ──┐
-                │                          │                        │
-                └──────────────────────────┴──> P4 呈现层           ├──> P5 验证
-                                                                     │
-                                                       P5.1 宏观 ────┘
+P0 时效与闭环          （独立，不依赖任何其他阶段）
+
+P1 判断层重构 ──┬──> P2 真实广度 ──> P3 净申赎
+                └──> P4 呈现层
+
+P5.1 宏观接入         （独立，只依赖 FRED 审计）
+
+P5.2 增量验证         （在 P1 / P2 / P3 各自结束时分别跑一次）
 ```
 
-- P0 与 P1 无依赖，可并行开发，但 P1 的 SG 验收应在 P0 上线后进行
-- P4 依赖 P1（轨迹图需要 x/y 字段），不依赖 P2/P3
-- P5.2 验证在每个阶段结束时都要跑一次，不是最后才做
+- **P0 与 P1 在逻辑上互不依赖，但会改动同一批文件**（`run_group_rotation.py`、`service.py`、`group_rotation.js`）。不要并行开发后再合并，**按 P0 → P1 顺序串行合并**，P0 上线并观察满 3 个交易日后再开 P1 分支。
+- P4 只依赖 P1（轨迹图需要 `strength_log` / `acceleration_log` 字段），不依赖 P2/P3。
+- P5.1 与价格链完全独立，可在任意阶段并行推进，但其上线受许可审计约束。
+- P5.2 不是最后才做：P1、P2、P3 各自结束时都要跑一次对 RS20 的对照。
 
 | 阶段 | 需要新数据源 | 前置审计 | 主要风险 |
 |---|---|---|---|
-| P0 | 否 | 无 | timer 重启副作用 |
-| P1 | 否 | 成交额复权对账 | schema 迁移 |
+| P0 | 否 | 无 | timer 重启副作用；重复 run |
+| P1 | 否 | 成交额复权对账 | schema 迁移（见 P1.7）；缓存口径混用（见 P1.5.2） |
 | P2 | 是（ETF 持仓） | 持仓接口审计 | 供应商无生效日 |
 | P3 | 是（份额/NAV） | 资金流接口审计 | 数据可能不可得 |
 | P4 | 否（+6 个 ETF） | 无 | 分类非 PIT |
 | P5 | 是（FRED） | 许可与 known_at 审计 | 传播授权 |
+
+关于 timer 重启副作用：[main/SG 同步记录](main_sg_sync_20260911.md) 已记录过一次恢复 timer 导致计划外立即执行的事件（`Persistent=false`、无 drop-in，原因未定位）。P0 涉及新增和修改 unit，**不得假设重启日历 timer 无副作用**；维护期需要显式执行护栏，并在操作前后核对 `systemctl list-timers` 与实际执行记录。
 
 ---
 
@@ -720,8 +825,9 @@ P0 时效与闭环 ──┐
 
 1. **09-11 及之后的构建是否正常**：需 SG 只读核对 `systemctl status quant-group-analytics-eod.service`、`journalctl -u ... -n 50`、`outputs/group_analytics/rotation/last_attempt.json`
 2. **个股关联首次失败的具体调用条件**：不能继续笼统归因为"宽基停在 09-04"，需定位 `CompletedSessionMomentumSource.load()` 当时抛出的确切原因码
-3. **TradingView 外部数值对账**：仍未完成，`source_v1_compat` 目前只能称"规则级实现候选"
-4. **FMP ETF 份额/NAV 可得性**：P3 的前提，未审计前不承诺该阶段可交付
+3. **§4.4 能源行的缺失字段**：需从 SG 快照补齐 `rs5`、`rs1`、`dist50`、`abs20`、`absolute_ma20`，确认"延伸偏大"来自 `dist50 > 8` 而非 `rs60 > 18`
+4. **TradingView 外部数值对账**：仍未完成，`source_v1_compat` 目前只能称"规则级实现候选"
+5. **FMP ETF 份额/NAV 可得性**：P3 的前提，未审计前不承诺该阶段可交付
 
 ---
 
@@ -730,3 +836,4 @@ P0 时效与闭环 ──┐
 | 日期 | 变更 |
 |---|---|
 | 2026-09-12 | 首版。合并两条核查线结论，确立 P0–P5 六阶段计划 |
+| 2026-09-12 | 自查修订。修正优先级阶梯未命中分支与 `unavailable` 判断顺序；补回 `defensive`（相对抗跌）档；补充 schema 迁移会导致 v3 首次发布失败的隐患；补充价格缓存口径失效、第三张价格表签名变更、重复 run 抑制；澄清成交额解锁不恢复 0–100 分；能源示例行标为待核对；修正阶段依赖图与合并顺序 |
