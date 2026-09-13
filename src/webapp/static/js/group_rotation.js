@@ -22,6 +22,8 @@
   };
   const v3Head = ["主题","强弱","速度","5日相对","20日相对","轮动","60日相对","趋势","成交活跃","真实广度","净申赎","风险","研究优先级"];
   const v2Head = ["主题 / 状态","5日相对","20日相对","60日相对","真实广度","研究优先级"];
+  const TRAIL_DX = 0.005, TRAIL_DY = 0.002;
+  const TRAIL_COLORS = ["#6ea8ff","#3ecf8e","#e0b14a","#e07272","#b18cff","#4ec4d4","#e09050","#7eb8a8","#d48bc0","#8fbf5a","#d4b24a"];
   let data, selection, detailSequence = 0;
   const query = new URLSearchParams(location.search);
   async function get(url) { const r = await fetch(url, {credentials:"same-origin"}); const j = await r.json(); if (!r.ok) throw new Error(j.detail || "快照读取失败"); return j; }
@@ -205,6 +207,7 @@
       }
       tbody.append(tr);
     }
+    drawTrail(rows);
     if (!rows.some(r=>r.id===selection)) { selection=undefined; el("rotation-detail").replaceChildren(node("p","点击主题，查看历史、个股候选与原版对账。")); detailSequence++; }
   }
   function chart(history) {
@@ -216,6 +219,123 @@
     const flush=()=>{if(segment.length){const line=document.createElementNS(ns,"polyline");line.setAttribute("points",segment.join(" "));line.setAttribute("fill","none");line.setAttribute("stroke","currentColor");line.setAttribute("stroke-width","2");svg.append(line);segment=[];}};
     history.forEach((r,i)=>{if(r.ratio===null){flush();return;}segment.push(`${48+i/(history.length-1)*(width-65)},${132-(r.ratio/base*100-lo)/span*105}`);});flush();
     for(const [x,y,t] of [[2,26,hi.toFixed(1)],[2,135,lo.toFixed(1)],[48,162,history[0].date],[width-95,162,history.at(-1).date]]){const n=document.createElementNS(ns,"text");n.setAttribute("x",x);n.setAttribute("y",y);n.textContent=t;svg.append(n);}return svg;
+  }
+  function finiteNum(v) { return typeof v === "number" && Number.isFinite(v); }
+  function trailBars() {
+    const raw = el("rotation-trail-window") && el("rotation-trail-window").value;
+    const bars = Number(raw);
+    return bars === 25 ? 25 : 50;
+  }
+  function trailPoints(r, bars) {
+    const trail = r.rotation_trail || {};
+    return Array.isArray(trail.points) ? trail.points.slice(-bars) : [];
+  }
+  function drawTrail(rows) {
+    const panel = el("rotation-trail-panel");
+    const host = el("rotation-trail");
+    if (!panel || !host) return;
+    if (isLegacy()) { panel.hidden = true; host.replaceChildren(); return; }
+    panel.hidden = false;
+    const bars = trailBars();
+    const compact = root.clientWidth < 420;
+    const width = Math.min(920, Math.max(300, root.clientWidth - 48));
+    const height = compact ? 280 : 360;
+    const padL = compact ? 36 : 58, padR = compact ? 14 : 22, padT = 22, padB = compact ? 28 : 36;
+    const plotW = width - padL - padR, plotH = height - padT - padB;
+    const ns = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(ns, "svg");
+    svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label", "相对强弱—速度轨迹，非RRG复刻；右为20日相对领先，上为近端加速");
+    function svgEl(name, attrs) {
+      const n = document.createElementNS(ns, name);
+      for (const [k, v] of Object.entries(attrs || {})) n.setAttribute(k, String(v));
+      return n;
+    }
+    let xSpan = TRAIL_DX * 8, ySpan = TRAIL_DY * 8;
+    for (const r of rows) {
+      for (const p of trailPoints(r, bars)) {
+        if (finiteNum(p.strength_log)) xSpan = Math.max(xSpan, Math.abs(p.strength_log));
+        if (finiteNum(p.acceleration_log)) ySpan = Math.max(ySpan, Math.abs(p.acceleration_log));
+      }
+      const cur = (r.rotation_trail || {}).current || {};
+      if (finiteNum(cur.strength_log)) xSpan = Math.max(xSpan, Math.abs(cur.strength_log));
+      if (finiteNum(cur.acceleration_log)) ySpan = Math.max(ySpan, Math.abs(cur.acceleration_log));
+    }
+    xSpan *= 1.15; ySpan *= 1.15;
+    const xPx = x => padL + (x + xSpan) / (2 * xSpan) * plotW;
+    const yPx = y => padT + (ySpan - y) / (2 * ySpan) * plotH;
+    const originX = xPx(0), originY = yPx(0);
+    svg.append(svgEl("rect", {x: originX, y: padT, width: Math.max(0, padL + plotW - originX), height: Math.max(0, originY - padT), fill: "rgba(62,207,142,0.08)"}));
+    svg.append(svgEl("rect", {x: originX, y: originY, width: Math.max(0, padL + plotW - originX), height: Math.max(0, padT + plotH - originY), fill: "rgba(224,177,74,0.08)"}));
+    svg.append(svgEl("rect", {x: padL, y: padT, width: Math.max(0, originX - padL), height: Math.max(0, originY - padT), fill: "rgba(110,168,255,0.08)"}));
+    svg.append(svgEl("rect", {x: padL, y: originY, width: Math.max(0, originX - padL), height: Math.max(0, padT + plotH - originY), fill: "rgba(148,163,184,0.08)"}));
+    const band = svgEl("rect", {
+      x: xPx(-TRAIL_DX), y: yPx(TRAIL_DY),
+      width: Math.max(1, xPx(TRAIL_DX) - xPx(-TRAIL_DX)),
+      height: Math.max(1, yPx(-TRAIL_DY) - yPx(TRAIL_DY)),
+      fill: "rgba(255,255,255,0.04)", stroke: "currentColor", "stroke-opacity": "0.25", "stroke-width": "1"
+    });
+    svg.append(band);
+    svg.append(svgEl("line", {x1: padL, y1: originY, x2: padL + plotW, y2: originY, class: "trail-axis"}));
+    svg.append(svgEl("line", {x1: originX, y1: padT, x2: originX, y2: padT + plotH, class: "trail-axis"}));
+    const corners = compact
+      ? [[padL + 6, padT + 12, "落后改善"], [padL + plotW - 4, padT + 12, "领先加速"], [padL + 6, padT + plotH - 8, "落后减速"], [padL + plotW - 4, padT + plotH - 8, "领先降温"]]
+      : [[padL + 6, padT + 14, "落后但改善"], [padL + plotW - 6, padT + 14, "领先且加速"], [padL + 6, padT + plotH - 8, "落后且减速"], [padL + plotW - 6, padT + plotH - 8, "领先但降温"]];
+    corners.forEach(([x, y, label], i) => {
+      const t = svgEl("text", {x, y, class: "trail-muted"});
+      t.setAttribute("text-anchor", i % 2 ? "end" : "start");
+      t.textContent = label;
+      svg.append(t);
+    });
+    const axisX = svgEl("text", {x: padL + plotW / 2, y: height - 6, class: "trail-muted", "text-anchor": "middle"});
+    axisX.textContent = compact ? "落后 ← 20日相对 → 领先" : "落后 ← 相对强弱（20日对数） → 领先";
+    svg.append(axisX);
+    const axisY = svgEl("text", {x: 12, y: padT + plotH / 2, class: "trail-muted", "text-anchor": "middle", transform: `rotate(-90 12 ${padT + plotH / 2})`});
+    axisY.textContent = compact ? "减速 ← 速度 → 加速" : "减速 ← 速度（近5日相对前15日） → 加速";
+    svg.append(axisY);
+    let drawn = 0;
+    rows.forEach((r, index) => {
+      const color = TRAIL_COLORS[index % TRAIL_COLORS.length];
+      const pts = trailPoints(r, bars).filter(p => finiteNum(p.strength_log) && finiteNum(p.acceleration_log));
+      const selected = selection === r.id;
+      if (pts.length >= 2) {
+        for (let i = 1; i < pts.length; i++) {
+          const a = pts[i - 1], b = pts[i];
+          const line = svgEl("line", {
+            x1: xPx(a.strength_log), y1: yPx(a.acceleration_log),
+            x2: xPx(b.strength_log), y2: yPx(b.acceleration_log),
+            stroke: color, "stroke-width": selected ? 2.4 : 1.4,
+            "stroke-opacity": String(0.18 + 0.7 * (i / (pts.length - 1))),
+            "stroke-linecap": "round"
+          });
+          svg.append(line);
+        }
+      }
+      const cur = (r.rotation_trail || {}).current || {};
+      const cx = finiteNum(cur.strength_log) ? cur.strength_log : (pts.length ? pts.at(-1).strength_log : null);
+      const cy = finiteNum(cur.acceleration_log) ? cur.acceleration_log : (pts.length ? pts.at(-1).acceleration_log : null);
+      if (!finiteNum(cx) || !finiteNum(cy)) return;
+      drawn += 1;
+      const g = svgEl("g", {class: "trail-hit", tabindex: "0", role: "button"});
+      g.setAttribute("aria-label", r.name);
+      const px = xPx(cx), py = yPx(cy);
+      g.append(svgEl("circle", {cx: px, cy: py, r: selected ? 6 : 4.5, fill: color, stroke: "#0E1117", "stroke-width": selected ? 2 : 1}));
+      if (!compact || selected || rows.length <= 6) {
+        const label = svgEl("text", {x: px + 8, y: py + 4 + (index % 3) * 2, class: "trail-label"});
+        label.textContent = r.name;
+        g.append(label);
+      }
+      const activate = () => select(r.id);
+      g.addEventListener("click", activate);
+      g.addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); activate(); } });
+      svg.append(g);
+    });
+    if (!drawn) {
+      host.replaceChildren(node("p", "连续历史不足，暂不绘图。"));
+      return;
+    }
+    host.replaceChildren(svg);
   }
   async function select(id) {
     selection=id;render();const seq=++detailSequence, box=el("rotation-detail");box.replaceChildren(node("p","正在读取固定快照详情…"));
@@ -271,6 +391,12 @@
     }catch(e){if(seq===detailSequence)box.replaceChildren(node("p",e.message));}
   }
   el("rotation-cohort").addEventListener("change",render);el("rotation-sort").addEventListener("change",render);
+  if (el("rotation-trail-window")) el("rotation-trail-window").addEventListener("change", render);
+  let trailResize;
+  window.addEventListener("resize", () => {
+    clearTimeout(trailResize);
+    trailResize = setTimeout(() => { if (data) render(); }, 150);
+  });
   const pinned = Boolean(query.get("run"));
   const POLL_MS = 5 * 60 * 1000;
   function nyParts(date) {

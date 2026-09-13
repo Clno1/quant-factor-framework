@@ -25,6 +25,14 @@
             <label>观察范围 <select id="rotation-cohort" aria-label="观察范围"><option value="technology">科技与AI · 相对QQQ</option><option value="sectors">全市场板块 · 相对SPY</option></select></label>
             <label>排序 <select id="rotation-sort" aria-label="排序"><option value="rs20">20日相对强弱</option><option value="rank_rs20">同组20日排名</option><option value="rs5">5日相对强弱</option><option value="rs60">60日相对强弱</option></select></label>
         </div>
+        <section id="rotation-trail-panel" class="rotation-trail-panel" hidden>
+            <div class="rotation-trail-head">
+                <h2>相对强弱—速度轨迹</h2>
+                <label>窗口 <select id="rotation-trail-window" aria-label="轨迹窗口"><option value="25">最近5周</option><option value="50" selected>最近10周</option></select></label>
+            </div>
+            <p class="rotation-trail-note">横轴是20日相对强弱的对数，纵轴是近5日相对前15日的速度。默认最近10个交易周。借鉴相对趋势与轨迹表达，非 RRG 复刻。只画当前观察范围，科技与行业不混排。点击圆点查看主题。</p>
+            <div id="rotation-trail" class="rotation-trail"></div>
+        </section>
         <div class="rotation-table-wrap">
             <table class="rotation-table"><caption>研究版日线观察 · 生产分数不在主表 · 分数不是上涨概率</caption>
                 <thead><tr>
@@ -39,7 +47,7 @@
             <p>点击主题，查看历史、成员、原版对账和个股观察条件。</p>
         </section>
         <details class="rotation-method"><summary>方法、边界与数据状态</summary>
-            <p>相对收益基于主题/基准价格比，窗口为5/20/60个完整美股交易日。月度强弱（领先/持平/落后）需要连续2个日线收盘确认；速度（加速/平稳/减速）每日直出。稳定领先 = 领先 + 平稳，不再写成“等待确认”。同组20日排名、持续性与广度变化是解释字段，不进入研究优先级或总分；科技相对QQQ与行业相对SPY不混排。</p>
+            <p>相对收益基于主题/基准价格比，窗口为5/20/60个完整美股交易日。月度强弱（领先/持平/落后）需要连续2个日线收盘确认；速度（加速/平稳/减速）每日直出。稳定领先 = 领先 + 平稳，不再写成“等待确认”。同组20日排名、持续性与广度变化是解释字段，不进入研究优先级或总分；科技相对QQQ与行业相对SPY不混排。相对强弱—速度轨迹用已有 strength_log / acceleration_log 画散点与尾迹，借鉴相对趋势与轨迹表达，非 RRG 复刻，同样不进优先级。</p>
             <p>ETF的真实持仓广度来自当前持仓观测。主表同时给出样本内参与率、已测基金权重，覆盖不足时标明“仅部分持仓观察”；持仓生效日未披露，不是历史成分广度。公开基础版的70/30仅是ETF趋势代理，放在独立对账区域。持仓观测超过14个日历日则停用，不使用旧持仓。成交额按拆股复权 close×volume 计算，供应商价量复权尚未用真实抽样核验。净申赎在份额/NAV审计通过前留空，不用成交额冒充。生产0–100分本轮不在主表展示。</p>
             <p>自建篮子为固定成员每日等权研究序列，不代表历史时点可选组合。背景实验不影响评分或仓位；本页不包含盘中行情、自动买卖或已验证收益预测。</p>
             <p id="rotation-audit"></p>

@@ -347,6 +347,7 @@ def test_new_main_and_legacy_route_and_read_only_api(tmp_path):
         assert "input_panel" not in response
         assert "history" not in response["rows"][0]
         assert "rotation_timeline" in response["rows"][0]
+        assert "rotation_trail" in response["rows"][0]
         assert "rank_rs20" not in response["rows"][0]["production"]
         detail=client.get("/api/group-analytics/rotation/etf",params={"run":run}).json()
         assert len(detail["theme"]["reference_history"]) == 100
@@ -563,6 +564,11 @@ def test_rotation_page_freshness_contract():
     assert "rotation_timeline" in js
     assert "rank_rs20" in js
     assert "timelineCell" in js
+    assert "rotation_trail" in js
+    assert "drawTrail" in js
+    assert "相对强弱—速度轨迹" in html
+    assert "非 RRG 复刻" in html
+    assert "rotation-trail-window" in html
     assert "net_creation" in js
     assert "visibilitychange" in js
     assert "5 * 60 * 1000" in js
@@ -889,7 +895,9 @@ def test_service_records_amount_basis_and_replays(tmp_path):
     assert "priority_breadth_pct" not in result["parameters"]
     assert result["parameters"]["price_state_version"] == "dual-axis-v3"
     assert result["parameters"]["rotation_timeline_version"] == "cohort-rank-v1"
+    assert result["parameters"]["rotation_trail_version"] == "strength-speed-trail-v1"
     assert "rotation_timeline" in result["rows"][0]
+    assert "rotation_trail" in result["rows"][0]
     assert "rank_rs20" not in result["rows"][0]["production"]
     assert replay_snapshot(result)["status"] == "MATCH"
 

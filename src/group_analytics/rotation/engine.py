@@ -453,5 +453,7 @@ def analyze(prices, volumes, sessions, themes, *, amount_verified=False,
         rows.append(row)
     if schema_version != LEGACY_SCHEMA_VERSION:
         from .timeline import attach_rotation_timeline
+        from .trail import attach_rotation_trail
         attach_rotation_timeline(rows)
+        attach_rotation_trail(rows)
     return rows

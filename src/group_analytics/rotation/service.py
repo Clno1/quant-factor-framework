@@ -39,6 +39,7 @@ from .holdings import (
 from .store import RotationStore, encoded
 from .themes import default_themes, proxy_etf_symbols, required_symbols
 from .timeline import TIMELINE_VERSION, refresh_timeline_breadth
+from .trail import TRAIL_BARS, TRAIL_VERSION
 
 LOOKBACK_CALENDAR_DAYS = 550
 LOOKBACK_SESSIONS = 300
@@ -55,6 +56,8 @@ ROTATION_PARAMETERS = {
     "holdings_stale_calendar_days": 14,
     "price_state_version": "dual-axis-v3",
     "rotation_timeline_version": TIMELINE_VERSION,
+    "rotation_trail_version": TRAIL_VERSION,
+    "trail_bars": TRAIL_BARS,
 }
 logger = logging.getLogger(__name__)
 
@@ -292,7 +295,8 @@ def run_rotation(*, asof="latest", refresh=False, store=None, frames=None, theme
                       "成交额按拆股复权 close×volume 计算；供应商价量复权尚未用真实抽样核验，见 " + AMOUNT_AUDIT_DOC,
                       "ETF真实广度为当前持仓观测，持仓名单可周更、成员价格每日更新；持仓生效日未披露，见 " + HOLDINGS_AUDIT_DOC,
                       "净申赎审计未通过，列为空且不用成交额冒充，见 " + FLOWS_AUDIT_DOC,
-                      "同组排名路径与持续性为解释字段，不进入优先级或总分"],
+                      "同组排名路径与持续性为解释字段，不进入优先级或总分",
+                      "相对强弱—速度轨迹为解释图，借鉴相对趋势与轨迹表达，非RRG复刻，不进入优先级"],
         })
         run_id = None if dry_run else store.publish(snapshot)
         return {**snapshot, "run_id": run_id}
