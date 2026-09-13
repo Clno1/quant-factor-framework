@@ -30,6 +30,7 @@ from src.premarket_digest.rotation import attach_candidates, candidate_linkage_f
 
 LINKAGE_PENDING_REASON = "个股关联待后续阶段"
 SAFE_ERROR_CODE = re.compile(r"^[A-Z0-9_]{1,80}$")
+RETRYABLE_LINKAGE_STATUSES = frozenset({"LINKAGE_UNAVAILABLE", "LINKAGE_CHECK_FAILED"})
 
 
 class RotationStageError(ValueError):
@@ -178,19 +179,16 @@ def run_linkage_stage(*, asof, store, dry_run, snapshot=None):
     try:
         report = load_momentum_report(snapshot["source_session"])
     except Exception as exc:
-        reason = f"同日动量扫描未通过数据门槛（{safe_error_code(exc)}），主题计算不受影响"
-        if linkage.get("status") == "available":
-            if not dry_run:
-                store.record_check(
-                    snapshot.get("source_session"), stage="linkage", published=False,
-                    run_id=original_run_id,
-                )
-            return _summary(snapshot, status="NOOP", run_id=original_run_id, stage="linkage") | {
-                "snapshot": snapshot,
-            }
+        code = safe_error_code(exc)
+        reason = f"同日动量扫描未通过数据门槛（{code}），主题计算不受影响"
+        kept = linkage.get("status") == "available"
+        if not dry_run:
+            store.failure(snapshot.get("source_session"), code, stage="linkage")
         return _summary(
-            snapshot, status="LINKAGE_UNAVAILABLE", run_id=original_run_id, stage="linkage",
-            extra={"reason": reason},
+            snapshot,
+            status="LINKAGE_CHECK_FAILED" if kept else "LINKAGE_UNAVAILABLE",
+            run_id=original_run_id, stage="linkage",
+            extra={"reason": reason, "kept_available": kept, "retryable": True, "error_code": code},
         ) | {"snapshot": snapshot}
     new_fp = candidate_linkage_fingerprint(snapshot, report)
     if linkage.get("status") == "available" and linkage.get("linkage_fingerprint") and (
@@ -208,9 +206,15 @@ def run_linkage_stage(*, asof, store, dry_run, snapshot=None):
     attached = attach_candidates(working, report)
     if attached["candidate_linkage"]["status"] != "available":
         reason = attached["candidate_linkage"].get("reason") or "没有同日突破扫描产物"
+        kept = linkage.get("status") == "available"
+        if not dry_run:
+            store.failure(snapshot.get("source_session"), "LINKAGE_UNAVAILABLE", stage="linkage")
         return _summary(
-            snapshot, status="LINKAGE_UNAVAILABLE", run_id=original_run_id, stage="linkage",
-            extra={"reason": reason},
+            snapshot,
+            status="LINKAGE_CHECK_FAILED" if kept else "LINKAGE_UNAVAILABLE",
+            run_id=original_run_id, stage="linkage",
+            extra={"reason": reason, "kept_available": kept, "retryable": True,
+                   "error_code": "LINKAGE_UNAVAILABLE"},
         ) | {"snapshot": snapshot}
     attached["generated_at"] = original_generated_at
     if dry_run:
@@ -301,6 +305,12 @@ def main(argv=None):
             result = run_all_stages(without_candidates=args.without_candidates, **price_kwargs)
         printable = {k: v for k, v in result.items() if k != "snapshot"}
         print(encoded(printable).decode())
+        if (
+            not args.dry_run
+            and result.get("status") in RETRYABLE_LINKAGE_STATUSES
+            and args.stage in {"linkage", "all"}
+        ):
+            return 1
         return 0
     except RotationStageError as exc:
         if not args.dry_run and exc.record_failure:

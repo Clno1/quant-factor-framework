@@ -1,0 +1,12 @@
+[Unit]
+Description=Replace unsent sector-rotation digest before the 09:20 send window
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 09:00:00 America/New_York
+Persistent=true
+AccuracySec=30s
+RandomizedDelaySec=15s
+Unit=quant-premarket-prepare-sector-rotation.service
+
+[Install]
+WantedBy=timers.target

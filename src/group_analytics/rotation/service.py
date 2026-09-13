@@ -256,10 +256,17 @@ def run_rotation(*, asof="latest", refresh=False, store=None, frames=None, theme
                                      else "背景证据不适用于此基准，独立观察价格")
         holdings_fp = holdings_fingerprint(holdings_observations, now=now)
         flows_fp = flows_fingerprint(rows)
-        measurement_fp = (
-            member_measurement_fingerprint(member_frames, sessions)
-            if allow_current_observation else None
-        )
+        try:
+            measurement_fp = (
+                member_measurement_fingerprint(member_frames, sessions)
+                if allow_current_observation else None
+            )
+        except Exception as exc:
+            logger.warning("rotation holdings measurement fingerprint skipped: %s", type(exc).__name__)
+            measurement_fp = hashlib.sha256(encoded({
+                "status": "HOLDINGS_MEASUREMENT_FINGERPRINT_FAILED",
+                "error_type": type(exc).__name__,
+            })).hexdigest() if allow_current_observation else None
         input_panel = normalize_json_value({
             "sessions": sessions.strftime("%Y-%m-%d").tolist(),
             "price_columns": prices.columns.tolist(), "volume_columns": volumes.columns.tolist(),

@@ -363,8 +363,8 @@ Unit=quant-group-rotation-price.service
 盘前摘要三个时点必须分开：
 
 1. 关联重试（07:00 ET 独立 `quant-group-rotation-linkage-retry.timer`，`TimeoutStartSec=15min`；**不是** `quant-premarket-prepare` 的 `ExecStartPre`，摘要准备不以它完成为前提）
-2. 允许降级为无候选摘要的时点（仍可预生成）
-3. 消息最终冻结时点（进入 SENDING/SENT）
+2. 允许降级为无候选摘要的时点（仍可预生成）；关联成功后 `OnSuccess=` 仅启动 `quant-premarket-prepare-sector-rotation`（`--channel sector-rotation`），动量频道不等待
+3. 发送前换版（09:00 ET 同一板块-only prepare）与消息最终冻结（09:20 进入 SENDING/SENT）
 
 尚未发送、尚未进入发送中的板块频道记录，在 payload/`run_id` 变化时允许受控换版，保留旧 payload hash 审计（`REPLACED_UNSENT`）。SENT / SENDING / UNKNOWN 不得换版。不能只增加一次重试命令就认为闭环完成。
 
@@ -932,6 +932,7 @@ P5.2 增量验证         （在 P1 / P2 / P3 各自结束时分别跑一次）
 | 2026-09-13 | 呈现层收口：新增 §11 阶段性总结。P4 代码已齐，不视为 P0–P4 验收通过，不得开始 FRED |
 | 2026-09-13 | SG 部署前合入 `origin/main`（`44d5062`）：EP 消费者验收、茶杯柄隔离与 coverage 修复；与轮动无文件冲突 |
 | 2026-09-13 | 可靠性闭环：关联重试从盘前 `ExecStartPre` 拆成独立限时服务；`publish` 锁内校验父版本；广度指纹覆盖 20 日窗口；关联自有指纹；NOOP 记成功检查；关联缺口按本次结果重建。页面主表按选定指标全表排序，计划与产品对齐 |
+| 2026-09-13 | 复核补齐四项：关联成功后独立板块摘要换版（动量不等待）；本次关联读取失败不得记 SUCCESS，可重试时 CLI 退出 1；`last_attempt` 按阶段+交易日合成健康；广度指纹与测量共用校验输入，异常成员使广度降级而不打断价格层 |
 
 ---
 
@@ -944,7 +945,7 @@ P5.2 增量验证         （在 P1 / P2 / P3 各自结束时分别跑一次）
 | 阶段 | 状态 | 要点 |
 |---|---|---|
 | 计划 | 已写，并按外部审阅修订原则 | 本文 + 自审 + 发布/数据链缺口修订 |
-| P0 | **实现存在，关键闭环已按审阅补齐，真实数据验收未完成** | 价格/关联拆分已有；17:30 是启动不是完成承诺；未发送摘要可换版；轮询更新 freshness/last_attempt；linkage 运维读 RotationStore；父版本在发布锁内校验；关联重试独立于盘前准备。SG 观察未做 |
+| P0 | **实现存在，关键闭环已按审阅补齐，真实数据验收未完成** | 价格/关联拆分已有；17:30 是启动不是完成承诺；未发送摘要可换版；关联成功后独立板块 prepare（07:00 双频道准备与 09:20 发送均不等待它）；轮询更新 freshness/last_attempt（按阶段+交易日）；失败检查不记成功；linkage 运维读 RotationStore；父版本在发布锁内校验；关联重试独立于盘前准备。SG 观察未做 |
 | P1 | **实现存在，真实量价抽样未完成** | 双轴已落地；canonical close×volume 计算；`amount_audit_status=SYNTHETIC_GATES_ONLY`；缺少 close 不再回退 adj_close。6 标的 FMP 抽样未做 |
 | P2 | **接入管线存在，日度成员价格链和覆盖展示已按审阅修正，活样本未做** | 名单周更、成员价日更；部分覆盖同时显示已测基金权重与样本内参与；历史 asof 不用当前持仓。17 ETF 活样本与「周任务后连续两日广度」未在 SG 跑过 |
 | P3 | **接口审计未通过，只有禁用状态与预留管线，不能称真实净申赎功能已交付** | 篮子「不适用」，ETF「—」；无份额/NAV 拉取 |
@@ -971,6 +972,10 @@ P5.2 增量验证         （在 P1 / P2 / P3 各自结束时分别跑一次）
 11. 07:00 ET 关联重试为独立 `quant-group-rotation-linkage-retry` 服务，盘前 prepare 不再 `ExecStartPre` 等待它。
 12. `holdings_measurement_fingerprint` 覆盖 MA20 所用 20 个交易日；关联层使用自有 `linkage_fingerprint`。
 13. 每次关联清除并重建 `NO_QUALIFIED_CANDIDATE` / `LINKAGE_FAILED`，保留引擎缺口。
+14. 关联成功 `OnSuccess=` 只启动 `--channel sector-rotation` 的 prepare，并另有 09:00 ET 发送前换版；动量频道 07:00/09:20 都不等待该任务。
+15. 本次动量读取失败时保留上次成功关联，但记 linkage FAILED / `LINKAGE_CHECK_FAILED` 或 `LINKAGE_UNAVAILABLE`，`retryable=true`，CLI 退出 1；只有实际读到并比较成功才记 SUCCESS NOOP。
+16. `last_attempt` 与运维适配器按「阶段 + 交易日」判断健康，昨天的 FAILED 不污染今天未执行或已成功的阶段。
+17. `holdings_measurement_fingerprint` 与 `observation_breadth` 共用去重后的成员序列；重复日期等异常成员进入 `rejected` 并使广度降级，不打断价格发布。
 
 ### 10.3 刻意保持的行为
 
@@ -991,7 +996,7 @@ P5.2 增量验证         （在 P1 / P2 / P3 各自结束时分别跑一次）
 1. **SG 实盘（本环境做不到）**：P0 三个交易日观察、成交额 6 标的抽样、17 ETF 持仓活样本、研究/运行口径对齐后的 RS20 对照。本环境也没有已发布的 `US_EQUITY_COVERAGE` 湖，热力图在此会显示覆盖未发布。上 SG 的必须是已合入最新 `main` 的本分支，见 §11.4。
 2. **不要开始** P5.1 FRED。宏观序列需要许可、`known_at` 与 ALFRED 修订政策，不能把 Yahoo/ETF 代理冒充官方宏观。
 3. P3 审计通过前不拉份额/NAV，也不把广度/净申赎塞进排序。
-4. 复查已修的发布实错不要重做。
+4. 代码层四项复核（摘要换版衔接、失败不得记成功、跨日健康、广度指纹隔离）已补；不要把剩余工作全部归为 SG 部署验证。SG 仍要核资源、真实 timer 与 Discord，但不能代替上述离线闭环。
 
 ---
 

@@ -1385,6 +1385,37 @@ class ServiceTests(unittest.TestCase):
             self.assertEqual(row["status"], "PENDING")
             self.assertEqual(row["last_error_code"], "REPLACED_UNSENT")
 
+    def test_sector_only_prepare_replaces_unsent_without_touching_momentum(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            momentum_source = _Source(_momentum_report())
+            group_source = _Source(_group_report())
+            service, _ = self._service(
+                temporary,
+                {"momentum": [], "sector": []},
+                momentum=momentum_source,
+                groups=group_source,
+            )
+            service.run(prepare=True, requested_session=TARGET)
+            store = DigestStateStore(Path(temporary) / "state.sqlite3")
+            momentum_hash = store.get(TARGET, DigestChannel.MOMENTUM)["payload_hash"]
+            momentum_calls = momentum_source.calls
+            group_source.report = {**group_source.report, "partial": True, "errors": {"sector": "stale"}}
+            second = service.run(
+                prepare=True,
+                requested_session=TARGET,
+                channels=[DigestChannel.SECTOR_ROTATION],
+            )
+            self.assertEqual([result["channel"] for result in second["results"]], ["sector-rotation"])
+            self.assertEqual(second["results"][0]["status"], "PREPARED_REPLACED")
+            self.assertEqual(momentum_source.calls, momentum_calls)
+            self.assertEqual(store.get(TARGET, DigestChannel.MOMENTUM)["payload_hash"], momentum_hash)
+            self.assertEqual(store.get(TARGET, DigestChannel.MOMENTUM)["status"], "PENDING")
+            self.assertEqual(store.get(TARGET, DigestChannel.SECTOR_ROTATION)["status"], "PENDING")
+            self.assertEqual(
+                store.get(TARGET, DigestChannel.SECTOR_ROTATION)["last_error_code"],
+                "REPLACED_UNSENT",
+            )
+
     def test_sent_sector_rotation_prepare_does_not_replace(self):
         with tempfile.TemporaryDirectory() as temporary:
             momentum_source = _Source(_momentum_report())

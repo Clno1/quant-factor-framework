@@ -28,6 +28,7 @@ flowchart TD
     TIMER --> REQUEST["every 5m data requests"]
     TIMER --> CANDIDATES["06:30 ET intraday candidate prepare"]
     TIMER --> PREPARE["07:00 ET premarket payload prepare"]
+    TIMER --> SECTORPREP["09:00 ET sector-rotation digest replace"]
     TIMER --> PREMARKET["09:20 ET momentum + sector digests"]
     TIMER --> HOURLY["hourly momentum alerts"]
     TIMER --> INTRADAY["minute monitor"]
@@ -74,7 +75,8 @@ flowchart TD
 | `quant-data-requests.timer` | enabled | Watchlist 缺数队列 |
 | `quant-intraday-candidate-prepare.timer` | enabled | 06:30 ET 预计算全美宽基盘中候选 |
 | `quant-premarket-prepare.timer` | enabled | 07:00 ET 冻结双频道 payload，不连接 Discord；不等待轮动关联重试 |
-| `quant-group-rotation-linkage-retry.timer` | enabled | 07:00 ET 独立重试板块个股关联，限时 15 分钟，失败不得挡住 payload 冻结 |
+| `quant-group-rotation-linkage-retry.timer` | enabled | 07:00 ET 独立重试板块个股关联，限时 15 分钟，失败不得挡住 payload 冻结；成功后 OnSuccess 只重算板块摘要 |
+| `quant-premarket-prepare-sector-rotation.timer` | enabled | 09:00 ET 仅换版未发送的板块摘要，动量频道不参与 |
 | `quant-premarket-digest.timer` | enabled | 分别发送 momentum 与 sector rotation 盘前摘要 |
 | `quant-momentum-alerts.timer` | enabled | 10:00–15:59 ET 小时摘要 |
 | `quant-intraday-momentum-monitor.timer` | enabled | 分钟 shadow；五日验收后人工武装推送 |

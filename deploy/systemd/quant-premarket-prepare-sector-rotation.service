@@ -1,0 +1,47 @@
+[Unit]
+Description=Rebuild unsent sector-rotation digest from the latest rotation snapshot
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=30min
+StartLimitBurst=4
+
+[Service]
+Type=oneshot
+User=quant
+Group=quant
+WorkingDirectory=/opt/quant
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONPATH=/opt/quant
+Environment=MPLCONFIGDIR=/opt/quant/data/cache/matplotlib
+Environment=OMP_NUM_THREADS=1
+Environment=OPENBLAS_NUM_THREADS=1
+Environment=MKL_NUM_THREADS=1
+Environment=NUMEXPR_NUM_THREADS=1
+Environment=VECLIB_MAXIMUM_THREADS=1
+Environment=BLIS_NUM_THREADS=1
+Environment=PREMARKET_SECTOR_ROTATION_ENABLED=true
+EnvironmentFile=/etc/quant/premarket-digest.env
+Environment=GROUP_ANALYTICS_ENABLED=true
+Environment=GROUP_ANALYTICS_WEB_ENABLED=false
+ExecStartPre=/opt/quant/.venv/bin/python -c "import sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
+ExecStart=/opt/quant/.venv/bin/python /opt/quant/scripts/run_premarket_digest.py --env-file /etc/quant/premarket-digest.env --prepare --channel sector-rotation
+TimeoutStartSec=10min
+Restart=on-failure
+RestartSec=3min
+UMask=0077
+MemoryHigh=400M
+MemoryMax=550M
+MemorySwapMax=0
+CPUQuota=100%
+TasksMax=64
+OOMPolicy=stop
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/opt/quant/data /opt/quant/outputs /opt/quant/logs
+ReadWritePaths=-/opt/quant/runlog
+
+[Install]
+WantedBy=multi-user.target

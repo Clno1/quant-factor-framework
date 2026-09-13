@@ -84,6 +84,25 @@ def _member_price_series(frame):
     return None
 
 
+def _normalized_member_series(frame):
+    """Return a unique-session price series, or a rejection reason."""
+    if not isinstance(frame, pd.DataFrame):
+        return None, "NO_FRAME"
+    prices = _member_price_series(frame)
+    if prices is None or prices.empty:
+        return None, "NO_PRICE_SERIES"
+    aligned = prices.copy()
+    aligned.index = pd.to_datetime(aligned.index, errors="coerce")
+    if getattr(aligned.index, "tz", None) is not None:
+        aligned.index = aligned.index.tz_localize(None)
+    aligned.index = aligned.index.normalize()
+    if aligned.index.hasnans or aligned.index.has_duplicates:
+        return None, "DUPLICATE_OR_INVALID_SESSIONS"
+    aligned = pd.to_numeric(aligned, errors="coerce")
+    aligned = aligned.replace([float("inf"), float("-inf")], pd.NA)
+    return aligned, None
+
+
 def observation_breadth(observation, frames, sessions):
     """Evaluate member MA20 on a completed price date, not on a claimed holding date."""
     if observation.get("status") != "OBSERVATION_ONLY_NO_PROVIDER_DATE":
@@ -92,13 +111,17 @@ def observation_breadth(observation, frames, sessions):
         raise ValueError("Need 20 exchange sessions")
     symbols = [m["ticker"] for m in observation["members"]]
     series = {}
-    for symbol, frame in (frames or {}).items():
-        if symbol not in symbols:
-            continue
-        prices = _member_price_series(frame)
-        if prices is not None:
-            series[symbol] = prices
-    table = clean_table(pd.DataFrame(series), sessions)
+    for symbol in symbols:
+        aligned, _reason = _normalized_member_series((frames or {}).get(symbol))
+        if aligned is not None:
+            series[symbol] = aligned
+    try:
+        if series:
+            table = clean_table(pd.DataFrame(series), sessions)
+        else:
+            table = pd.DataFrame(index=pd.DatetimeIndex(sessions), columns=symbols, dtype=float)
+    except (ValueError, TypeError, KeyError):
+        table = pd.DataFrame(index=pd.DatetimeIndex(sessions), columns=symbols, dtype=float)
     table = table.reindex(columns=symbols).where(lambda f: f > 0)
     ma = table.rolling(BREADTH_MA_SESSIONS, min_periods=BREADTH_MA_SESSIONS).mean().iloc[-1]
     last = table.iloc[-1]
@@ -227,15 +250,24 @@ def member_measurement_fingerprint(frames, sessions):
     if not frames or sessions is None or len(sessions) == 0:
         return None
     series = {}
+    rejected = []
     for symbol, frame in frames.items():
-        prices = _member_price_series(frame) if isinstance(frame, pd.DataFrame) else None
-        if prices is not None and not prices.empty:
-            series[str(symbol)] = prices
-    if series:
-        table = clean_table(pd.DataFrame(series), sessions).where(lambda frame: frame > 0)
-        window = table.iloc[-BREADTH_MA_SESSIONS:]
-        session_ids = [pd.Timestamp(idx).date().isoformat() for idx in window.index]
-    else:
+        aligned, reason = _normalized_member_series(frame)
+        if aligned is None:
+            rejected.append({"symbol": str(symbol), "reason": reason or "UNUSABLE"})
+        else:
+            series[str(symbol)] = aligned
+    window = None
+    try:
+        if series:
+            table = clean_table(pd.DataFrame(series), sessions).where(lambda frame: frame > 0)
+            window = table.iloc[-BREADTH_MA_SESSIONS:]
+            session_ids = [pd.Timestamp(idx).date().isoformat() for idx in window.index]
+        else:
+            tail = list(sessions[-BREADTH_MA_SESSIONS:]) if len(sessions) >= BREADTH_MA_SESSIONS else list(sessions)
+            session_ids = [pd.Timestamp(idx).date().isoformat() for idx in tail]
+    except (ValueError, TypeError, KeyError):
+        rejected.extend({"symbol": symbol, "reason": "BREADTH_TABLE_INVALID"} for symbol in series)
         window = None
         tail = list(sessions[-BREADTH_MA_SESSIONS:]) if len(sessions) >= BREADTH_MA_SESSIONS else list(sessions)
         session_ids = [pd.Timestamp(idx).date().isoformat() for idx in tail]
@@ -251,7 +283,11 @@ def member_measurement_fingerprint(frames, sessions):
             values = [None] * len(session_ids)
             missing = [True] * len(session_ids)
         members.append({"symbol": symbol, "values": values, "missing": missing})
-    return hashlib.sha256(encoded({"sessions": session_ids, "members": members})).hexdigest()
+    return hashlib.sha256(encoded({
+        "sessions": session_ids,
+        "members": members,
+        "rejected": sorted(rejected, key=lambda item: item["symbol"]),
+    })).hexdigest()
 
 
 def format_holdings_breadth_text(overlay):

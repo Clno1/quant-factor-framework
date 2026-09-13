@@ -447,8 +447,9 @@ PIT、版本哈希及混合错误保持红色 fail-closed。
 
 ## 18. 2026-08-26 预计算、严格恢复和模拟盘证据
 
-盘前任务现分为两个可独立观测的阶段：`premarket_digest_prepare` 在 07:00 ET 计算并以
-`PENDING + payload_hash` 冻结消息，不接触 Discord；`premarket_digest` 在 09:20 ET 只能领取已冻结
+盘前任务现分为可独立观测的阶段：`premarket_digest_prepare` 在 07:00 ET 计算并以
+`PENDING + payload_hash` 冻结消息，不接触 Discord；`premarket_sector_rotation_prepare` 在关联成功后
+及 09:00 ET 只换版未发送的板块摘要，动量频道不等待；`premarket_digest` 在 09:20 ET 只能领取已冻结
 payload 并发送，缺失时 fail closed，禁止临时冷算。今日首次准备 13 分钟、峰值 547.3 MB；定时重复
 准备返回 `PREPARED_ALREADY_EXISTS`，发送后两条状态均为 `SENT/attempts=1`。运维页应分别显示
 “准备成功”和“两频道已发送”，不能把准备成功等同于已投递。

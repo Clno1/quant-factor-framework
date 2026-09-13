@@ -2,6 +2,7 @@
 Description=Associate breakout candidates onto the published rotation price snapshot
 Wants=network-online.target
 After=network-online.target quant-market-data.service quant-us-equity-coverage.service quant-broad-factor-data.service
+OnSuccess=quant-premarket-prepare-sector-rotation.service
 StartLimitIntervalSec=4h
 StartLimitBurst=3
 

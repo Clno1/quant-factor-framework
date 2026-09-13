@@ -330,11 +330,17 @@ def _collect_group_analytics(
     return result
 
 
-def _rotation_attempt_status(attempt, *, linkage):
+def _rotation_attempt_status(attempt, *, linkage, expected_session):
+    expected = str(expected_session or "")
     checks = attempt.get("checks") if isinstance(attempt, dict) else None
     key = "linkage" if linkage else "price"
     if isinstance(checks, dict) and isinstance(checks.get(key), dict):
-        return checks[key].get("status")
+        entry = checks[key]
+        if str(entry.get("source_session") or "") != expected:
+            return None
+        return entry.get("status")
+    if str(attempt.get("source_session") or "") != expected:
+        return None
     stage = attempt.get("stage") if isinstance(attempt, dict) else None
     if stage in {"price", "linkage"} and stage != key:
         return None
@@ -370,7 +376,7 @@ def _collect_group_rotation(
             snapshot = store.load()
     except (OSError, ValueError, KeyError, TypeError):
         snapshot = None
-    attempt = store.last_attempt()
+    attempt = store.last_attempt(source_session=expected)
     actual = str((snapshot or {}).get("source_session") or "") or None
     generated_at = iso_utc((snapshot or {}).get("generated_at"))
     run_id = str((snapshot or {}).get("run_id") or "") or None
@@ -411,9 +417,7 @@ def _collect_group_rotation(
         success_reason = "已发布目标交易日轮动价格快照"
         pending_reason = "轮动价格快照尚未到目标交易日"
         source_name = "rotation/latest.json"
-    if _rotation_attempt_status(attempt, linkage=linkage) == "FAILED" and (
-        not session_ok or str(attempt.get("source_session") or "") in {expected, ""}
-    ):
+    if _rotation_attempt_status(attempt, linkage=linkage, expected_session=expected) == "FAILED":
         status = JobStatus.FAILED
     source_id = run_id or str(attempt.get("source_session") or "missing")
     aggregate_id = stable_id("run_", job.job_id, source_id)

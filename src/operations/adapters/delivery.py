@@ -319,10 +319,10 @@ def _collect_premarket_prepare(
     if required and len(prepared) == len(required):
         if prepared_late:
             status = JobStatus.DEGRADED
-            reason = "两个盘前频道的 payload 已生成，但晚于预计算截止时间"
+            reason = f"{len(required)} 个盘前频道的 payload 已生成，但晚于预计算截止时间"
         else:
             status = JobStatus.SUCCESS
-            reason = "两个盘前频道的不可变 payload 均已提前冻结"
+            reason = f"{len(required)} 个盘前频道的不可变 payload 均已提前冻结"
     else:
         status = time_relative_status(
             now=now,

@@ -184,6 +184,7 @@ def _write_premarket_deliveries(
     *,
     created_at: str,
     status: str = "PENDING",
+    channels: tuple[str, ...] = ("momentum", "sector-rotation"),
 ) -> None:
     with sqlite3.connect(path) as connection:
         connection.executescript("""
@@ -206,7 +207,7 @@ def _write_premarket_deliveries(
                 PRIMARY KEY (target_session, channel)
             );
         """)
-        for channel in ("momentum", "sector-rotation"):
+        for channel in channels:
             connection.execute(
                 """INSERT INTO deliveries VALUES
                    (?, ?, 'discord:test', '2026-08-11', 'sha256:test', '{}',
@@ -265,6 +266,31 @@ def test_complete_premarket_payloads_are_degraded_when_prepared_late(
     assert snapshot.last_success_at == "2026-08-12T13:25:00+00:00"
     assert result.runs[0].status == JobStatus.DEGRADED
     assert result.runs[0].metadata["prepared_late"] is True
+
+
+def test_sector_rotation_prepare_job_does_not_require_momentum(
+    monkeypatch,
+    tmp_path: Path,
+):
+    database = tmp_path / "premarket.sqlite3"
+    _write_premarket_deliveries(
+        database,
+        created_at="2026-08-12T13:05:00+00:00",
+        channels=("sector-rotation",),
+    )
+    monkeypatch.setattr("src.operations.adapters.delivery.PREMARKET_DB", database)
+    registry = OperationsRegistry("configs/operations.yaml")
+
+    result = collect_delivery_evidence(
+        [registry.get("premarket_sector_rotation_prepare")],
+        now=datetime(2026, 8, 12, 13, 10, tzinfo=timezone.utc),
+        observed_at="2026-08-12T13:10:00+00:00",
+    )
+
+    snapshot = result.snapshots[0]
+    assert snapshot.status == JobStatus.SUCCESS
+    assert snapshot.metrics["channels_required"] == 1
+    assert snapshot.metrics["channels_prepared"] == 1
 
 
 def test_hourly_retries_do_not_count_as_distinct_scheduled_hours(

@@ -114,6 +114,14 @@ class SystemdUnitTests(unittest.TestCase):
             SYSTEMD_DIR / "quant-premarket-prepare.timer"
         ).read_text(encoding="utf-8")
         self.assertIn("07:00:00 America/New_York", premarket_prepare_timer)
+        sector_prepare_timer = (
+            SYSTEMD_DIR / "quant-premarket-prepare-sector-rotation.timer"
+        ).read_text(encoding="utf-8")
+        self.assertIn("09:00:00 America/New_York", sector_prepare_timer)
+        self.assertIn(
+            "Unit=quant-premarket-prepare-sector-rotation.service",
+            sector_prepare_timer,
+        )
         group_price_timer = (
             SYSTEMD_DIR / "quant-group-rotation-price.timer"
         ).read_text(encoding="utf-8")
@@ -303,11 +311,36 @@ class SystemdUnitTests(unittest.TestCase):
             self.assertIn("MemoryHigh=400M", content)
             self.assertIn("MemoryMax=550M", content)
             self.assertIn("Environment=GROUP_ANALYTICS_ENABLED=true", content)
-            self.assertNotIn("quant-premarket-prepare.service", content)
+            self.assertNotIn("Requires=quant-premarket-prepare.service", content)
+        self.assertIn(
+            "OnSuccess=quant-premarket-prepare-sector-rotation.service",
+            retry,
+        )
+        self.assertIn(
+            "OnSuccess=quant-premarket-prepare-sector-rotation-root.service",
+            retry_root,
+        )
+        self.assertIn(
+            "OnSuccess=quant-premarket-prepare-sector-rotation.service",
+            linkage,
+        )
+        sector_prepare = (
+            SYSTEMD_DIR / "quant-premarket-prepare-sector-rotation.service"
+        ).read_text(encoding="utf-8")
+        sector_prepare_root = (
+            SYSTEMD_DIR / "quant-premarket-prepare-sector-rotation-root.service"
+        ).read_text(encoding="utf-8")
+        for content in (sector_prepare, sector_prepare_root):
+            self.assertIn("--prepare --channel sector-rotation", content)
+            self.assertNotIn("--channel all", content)
+            self.assertNotIn("--send", content)
+            self.assertIn("TimeoutStartSec=10min", content)
+            self.assertIn("Environment=GROUP_ANALYTICS_ENABLED=true", content)
         for content in (prepare, prepare_root):
             self.assertNotIn("--stage linkage", content)
             self.assertNotIn("run_group_rotation.py", content)
             self.assertNotIn("quant-group-rotation-linkage-retry.service", content)
+            self.assertNotIn("quant-premarket-prepare-sector-rotation.service", content)
             self.assertNotIn(
                 "ExecStartPre=-/usr/bin/flock --exclusive --wait 60",
                 content,
@@ -318,6 +351,16 @@ class SystemdUnitTests(unittest.TestCase):
                 content.index("EnvironmentFile=/etc/quant/premarket-digest.env"),
             )
             self.assertIn("--prepare --channel all", content)
+        digest = (
+            SYSTEMD_DIR / "quant-premarket-digest.service"
+        ).read_text(encoding="utf-8")
+        digest_root = (
+            SYSTEMD_DIR / "quant-premarket-digest-root.service"
+        ).read_text(encoding="utf-8")
+        for content in (digest, digest_root):
+            self.assertIn("--send --scheduled --channel all", content)
+            self.assertNotIn("quant-premarket-prepare-sector-rotation.service", content)
+            self.assertNotIn("quant-group-rotation-linkage-retry.service", content)
 
     def test_operations_site_is_independent_and_read_only(self):
         web = (

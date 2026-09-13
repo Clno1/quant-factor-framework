@@ -183,6 +183,47 @@ def test_close_only_member_frames_still_measure():
     assert result["eligible_members"] == 5
 
 
+def test_duplicate_member_dates_degrade_breadth_instead_of_aborting():
+    obs = normalize_observation(rows(), "SMH", "2026-09-08T18:00:00Z")
+    dates = pd.bdate_range("2026-08-01", periods=21)
+    frames = {m["ticker"]: pd.DataFrame({"adj_close": list(range(100, 121))}, index=dates)
+              for m in obs["members"]}
+    before_fp = member_measurement_fingerprint(frames, dates)
+    frames["AMD"] = pd.concat([frames["AMD"], frames["AMD"].iloc[[-1]]])
+    after_fp = member_measurement_fingerprint(frames, dates)
+    measured = observation_breadth(obs, frames, dates)
+    assert after_fp != before_fp
+    assert measured["eligible_members"] == 4
+    assert measured["member_coverage"] == pytest.approx(0.8)
+    assert measured["measurement_complete"] is False
+
+
+def test_run_rotation_survives_duplicate_member_cache(tmp_path):
+    import numpy as np
+    import exchange_calendars as xcals
+    cal = xcals.get_calendar("XNYS")
+    dates = cal.sessions_in_range("2025-01-02", "2026-09-08")
+    close = 100 * np.exp(.0001 * np.arange(len(dates)))
+    frame = pd.DataFrame({"adj_close": close, "close": close, "volume": 10000}, index=dates)
+    members = {f"S{i}": frame.copy() for i in range(5)}
+    members["S0"] = pd.concat([members["S0"], members["S0"].iloc[[-1]]])
+    obs = _etf_observation("2026-09-01T00:00:00Z")
+    save_observation(tmp_path / "holdings", obs)
+    theme = Theme("etf", "测试", "technology", "QQQ", proxy="ETF")
+    result = run_rotation(
+        asof="2026-09-08", store=RotationStore(tmp_path / "out"),
+        frames={"ETF": frame, "QQQ": frame, **members}, themes=[theme],
+        now="2026-09-09T01:00:00Z", dry_run=True, holdings_root=tmp_path / "holdings",
+        cache_root=tmp_path / "cache",
+    )
+    assert result["valid_theme_count"] == 1
+    assert result["source_session"] == "2026-09-08"
+    assert result["holdings_measurement_fingerprint"]
+    overlay = result["rows"][0]["holdings_breadth"]
+    assert overlay["status"] != "HOLDINGS_MEASUREMENT_FAILED"
+    assert overlay["breadth_eligible_members"] == 4
+
+
 def test_prior_session_price_changes_measurement_fingerprint_and_breadth():
     obs = normalize_observation(rows(), "SMH", "2026-09-08T18:00:00Z")
     dates = pd.bdate_range("2026-08-01", periods=21)

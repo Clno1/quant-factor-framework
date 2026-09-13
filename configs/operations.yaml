@@ -249,7 +249,26 @@ jobs:
       target_policy: current_xnys
     evidence:
       required_channels: [momentum, sector-rotation]
-    description: 提前计算并冻结两个盘前频道的不可变 payload；不连接 Discord，到 09:20 只领取并发送。
+    description: 提前计算并冻结两个盘前频道的不可变 payload；不连接 Discord。板块频道在关联成功后及 09:00 ET 可独立换版，动量频道不等待。
+
+  - job_id: premarket_sector_rotation_prepare
+    display_name: 板块摘要发送前换版
+    category: delivery
+    run_type: scheduled_batch
+    adapter: premarket_prepare
+    service_unit: quant-premarket-prepare-sector-rotation.service
+    timer_unit: quant-premarket-prepare-sector-rotation.timer
+    enabled_expected: true
+    order: 79
+    schedule:
+      timezone: America/New_York
+      weekdays: [MO, TU, WE, TH, FR]
+      time: "09:00"
+      deadline_minutes: 15
+      target_policy: current_xnys
+    evidence:
+      required_channels: [sector-rotation]
+    description: 仅重算未发送的 sector-rotation payload；不连接 Discord，不触碰动量频道。关联成功的 OnSuccess 也会启动同一服务。
 
   - job_id: intraday_candidate_prepare
     display_name: 盘中动量候选预计算

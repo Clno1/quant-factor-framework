@@ -378,7 +378,7 @@ def test_cli_publish_candidate_degradation_and_audit(tmp_path, capsys):
          patch("src.premarket_digest.momentum.CompletedSessionMomentumSource.load",side_effect=ValueError("private-path-secret")):
         assert main(["--asof","2026-09-08","--output-root",str(tmp_path),"--dry-run"]) == 0
         assert not RotationStore(tmp_path).initialized
-        assert main(["--asof","2026-09-08","--output-root",str(tmp_path)]) == 0
+        assert main(["--asof","2026-09-08","--output-root",str(tmp_path)]) == 1
     stored = RotationStore(tmp_path).load()
     assert stored["candidate_linkage"]["status"] == "unavailable"
     assert "private-path-secret" not in str(stored)
@@ -494,7 +494,82 @@ def test_price_stage_new_holdings_fingerprint_republishes(tmp_path, capsys):
     assert len(list((root / "runs").glob("*.json"))) == 2
 
 
-def test_linkage_unavailable_does_not_overwrite_or_mark_failure(tmp_path, capsys):
+def test_failed_linkage_read_does_not_record_success_when_previous_available(tmp_path, capsys):
+    from scripts.run_group_rotation import main
+    patches, root = _price_cli_patches(tmp_path)
+    session = "2026-09-08"
+    report = {"source_session": session, "input_fingerprint": "fp-1", "universe": "SP500", "rows": []}
+    with patches[0], patches[1], patches[2], \
+         patch("scripts.run_group_rotation.load_momentum_report", return_value=report):
+        assert main(["--stage", "price", "--asof", session, "--output-root", str(root)]) == 0
+        capsys.readouterr()
+        assert main(["--stage", "linkage", "--asof", session, "--output-root", str(root)]) == 0
+        capsys.readouterr()
+    store = RotationStore(root)
+    first = store.load()
+    assert first["candidate_linkage"]["status"] == "available"
+    store.failure(session, "LINKAGE_FAILED", stage="linkage")
+    error = SourceGateError("MOMENTUM_PUBLISHED_DATA_NOT_READY", "published data not ready")
+    with patches[0], patches[1], patches[2], \
+         patch("scripts.run_group_rotation.load_momentum_report", side_effect=error):
+        assert main(["--stage", "linkage", "--asof", session, "--output-root", str(root)]) == 1
+        payload = json.loads(capsys.readouterr().out)
+    latest = store.load()
+    attempt = store.last_attempt()
+    assert payload["status"] == "LINKAGE_CHECK_FAILED"
+    assert payload["kept_available"] is True
+    assert payload["retryable"] is True
+    assert payload["error_code"] == "MOMENTUM_PUBLISHED_DATA_NOT_READY"
+    assert latest["run_id"] == first["run_id"]
+    assert latest["candidate_linkage"]["status"] == "available"
+    assert attempt["status"] == "FAILED"
+    assert attempt["checks"]["linkage"]["status"] == "FAILED"
+    assert attempt["checks"]["linkage"]["code"] == "MOMENTUM_PUBLISHED_DATA_NOT_READY"
+
+
+def test_yesterday_linkage_failure_does_not_fail_today_price_health(tmp_path):
+    from datetime import datetime, timezone
+    from src.operations.adapters.research import collect_research_evidence
+    from src.operations.models import JobDefinition, JobStatus
+    store = RotationStore(tmp_path / "group_analytics" / "rotation")
+    first = attach_candidates(snapshot())
+    first["source_session"] = "2026-09-08"
+    store.publish(first, stage="price")
+    store.failure("2026-09-08", "LINKAGE_UNAVAILABLE", stage="linkage")
+    second = copy.deepcopy(first)
+    second["source_session"] = "2026-09-09"
+    second["notes"] = ["next-session"]
+    store.publish(second, stage="price")
+    attempt = store.last_attempt()
+    assert attempt["source_session"] == "2026-09-09"
+    assert attempt["status"] == "SUCCESS"
+    assert attempt["checks"]["price"]["source_session"] == "2026-09-09"
+    assert attempt["checks"]["linkage"]["status"] == "FAILED"
+    assert attempt["checks"]["linkage"]["source_session"] == "2026-09-08"
+    assert store.last_attempt(source_session="2026-09-08")["status"] == "FAILED"
+    linkage_job = JobDefinition(
+        job_id="group_analytics", display_name="板块轮动个股关联", category="RESEARCH",
+        run_type="SCHEDULED_BATCH", adapter="group_rotation", order=40, enabled_expected=True,
+        schedule={"timezone": "Asia/Singapore", "time": "13:15", "deadline_minutes": 75,
+                  "target_policy": "latest_publishable_xnys"},
+    )
+    price_job = JobDefinition(
+        job_id="group_rotation_price", display_name="板块轮动价格层", category="RESEARCH",
+        run_type="SCHEDULED_BATCH", adapter="group_rotation", order=35, enabled_expected=True,
+        schedule={"timezone": "America/New_York", "time": "17:30", "deadline_minutes": 75,
+                  "target_policy": "latest_publishable_xnys"},
+    )
+    now = datetime(2026, 9, 9, 22, 0, tzinfo=timezone.utc)
+    with patch("src.operations.adapters.research._rotation_store", return_value=store), \
+         patch("src.operations.adapters.research.expected_target_session", return_value="2026-09-09"):
+        linkage_result = collect_research_evidence([linkage_job], now=now, observed_at=now.isoformat())
+        price_result = collect_research_evidence([price_job], now=now, observed_at=now.isoformat())
+    assert linkage_result.snapshots[0].status == JobStatus.DEGRADED
+    assert linkage_result.snapshots[0].status != JobStatus.FAILED
+    assert price_result.snapshots[0].status == JobStatus.SUCCESS
+
+
+def test_linkage_unavailable_does_not_overwrite_and_records_failed_check(tmp_path, capsys):
     from scripts.run_group_rotation import main
     patches, root = _price_cli_patches(tmp_path)
     with patches[0], patches[1], patches[2], \
@@ -502,12 +577,17 @@ def test_linkage_unavailable_does_not_overwrite_or_mark_failure(tmp_path, capsys
         assert main(["--stage", "price", "--asof", "2026-09-08", "--output-root", str(root)]) == 0
         capsys.readouterr()
         first = RotationStore(root).load()["run_id"]
-        assert main(["--stage", "linkage", "--asof", "2026-09-08", "--output-root", str(root)]) == 0
+        assert main(["--stage", "linkage", "--asof", "2026-09-08", "--output-root", str(root)]) == 1
         payload = json.loads(capsys.readouterr().out)
     store = RotationStore(root)
     assert payload["status"] == "LINKAGE_UNAVAILABLE"
+    assert payload["retryable"] is True
+    assert payload["kept_available"] is False
     assert store.load()["run_id"] == first
-    assert store.last_attempt()["status"] == "SUCCESS"
+    attempt = store.last_attempt()
+    assert attempt["checks"]["price"]["status"] == "SUCCESS"
+    assert attempt["checks"]["linkage"]["status"] == "FAILED"
+    assert attempt["status"] == "FAILED"
     assert "private-path-secret" not in str(store.load())
 
 

@@ -156,7 +156,7 @@ class RotationStore:
                 payload["run_id"] = existing["run_id"]
             _atomic_json(self.root / "last_attempt.json", payload)
 
-    def last_attempt(self):
+    def last_attempt(self, source_session=None):
         try:
             value = json.loads((self.root / "last_attempt.json").read_text())
             checks = {}
@@ -169,15 +169,23 @@ class RotationStore:
                             "status": entry["status"],
                             "source_session": entry.get("source_session"),
                             "published": entry.get("published"),
+                            "code": entry.get("code"),
                         }
-            if checks:
-                status = "FAILED" if any(item["status"] == "FAILED" for item in checks.values()) else "SUCCESS"
+            current = source_session if source_session is not None else value.get("source_session")
+            relevant = {
+                key: item for key, item in checks.items()
+                if str(item.get("source_session") or "") == str(current or "")
+            }
+            if relevant:
+                status = "FAILED" if any(item["status"] == "FAILED" for item in relevant.values()) else "SUCCESS"
+            elif str(value.get("source_session") or "") == str(current or "") and value.get("status") in {"SUCCESS", "FAILED"}:
+                status = value["status"]
             else:
-                status = value["status"] if value["status"] in {"SUCCESS", "FAILED"} else "UNKNOWN"
+                status = "UNKNOWN"
             stage = value.get("stage") if value.get("stage") in ATTEMPT_STAGES else None
             return {
                 "status": status,
-                "source_session": value.get("source_session"),
+                "source_session": current,
                 "stage": stage,
                 "published": value.get("published"),
                 "checks": checks,
