@@ -353,6 +353,12 @@ def test_new_main_and_legacy_route_and_read_only_api(tmp_path):
         assert len(detail["theme"]["reference_history"]) == 100
         assert client.get("/api/group-analytics/rotation",params={"run":"../../secret"}).status_code == 422
         assert client.get("/api/group-analytics/rotation/no-such").status_code == 404
+        heat = client.get("/api/group-analytics/rotation/heatmap", params={"run": run}).json()
+        assert heat["status"] == "unavailable"
+        assert heat["reason"] == "HISTORICAL_VIEW_FORBIDDEN"
+        assert heat["pit_safe_for_history"] is False
+        assert client.get("/api/group-analytics/rotation/heatmap", params={"session": "2000-01-01"}).json()["reason"] == "SESSION_MISMATCH"
+        assert client.get("/api/group-analytics/rotation/heatmap", params={"run": "../../secret"}).status_code == 422
         store.failure(s["source_session"], "error")
         assert client.get("/api/group-analytics/rotation").json()["last_attempt"]["status"] == "FAILED"
 
@@ -572,6 +578,13 @@ def test_rotation_page_freshness_contract():
     assert "probe = el(\"rotation-cards\")" in js
     assert "selected || !compact" in js
     assert "rotation-trail-legend" in js
+    assert "当日板块热力图" in html
+    assert "LATEST_KNOWN_BACKFILL_NOT_PIT" in html
+    assert "不用于历史回看" in html
+    assert "rotation-heatmap-window" in html
+    assert "drawHeatmap" in js
+    assert "layoutTreemap" in js
+    assert "/api/group-analytics/rotation/heatmap" in js
     assert "net_creation" in js
     assert "visibilitychange" in js
     assert "5 * 60 * 1000" in js

@@ -24,7 +24,7 @@
   const v2Head = ["主题 / 状态","5日相对","20日相对","60日相对","真实广度","研究优先级"];
   const TRAIL_DX = 0.005, TRAIL_DY = 0.002;
   const TRAIL_COLORS = ["#6ea8ff","#3ecf8e","#e0b14a","#e07272","#b18cff","#4ec4d4","#e09050","#7eb8a8","#d48bc0","#8fbf5a","#d4b24a"];
-  let data, selection, detailSequence = 0;
+  let data, selection, detailSequence = 0, heatData, heatPath = [];
   const query = new URLSearchParams(location.search);
   async function get(url) { const r = await fetch(url, {credentials:"same-origin"}); const j = await r.json(); if (!r.ok) throw new Error(j.detail || "快照读取失败"); return j; }
   function card(title, value, note) { const c = node("article", undefined, "rotation-card"); c.append(node("h2", title), node("strong", value), node("p", note)); return c; }
@@ -208,6 +208,7 @@
       tbody.append(tr);
     }
     drawTrail(rows);
+    drawHeatmap();
     if (!rows.some(r=>r.id===selection)) { selection=undefined; el("rotation-detail").replaceChildren(node("p","点击主题，查看历史、个股候选与原版对账。")); detailSequence++; }
   }
   function chart(history) {
@@ -363,6 +364,166 @@
     }
     host.replaceChildren(svg, legend);
   }
+  function heatWindow() {
+    const raw = el("rotation-heatmap-window") && Number(el("rotation-heatmap-window").value);
+    return raw === 5 || raw === 20 ? raw : 1;
+  }
+  function heatReasonText(reason) {
+    return ({
+      HISTORICAL_VIEW_FORBIDDEN: "当日热力图不用于历史回看。",
+      SESSION_MISMATCH: "轮动快照日期与最新收盘不一致，未绘制热力图。",
+      STALE_TARGET_SESSION: "US_EQUITY_COVERAGE 不是最新收盘，未绘制热力图。",
+      COVERAGE_NOT_PUBLISHED: "覆盖行情尚未发布，热力图留空。",
+      PRICE_GAP: "当日价格不足，热力图留空。",
+      EMPTY_UNIVERSE: "覆盖成员为空，热力图留空。"
+    })[reason] || "热力图暂不可用。";
+  }
+  function heatColor(ret, scale) {
+    const t = !finiteNum(ret) || !scale ? 0 : Math.max(-1, Math.min(1, ret / scale));
+    if (t >= 0) return `rgba(62,207,142,${0.18 + 0.72 * t})`;
+    return `rgba(224,114,114,${0.18 + 0.72 * -t})`;
+  }
+  function layoutTreemap(items, x, y, w, h) {
+    const nodes = items.filter(item => item.value > 0);
+    if (!nodes.length || w <= 1 || h <= 1) return [];
+    if (nodes.length === 1) return [{...nodes[0], x, y, w, h}];
+    nodes.sort((a, b) => b.value - a.value);
+    const total = nodes.reduce((sum, item) => sum + item.value, 0);
+    let acc = 0, split = 1;
+    for (let i = 0; i < nodes.length; i++) {
+      acc += nodes[i].value;
+      split = i + 1;
+      if (acc >= total / 2) break;
+    }
+    split = Math.max(1, Math.min(nodes.length - 1, split));
+    const left = nodes.slice(0, split), right = nodes.slice(split);
+    const frac = left.reduce((sum, item) => sum + item.value, 0) / total;
+    if (w >= h) {
+      return layoutTreemap(left, x, y, w * frac, h).concat(layoutTreemap(right, x + w * frac, y, w * (1 - frac), h));
+    }
+    return layoutTreemap(left, x, y, w, h * frac).concat(layoutTreemap(right, x, y + h * frac, w, h * (1 - frac)));
+  }
+  function heatItems() {
+    const windowDays = heatWindow();
+    const retKey = "ret" + windowDays;
+    const capKey = "market_cap" + windowDays;
+    if (!heatData || heatData.status !== "available") return [];
+    if (!heatPath.length) {
+      return (heatData.sectors || []).map(sector => ({
+        kind: "sector", name: sector.name, value: sector[capKey] || 0, ret: sector[retKey], n: sector["n" + windowDays], node: sector
+      }));
+    }
+    const sector = (heatData.sectors || []).find(item => item.name === heatPath[0]);
+    if (!sector) return [];
+    if (heatPath.length === 1) {
+      return (sector.industries || []).map(industry => ({
+        kind: "industry", name: industry.name, value: industry[capKey] || 0, ret: industry[retKey], n: industry["n" + windowDays], node: industry
+      }));
+    }
+    const industry = (sector.industries || []).find(item => item.name === heatPath[1]);
+    if (!industry) return [];
+    return (industry.stocks || []).filter(stock => finiteNum(stock[retKey])).map(stock => ({
+      kind: "stock", name: stock.ticker, title: stock.name, value: stock.market_cap || 0, ret: stock[retKey], href: stock.href, node: stock
+    }));
+  }
+  function drawHeatmap() {
+    const panel = el("rotation-heatmap-panel");
+    const host = el("rotation-heatmap");
+    const status = el("rotation-heatmap-status");
+    const crumb = el("rotation-heatmap-crumb");
+    if (!panel || !host) return;
+    if (isLegacy()) { panel.hidden = true; host.replaceChildren(); return; }
+    panel.hidden = false;
+    if (pinned || (data && data.freshness !== "current")) {
+      if (status) status.textContent = heatReasonText("HISTORICAL_VIEW_FORBIDDEN");
+      if (crumb) crumb.replaceChildren();
+      host.replaceChildren(node("p", heatReasonText("HISTORICAL_VIEW_FORBIDDEN"), "heat-empty"));
+      return;
+    }
+    if (!heatData) {
+      if (status) status.textContent = "正在读取当日覆盖热力图…";
+      host.replaceChildren();
+      return;
+    }
+    if (heatData.status !== "available") {
+      if (status) status.textContent = heatReasonText(heatData.reason);
+      if (crumb) crumb.replaceChildren();
+      host.replaceChildren(node("p", heatReasonText(heatData.reason), "heat-empty"));
+      return;
+    }
+    const windowDays = heatWindow();
+    const counts = (heatData.counts && heatData.counts.windows && heatData.counts.windows[String(windowDays)]) || {};
+    const eligible = heatData.counts && heatData.counts.eligible;
+    if (status) {
+      status.textContent = `覆盖 ${heatData.counts.coverage_current} · 基准ETF ${heatData.counts.benchmark_only} · 可加权 ${eligible} · 图中 ${counts.in_tree ?? "—"} · 无市值 ${counts.no_market_cap ?? "—"} · 无价格 ${counts.no_price ?? "—"} · ${heatData.source_session}`;
+    }
+    if (crumb) {
+      crumb.replaceChildren();
+      const rootBtn = node("button", "全市场");
+      rootBtn.type = "button";
+      rootBtn.addEventListener("click", () => { heatPath = []; drawHeatmap(); });
+      crumb.append(rootBtn);
+      heatPath.forEach((name, index) => {
+        crumb.append(document.createTextNode(" / "));
+        const btn = node("button", name);
+        btn.type = "button";
+        btn.addEventListener("click", () => { heatPath = heatPath.slice(0, index + 1); drawHeatmap(); });
+        crumb.append(btn);
+      });
+    }
+    const items = heatItems().filter(item => item.value > 0);
+    if (!items.length) {
+      host.replaceChildren(node("p", "这一层没有可加权成员。", "heat-empty"));
+      return;
+    }
+    const probe = el("rotation-cards") || panel;
+    const width = Math.max(280, Math.floor((probe && probe.getBoundingClientRect().width) || panel.clientWidth) - 32);
+    const compact = width < 520;
+    const height = compact ? 240 : 360;
+    host.style.height = height + "px";
+    const scale = Math.max(0.01, ...items.map(item => Math.abs(item.ret || 0)));
+    host.replaceChildren();
+    layoutTreemap(items, 0, 0, width, height).forEach(cell => {
+      const isStock = cell.kind === "stock";
+      const tile = document.createElement(isStock ? "a" : "button");
+      tile.className = "heat-cell";
+      tile.style.left = cell.x + "px";
+      tile.style.top = cell.y + "px";
+      tile.style.width = Math.max(cell.w - 1, 1) + "px";
+      tile.style.height = Math.max(cell.h - 1, 1) + "px";
+      tile.style.background = heatColor(cell.ret, scale);
+      const label = node("strong", cell.name);
+      const ret = node("span", pct((cell.ret || 0) * 100));
+      tile.append(label, ret);
+      if (isStock) {
+        tile.href = cell.href;
+        tile.title = `${cell.title || cell.name} · ${pct((cell.ret || 0) * 100)}`;
+      } else {
+        tile.type = "button";
+        tile.title = `${cell.name} · ${pct((cell.ret || 0) * 100)} · ${cell.n || 0}只`;
+        tile.addEventListener("click", () => {
+          heatPath = cell.kind === "sector" ? [cell.name] : [heatPath[0], cell.name];
+          drawHeatmap();
+        });
+      }
+      host.append(tile);
+    });
+  }
+  async function loadHeatmap() {
+    const panel = el("rotation-heatmap-panel");
+    if (!panel || !data) return;
+    if (isLegacy() || pinned || data.freshness !== "current") {
+      heatData = {status: "unavailable", reason: "HISTORICAL_VIEW_FORBIDDEN"};
+      drawHeatmap();
+      return;
+    }
+    try {
+      heatData = await get("/api/group-analytics/rotation/heatmap?session=" + encodeURIComponent(data.source_session));
+    } catch (error) {
+      heatData = {status: "unavailable", reason: "COVERAGE_NOT_PUBLISHED"};
+    }
+    drawHeatmap();
+  }
   async function select(id) {
     selection=id;render();const seq=++detailSequence, box=el("rotation-detail");box.replaceChildren(node("p","正在读取固定快照详情…"));
     try {
@@ -418,6 +579,7 @@
   }
   el("rotation-cohort").addEventListener("change",render);el("rotation-sort").addEventListener("change",render);
   if (el("rotation-trail-window")) el("rotation-trail-window").addEventListener("change", render);
+  if (el("rotation-heatmap-window")) el("rotation-heatmap-window").addEventListener("change", drawHeatmap);
   let trailResize;
   window.addEventListener("resize", () => {
     clearTimeout(trailResize);
@@ -510,6 +672,7 @@
       fillStatus(new Date());
       showFrozen();
       render();
+      loadHeatmap();
       document.addEventListener("visibilitychange", () => { fillStatus(new Date()); checkLatest(); });
       setInterval(() => { fillStatus(new Date()); checkLatest(); }, POLL_MS);
     })

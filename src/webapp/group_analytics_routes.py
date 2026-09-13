@@ -1091,6 +1091,18 @@ def _rotation_snapshot(run: str | None):
     return snapshot
 
 
+@router.get("/api/group-analytics/rotation/heatmap", response_class=JSONResponse)
+def rotation_heatmap(session: str | None = None, run: str | None = None):
+    from src.group_analytics.rotation.heatmap import load_coverage_heatmap
+
+    if run is not None and not re.fullmatch(r"rot_[0-9]{8}_[a-f0-9]{16}", run):
+        raise HTTPException(status_code=422, detail="无效快照编号")
+    if session is not None and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", session):
+        raise HTTPException(status_code=422, detail="无效交易日")
+    payload = load_coverage_heatmap(source_session=session, historical=run is not None)
+    return JSONResponse(payload)
+
+
 @router.get("/api/group-analytics/rotation", response_class=JSONResponse)
 def rotation_summary(run: str | None = None):
     snapshot = _rotation_snapshot(run)

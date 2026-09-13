@@ -33,6 +33,16 @@
             <p class="rotation-trail-note">横轴是20日相对强弱的对数，纵轴是近5日相对前15日的速度。默认最近10个交易周。借鉴相对趋势与轨迹表达，非 RRG 复刻。只画当前观察范围，科技与行业不混排。点击圆点查看主题。</p>
             <div id="rotation-trail" class="rotation-trail"></div>
         </section>
+        <section id="rotation-heatmap-panel" class="rotation-heatmap-panel" hidden>
+            <div class="rotation-heatmap-head">
+                <h2>当日板块热力图</h2>
+                <nav id="rotation-heatmap-crumb" class="rotation-heatmap-crumb" aria-label="热力图层级"></nav>
+                <label>周期 <select id="rotation-heatmap-window" aria-label="热力图周期"><option value="1" selected>1日</option><option value="5">5日</option><option value="20">20日</option></select></label>
+            </div>
+            <p class="rotation-heatmap-note">市值加权 treemap。行业分类与市值为最新已知回填（LATEST_KNOWN_BACKFILL_NOT_PIT），不是时点有效分类。仅当日观察，不用于历史回看，不进入研究优先级。点击行业下钻；点击个股打开突破页。</p>
+            <p id="rotation-heatmap-status" class="rotation-heatmap-status"></p>
+            <div id="rotation-heatmap" class="rotation-heatmap"></div>
+        </section>
         <div class="rotation-table-wrap">
             <table class="rotation-table"><caption>研究版日线观察 · 生产分数不在主表 · 分数不是上涨概率</caption>
                 <thead><tr>
@@ -48,6 +58,7 @@
         </section>
         <details class="rotation-method"><summary>方法、边界与数据状态</summary>
             <p>相对收益基于主题/基准价格比，窗口为5/20/60个完整美股交易日。月度强弱（领先/持平/落后）需要连续2个日线收盘确认；速度（加速/平稳/减速）每日直出。稳定领先 = 领先 + 平稳，不再写成“等待确认”。同组20日排名、持续性与广度变化是解释字段，不进入研究优先级或总分；科技相对QQQ与行业相对SPY不混排。相对强弱—速度轨迹用已有 strength_log / acceleration_log 画散点与尾迹，借鉴相对趋势与轨迹表达，非 RRG 复刻，同样不进优先级。</p>
+            <p>当日板块热力图按 US_EQUITY_COVERAGE 市值加权，行业/子行业两级下钻。分类政策是 LATEST_KNOWN_BACKFILL_NOT_PIT，只用于最新收盘观察，固定历史快照不绘图。热力图不进入研究优先级或总分。</p>
             <p>ETF的真实持仓广度来自当前持仓观测。主表同时给出样本内参与率、已测基金权重，覆盖不足时标明“仅部分持仓观察”；持仓生效日未披露，不是历史成分广度。公开基础版的70/30仅是ETF趋势代理，放在独立对账区域。持仓观测超过14个日历日则停用，不使用旧持仓。成交额按拆股复权 close×volume 计算，供应商价量复权尚未用真实抽样核验。净申赎在份额/NAV审计通过前留空，不用成交额冒充。生产0–100分本轮不在主表展示。</p>
             <p>自建篮子为固定成员每日等权研究序列，不代表历史时点可选组合。背景实验不影响评分或仓位；本页不包含盘中行情、自动买卖或已验证收益预测。</p>
             <p id="rotation-audit"></p>
