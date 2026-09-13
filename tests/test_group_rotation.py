@@ -346,6 +346,8 @@ def test_new_main_and_legacy_route_and_read_only_api(tmp_path):
         assert response["run_id"] == run
         assert "input_panel" not in response
         assert "history" not in response["rows"][0]
+        assert "rotation_timeline" in response["rows"][0]
+        assert "rank_rs20" not in response["rows"][0]["production"]
         detail=client.get("/api/group-analytics/rotation/etf",params={"run":run}).json()
         assert len(detail["theme"]["reference_history"]) == 100
         assert client.get("/api/group-analytics/rotation",params={"run":"../../secret"}).status_code == 422
@@ -550,11 +552,17 @@ def test_rotation_page_freshness_contract():
     assert "固定历史快照" in html
     assert ">强弱<" in html and ">速度<" in html and ">成交活跃<" in html and ">风险<" in html
     assert ">净申赎<" in html
+    assert ">轮动<" in html
+    assert "同组20日排名" in html
     assert "仅部分持仓观察" in html
     assert "生产分数不在主表" in html
+    assert "解释字段" in html
     assert "schema_legacy" in js
     assert "strength_label" in js
     assert "holdings_breadth" in js
+    assert "rotation_timeline" in js
+    assert "rank_rs20" in js
+    assert "timelineCell" in js
     assert "net_creation" in js
     assert "visibilitychange" in js
     assert "5 * 60 * 1000" in js
@@ -880,6 +888,9 @@ def test_service_records_amount_basis_and_replays(tmp_path):
     assert "execution_close" in result["input_panel"]
     assert "priority_breadth_pct" not in result["parameters"]
     assert result["parameters"]["price_state_version"] == "dual-axis-v3"
+    assert result["parameters"]["rotation_timeline_version"] == "cohort-rank-v1"
+    assert "rotation_timeline" in result["rows"][0]
+    assert "rank_rs20" not in result["rows"][0]["production"]
     assert replay_snapshot(result)["status"] == "MATCH"
 
 

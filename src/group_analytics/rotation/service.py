@@ -38,6 +38,7 @@ from .holdings import (
 )
 from .store import RotationStore, encoded
 from .themes import default_themes, proxy_etf_symbols, required_symbols
+from .timeline import TIMELINE_VERSION, refresh_timeline_breadth
 
 LOOKBACK_CALENDAR_DAYS = 550
 LOOKBACK_SESSIONS = 300
@@ -53,6 +54,7 @@ ROTATION_PARAMETERS = {
     "min_breadth_members": 5, "min_breadth_coverage": .8,
     "holdings_stale_calendar_days": 14,
     "price_state_version": "dual-axis-v3",
+    "rotation_timeline_version": TIMELINE_VERSION,
 }
 logger = logging.getLogger(__name__)
 
@@ -226,6 +228,10 @@ def run_rotation(*, asof="latest", refresh=False, store=None, frames=None, theme
         except Exception as exc:
             logger.warning("rotation holdings overlay skipped: %s", type(exc).__name__)
         try:
+            refresh_timeline_breadth(rows)
+        except Exception as exc:
+            logger.warning("rotation timeline breadth refresh skipped: %s", type(exc).__name__)
+        try:
             attach_net_creation(rows)
         except Exception as exc:
             logger.warning("rotation net-creation overlay skipped: %s", type(exc).__name__)
@@ -285,7 +291,8 @@ def run_rotation(*, asof="latest", refresh=False, store=None, frames=None, theme
                       "自建篮子历史按固定成员回看，不是历史时点可选组合",
                       "成交额按拆股复权 close×volume 计算；供应商价量复权尚未用真实抽样核验，见 " + AMOUNT_AUDIT_DOC,
                       "ETF真实广度为当前持仓观测，持仓名单可周更、成员价格每日更新；持仓生效日未披露，见 " + HOLDINGS_AUDIT_DOC,
-                      "净申赎审计未通过，列为空且不用成交额冒充，见 " + FLOWS_AUDIT_DOC],
+                      "净申赎审计未通过，列为空且不用成交额冒充，见 " + FLOWS_AUDIT_DOC,
+                      "同组排名路径与持续性为解释字段，不进入优先级或总分"],
         })
         run_id = None if dry_run else store.publish(snapshot)
         return {**snapshot, "run_id": run_id}

@@ -20,7 +20,7 @@
     HOLDINGS_MEASUREMENT_FAILED:"持仓已接入但成员价格不足",
     PARTIAL_HOLDINGS_COVERAGE:"仅部分持仓观察", HOLDINGS_NOT_POINT_IN_TIME:"当前持仓不用于历史时点"
   };
-  const v3Head = ["主题","强弱","速度","5日相对","20日相对","60日相对","趋势","成交活跃","真实广度","净申赎","风险","研究优先级"];
+  const v3Head = ["主题","强弱","速度","5日相对","20日相对","轮动","60日相对","趋势","成交活跃","真实广度","净申赎","风险","研究优先级"];
   const v2Head = ["主题 / 状态","5日相对","20日相对","60日相对","真实广度","研究优先级"];
   let data, selection, detailSequence = 0;
   const query = new URLSearchParams(location.search);
@@ -32,6 +32,69 @@
     const row = document.querySelector(".rotation-table thead tr");
     if (!row) return;
     row.replaceChildren(...(isLegacy() ? v2Head : v3Head).map(title => node("th", title)));
+    const rankOpt = el("rotation-sort").querySelector('option[value="rank_rs20"]');
+    if (rankOpt) rankOpt.hidden = isLegacy();
+    if (isLegacy() && el("rotation-sort").value === "rank_rs20") el("rotation-sort").value = "rs20";
+  }
+  function timelineOf(r) { return r.rotation_timeline || null; }
+  function timelineCell(r) {
+    const t = timelineOf(r);
+    if (!t || t.rank_rs20 == null) return "—";
+    const n = t.rank_rs20_n != null ? `/${t.rank_rs20_n}` : "";
+    const change = t.rank_change20;
+    let arrow = "";
+    if (typeof change === "number" && Number.isFinite(change) && change > 0) arrow = ` ↑${change}`;
+    else if (typeof change === "number" && Number.isFinite(change) && change < 0) arrow = ` ↓${-change}`;
+    return `${t.rank_rs20}${n}${arrow}`;
+  }
+  function cmpRows(a, b, sort) {
+    if (sort === "rank_rs20") {
+      const ra = a.rotation_timeline && Number.isFinite(a.rotation_timeline.rank_rs20)
+        ? a.rotation_timeline.rank_rs20 : Infinity;
+      const rb = b.rotation_timeline && Number.isFinite(b.rotation_timeline.rank_rs20)
+        ? b.rotation_timeline.rank_rs20 : Infinity;
+      return ra - rb || a.id.localeCompare(b.id);
+    }
+    return (b.production[sort] ?? -Infinity) - (a.production[sort] ?? -Infinity) || a.id.localeCompare(b.id);
+  }
+  function timelineDetail(t) {
+    if (!t) return [];
+    const lines = [];
+    if (t.rank_rs20 != null) {
+      let text = `同组排名：第${t.rank_rs20}/${t.rank_rs20_n ?? "—"}`;
+      if (t.rank_rs20_ago20 != null) text += ` · 20日前第${t.rank_rs20_ago20}`;
+      if (typeof t.rank_change20 === "number" && Number.isFinite(t.rank_change20) && t.rank_change20 !== 0) {
+        text += t.rank_change20 > 0 ? `（上升${t.rank_change20}位）` : `（下降${-t.rank_change20}位）`;
+      }
+      lines.push(text);
+    }
+    if (Array.isArray(t.rank_path20) && t.rank_path20.length) {
+      const path = t.rank_path20.map(point => {
+        const label = point.offset === 0 ? "今日" : `T−${point.offset}`;
+        return point.rank == null ? `${label} —` : `${label}第${point.rank}`;
+      }).join(" → ");
+      lines.push(`路径：${path}`);
+    }
+    if (t.persistence_label) {
+      let text = `持续性：${t.persistence_label}`;
+      if (t.outperform_days20 != null) text += ` · 近20日中${t.outperform_days20}日相对跑赢`;
+      if (typeof t.log_share_5_of_20 === "number" && Number.isFinite(t.log_share_5_of_20)) {
+        text += ` · 近5日占20日相对对数收益 ${(t.log_share_5_of_20 * 100).toFixed(0)}%`;
+      }
+      lines.push(text);
+    }
+    if (t.breadth_source === "etf_holdings_current_only") {
+      lines.push(typeof t.breadth_now === "number" && Number.isFinite(t.breadth_now)
+        ? `广度：当前持仓观测 ${t.breadth_now.toFixed(0)}%；无历史时点，不能比较20日前`
+        : "广度：持仓观测无历史时点，不能比较20日前");
+    } else if (typeof t.breadth_now === "number" && Number.isFinite(t.breadth_now)
+               && typeof t.breadth_ago20 === "number" && Number.isFinite(t.breadth_ago20)) {
+      const ch = t.breadth_change20;
+      const chText = typeof ch === "number" && Number.isFinite(ch)
+        ? `${ch >= 0 ? "+" : ""}${ch.toFixed(0)}个百分点` : "—";
+      lines.push(`广度：20日前 ${t.breadth_ago20.toFixed(0)}% → 今日 ${t.breadth_now.toFixed(0)}%（${chText}）`);
+    }
+    return lines;
   }
   function riskText(p) {
     const flags = Array.isArray(p.risk_flags) ? p.risk_flags : [];
@@ -105,7 +168,7 @@
   }
   function render() {
     const cohort = el("rotation-cohort").value, sort = el("rotation-sort").value;
-    const rows = data.rows.filter(r => r.cohort === cohort).sort((a,b) => (b.production[sort] ?? -Infinity) - (a.production[sort] ?? -Infinity) || a.id.localeCompare(b.id));
+    const rows = data.rows.filter(r => r.cohort === cohort).sort((a,b) => cmpRows(a, b, sort));
     const focus = rows.filter(r => ["focus","priority","price_watch"].includes(r.production.action));
     const recover = rows.filter(r => ["recover","watch"].includes(r.production.action));
     el("rotation-cards").replaceChildren(
@@ -128,9 +191,11 @@
       } else {
         appendTd(tr, p.strength_label || "—", "强弱");
         appendTd(tr, p.speed_label || "—", "速度");
-        for (const [key,label] of [["rs5","5日相对"],["rs20","20日相对"],["rs60","60日相对"]]) {
+        for (const [key,label] of [["rs5","5日相对"],["rs20","20日相对"]]) {
           appendTd(tr, pct(p[key]), label, p[key]>0?"rotation-positive":p[key]<0?"rotation-negative":"");
         }
+        appendTd(tr, timelineCell(r), "轮动");
+        appendTd(tr, pct(p.rs60), "60日相对", p.rs60>0?"rotation-positive":p.rs60<0?"rotation-negative":"");
         appendTd(tr, r.compatibility?.source_trend || "—", "趋势");
         appendTd(tr, amountText(p), "成交活跃");
         appendTd(tr, breadthText(r, p), "真实广度");
@@ -163,6 +228,7 @@
       if(count)box.append(node("p",`新强弱候选确认 ${count}/${p.confirmation_required || 2}；尚未替换已确认月度强弱。速度按当日直出。`));
       const back=node("button","↑ 返回主题列表");back.type="button";back.addEventListener("click",()=>el("rotation-cohort").scrollIntoView({block:"start"}));box.append(back);
       box.append(node("p",`绝对5日 ${pct(p.abs5)}，绝对20日 ${pct(p.abs20)}。${r.price_response || "背景不足，独立观察价格"}`));
+      for (const line of timelineDetail(timelineOf(r))) box.append(node("p", line));
       if (p.amount_label) box.append(node("p", `成交活跃：${amountText(p)}`));
       const hb = holdingsBreadth(r);
       if (hb.breadth_kind === "etf_holdings_observation") {

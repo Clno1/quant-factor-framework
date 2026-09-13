@@ -12,6 +12,7 @@ from urllib.parse import quote
 from src.alerts.discord import validate_discord_payload
 from src.group_analytics.rotation.holdings import format_holdings_breadth_text
 from src.group_analytics.rotation.store import RotationStore
+from src.group_analytics.rotation.timeline import format_rotation_timeline_text
 from .models import SourceGateError
 
 STATUS_ZH = {"READY": "临近突破", "BREAKOUT": "突破观察", "SETUP": "形态准备"}
@@ -154,6 +155,9 @@ def rotation_payload(report, context, settings):
             p = r["production"]
             label = p.get("combined_label") or p.get("state_name")
             line = f"**{r['name']}** · {label} · {_action_name(p['action'])}\n5日 {_pct(p['rs5'])}｜20日 {_pct(p['rs20'])}｜60日 {_pct(p['rs60'])}（相对{r['benchmark']}）"
+            timeline = format_rotation_timeline_text(r.get("rotation_timeline"))
+            if timeline:
+                line += f"\n{timeline}"
             hb = r.get("holdings_breadth") or {}
             if hb.get("breadth_kind") == "etf_holdings_observation" and hb.get("breadth_equal_weight_pct") is not None:
                 line += f"\n{format_holdings_breadth_text(hb)}（持仓生效日未披露）"

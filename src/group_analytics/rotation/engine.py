@@ -451,4 +451,7 @@ def analyze(prices, volumes, sessions, themes, *, amount_verified=False,
         if schema_version != LEGACY_SCHEMA_VERSION:
             row["evidence_gaps"] = latest["evidence_gaps"]
         rows.append(row)
+    if schema_version != LEGACY_SCHEMA_VERSION:
+        from .timeline import attach_rotation_timeline
+        attach_rotation_timeline(rows)
     return rows
