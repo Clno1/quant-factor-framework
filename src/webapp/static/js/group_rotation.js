@@ -438,17 +438,20 @@
     if (pinned || (data && data.freshness !== "current")) {
       if (status) status.textContent = heatReasonText("HISTORICAL_VIEW_FORBIDDEN");
       if (crumb) crumb.replaceChildren();
+      host.style.height = "auto";
       host.replaceChildren(node("p", heatReasonText("HISTORICAL_VIEW_FORBIDDEN"), "heat-empty"));
       return;
     }
     if (!heatData) {
       if (status) status.textContent = "正在读取当日覆盖热力图…";
+      host.style.height = "auto";
       host.replaceChildren();
       return;
     }
     if (heatData.status !== "available") {
       if (status) status.textContent = heatReasonText(heatData.reason);
       if (crumb) crumb.replaceChildren();
+      host.style.height = "auto";
       host.replaceChildren(node("p", heatReasonText(heatData.reason), "heat-empty"));
       return;
     }
@@ -474,6 +477,7 @@
     }
     const items = heatItems().filter(item => item.value > 0);
     if (!items.length) {
+      host.style.height = "auto";
       host.replaceChildren(node("p", "这一层没有可加权成员。", "heat-empty"));
       return;
     }

@@ -586,6 +586,7 @@ def test_rotation_page_freshness_contract():
     assert "rotation-heatmap-window" in html
     assert "drawHeatmap" in js
     assert "layoutTreemap" in js
+    assert "host.style.height = \"auto\"" in js
     assert "/api/group-analytics/rotation/heatmap" in js
     assert "跨资产 ETF 代理" in html
     assert "rotation-cross-panel" in html
