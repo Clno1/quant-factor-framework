@@ -569,6 +569,9 @@ def test_rotation_page_freshness_contract():
     assert "相对强弱—速度轨迹" in html
     assert "非 RRG 复刻" in html
     assert "rotation-trail-window" in html
+    assert "probe = el(\"rotation-cards\")" in js
+    assert "selected || !compact" in js
+    assert "rotation-trail-legend" in js
     assert "net_creation" in js
     assert "visibilitychange" in js
     assert "5 * 60 * 1000" in js

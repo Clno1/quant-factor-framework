@@ -237,10 +237,12 @@
     if (isLegacy()) { panel.hidden = true; host.replaceChildren(); return; }
     panel.hidden = false;
     const bars = trailBars();
-    const compact = root.clientWidth < 420;
-    const width = Math.min(920, Math.max(300, root.clientWidth - 48));
+    const probe = el("rotation-cards") || el("rotation-status") || panel;
+    const probeWidth = Math.floor((probe && probe.getBoundingClientRect().width) || panel.clientWidth || root.clientWidth);
+    const compact = probeWidth < 520;
+    const width = Math.max(280, probeWidth - 32);
     const height = compact ? 280 : 360;
-    const padL = compact ? 36 : 58, padR = compact ? 14 : 22, padT = 22, padB = compact ? 28 : 36;
+    const padL = compact ? 36 : 58, padR = compact ? 18 : 28, padT = 22, padB = compact ? 28 : 36;
     const plotW = width - padL - padR, plotH = height - padT - padB;
     const ns = "http://www.w3.org/2000/svg";
     const svg = document.createElementNS(ns, "svg");
@@ -291,10 +293,13 @@
     const axisX = svgEl("text", {x: padL + plotW / 2, y: height - 6, class: "trail-muted", "text-anchor": "middle"});
     axisX.textContent = compact ? "落后 ← 20日相对 → 领先" : "落后 ← 相对强弱（20日对数） → 领先";
     svg.append(axisX);
-    const axisY = svgEl("text", {x: 12, y: padT + plotH / 2, class: "trail-muted", "text-anchor": "middle", transform: `rotate(-90 12 ${padT + plotH / 2})`});
-    axisY.textContent = compact ? "减速 ← 速度 → 加速" : "减速 ← 速度（近5日相对前15日） → 加速";
-    svg.append(axisY);
+    if (!compact) {
+      const axisY = svgEl("text", {x: 12, y: padT + plotH / 2, class: "trail-muted", "text-anchor": "middle", transform: `rotate(-90 12 ${padT + plotH / 2})`});
+      axisY.textContent = "减速 ← 速度（近5日相对前15日） → 加速";
+      svg.append(axisY);
+    }
     let drawn = 0;
+    const legendItems = [];
     rows.forEach((r, index) => {
       const color = TRAIL_COLORS[index % TRAIL_COLORS.length];
       const pts = trailPoints(r, bars).filter(p => finiteNum(p.strength_log) && finiteNum(p.acceleration_log));
@@ -317,12 +322,20 @@
       const cy = finiteNum(cur.acceleration_log) ? cur.acceleration_log : (pts.length ? pts.at(-1).acceleration_log : null);
       if (!finiteNum(cx) || !finiteNum(cy)) return;
       drawn += 1;
+      legendItems.push({row: r, color});
       const g = svgEl("g", {class: "trail-hit", tabindex: "0", role: "button"});
       g.setAttribute("aria-label", r.name);
+      g.setAttribute("title", r.name);
       const px = xPx(cx), py = yPx(cy);
       g.append(svgEl("circle", {cx: px, cy: py, r: selected ? 6 : 4.5, fill: color, stroke: "#0E1117", "stroke-width": selected ? 2 : 1}));
-      if (!compact || selected || rows.length <= 6) {
-        const label = svgEl("text", {x: px + 8, y: py + 4 + (index % 3) * 2, class: "trail-label"});
+      if (selected || !compact) {
+        const onRight = px > padL + plotW * 0.62;
+        const label = svgEl("text", {
+          x: onRight ? px - 8 : px + 8,
+          y: py + 4 + (index % 3) * 2,
+          class: "trail-label",
+          "text-anchor": onRight ? "end" : "start"
+        });
         label.textContent = r.name;
         g.append(label);
       }
@@ -335,7 +348,20 @@
       host.replaceChildren(node("p", "连续历史不足，暂不绘图。"));
       return;
     }
-    host.replaceChildren(svg);
+    const legend = node("div", undefined, "rotation-trail-legend");
+    legend.setAttribute("role", "list");
+    for (const item of legendItems) {
+      const btn = node("button");
+      btn.type = "button";
+      btn.setAttribute("role", "listitem");
+      if (selection === item.row.id) btn.classList.add("is-selected");
+      const swatch = node("span", undefined, "swatch");
+      swatch.style.background = item.color;
+      btn.append(swatch, document.createTextNode(item.row.name));
+      btn.addEventListener("click", () => select(item.row.id));
+      legend.append(btn);
+    }
+    host.replaceChildren(svg, legend);
   }
   async function select(id) {
     selection=id;render();const seq=++detailSequence, box=el("rotation-detail");box.replaceChildren(node("p","正在读取固定快照详情…"));
