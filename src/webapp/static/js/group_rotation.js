@@ -492,6 +492,8 @@
       tile.style.width = Math.max(cell.w - 1, 1) + "px";
       tile.style.height = Math.max(cell.h - 1, 1) + "px";
       tile.style.background = heatColor(cell.ret, scale);
+      if (cell.w < 84 && cell.h > 64) tile.style.writingMode = "vertical-rl";
+      if (cell.w < 72 || cell.h < 40) tile.style.fontSize = "10px";
       const label = node("strong", cell.name);
       const ret = node("span", pct((cell.ret || 0) * 100));
       tile.append(label, ret);
