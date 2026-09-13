@@ -36,6 +36,7 @@ from .holdings import (
     load_latest_observations,
     member_measurement_fingerprint,
 )
+from .cross_asset import CROSS_ASSET_VERSION, build_cross_asset, cross_asset_symbols, unavailable_cross_asset
 from .store import RotationStore, encoded
 from .themes import default_themes, proxy_etf_symbols, required_symbols
 from .timeline import TIMELINE_VERSION, refresh_timeline_breadth
@@ -58,6 +59,7 @@ ROTATION_PARAMETERS = {
     "rotation_timeline_version": TIMELINE_VERSION,
     "rotation_trail_version": TRAIL_VERSION,
     "trail_bars": TRAIL_BARS,
+    "cross_asset_version": CROSS_ASSET_VERSION,
 }
 logger = logging.getLogger(__name__)
 
@@ -180,7 +182,8 @@ def run_rotation(*, asof="latest", refresh=False, store=None, frames=None, theme
         themes = tuple(themes or default_themes())
         if len({t.id for t in themes}) != len(themes):
             raise ValueError("Duplicate theme ids")
-        symbols = required_symbols(themes)
+        theme_symbols = required_symbols(themes)
+        symbols = sorted(set(theme_symbols) | set(cross_asset_symbols()))
         if frames is None:
             frames = load_frames(symbols, sessions[0].date().isoformat(), source_session,
                                  refresh=refresh, cache_root=cache_root)
@@ -196,6 +199,11 @@ def run_rotation(*, asof="latest", refresh=False, store=None, frames=None, theme
         prices = clean_table(pd.DataFrame(prices), sessions)
         volumes = clean_table(pd.DataFrame(volumes), sessions)
         exec_px = clean_table(pd.DataFrame(execution), sessions)
+        try:
+            cross_asset = build_cross_asset(prices, sessions)
+        except Exception as exc:
+            logger.warning("rotation cross-asset bar skipped: %s", type(exc).__name__)
+            cross_asset = unavailable_cross_asset(reason="BUILD_FAILED")
         rows = analyze(prices, volumes, sessions, themes,
                        amount_verified=amount_verified, execution_close=exec_px,
                        schema_version=SCHEMA_VERSION)
@@ -289,6 +297,7 @@ def run_rotation(*, asof="latest", refresh=False, store=None, frames=None, theme
             "parameters": parameters,
             "session_status": "FINAL", "valid_theme_count": valid,
             "total_theme_count": len(rows), "context": context, "rows": rows,
+            "cross_asset": cross_asset,
             "notes": ["日线研究观察，不是交易指令；未包含实时盘前行情",
                       "公开版为规则级对照，未完成TradingView数值对账；生产0–100分不在主表展示",
                       "自建篮子历史按固定成员回看，不是历史时点可选组合",
@@ -296,7 +305,8 @@ def run_rotation(*, asof="latest", refresh=False, store=None, frames=None, theme
                       "ETF真实广度为当前持仓观测，持仓名单可周更、成员价格每日更新；持仓生效日未披露，见 " + HOLDINGS_AUDIT_DOC,
                       "净申赎审计未通过，列为空且不用成交额冒充，见 " + FLOWS_AUDIT_DOC,
                       "同组排名路径与持续性为解释字段，不进入优先级或总分",
-                      "相对强弱—速度轨迹为解释图，借鉴相对趋势与轨迹表达，非RRG复刻，不进入优先级"],
+                      "相对强弱—速度轨迹为解释图，借鉴相对趋势与轨迹表达，非RRG复刻，不进入优先级",
+                      "跨资产条为ETF代理的绝对收益，不是美元指数或黄金/原油现货，不进入优先级"],
         })
         run_id = None if dry_run else store.publish(snapshot)
         return {**snapshot, "run_id": run_id}

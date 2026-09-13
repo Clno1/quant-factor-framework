@@ -349,6 +349,8 @@ def test_new_main_and_legacy_route_and_read_only_api(tmp_path):
         assert "rotation_timeline" in response["rows"][0]
         assert "rotation_trail" in response["rows"][0]
         assert "rank_rs20" not in response["rows"][0]["production"]
+        assert "跨资产 ETF 代理" in client.get("/group-analytics").text
+        assert "不是美元指数" in client.get("/group-analytics").text
         detail=client.get("/api/group-analytics/rotation/etf",params={"run":run}).json()
         assert len(detail["theme"]["reference_history"]) == 100
         assert client.get("/api/group-analytics/rotation",params={"run":"../../secret"}).status_code == 422
@@ -585,6 +587,16 @@ def test_rotation_page_freshness_contract():
     assert "drawHeatmap" in js
     assert "layoutTreemap" in js
     assert "/api/group-analytics/rotation/heatmap" in js
+    assert "跨资产 ETF 代理" in html
+    assert "rotation-cross-panel" in html
+    assert "drawCrossAsset" in js
+    assert "data.cross_asset" in js
+    cross_fn = js.split("function drawCrossAsset")[1].split("async function loadHeatmap")[0]
+    assert "pinned" not in cross_fn
+    assert "HISTORICAL_VIEW_FORBIDDEN" not in cross_fn
+    assert "美元指数" in html
+    assert "黄金/原油现货" in html
+    assert "黄金现货" not in js
     assert "net_creation" in js
     assert "visibilitychange" in js
     assert "5 * 60 * 1000" in js
@@ -912,8 +924,11 @@ def test_service_records_amount_basis_and_replays(tmp_path):
     assert result["parameters"]["price_state_version"] == "dual-axis-v3"
     assert result["parameters"]["rotation_timeline_version"] == "cohort-rank-v1"
     assert result["parameters"]["rotation_trail_version"] == "strength-speed-trail-v1"
+    assert result["parameters"]["cross_asset_version"] == "etf-proxy-bar-v1"
     assert "rotation_timeline" in result["rows"][0]
     assert "rotation_trail" in result["rows"][0]
+    assert result["cross_asset"]["total_count"] == 6
+    assert "cross_asset" not in result["rows"][0]["production"]
     assert "rank_rs20" not in result["rows"][0]["production"]
     assert replay_snapshot(result)["status"] == "MATCH"
 

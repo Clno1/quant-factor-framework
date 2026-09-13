@@ -209,6 +209,7 @@
     }
     drawTrail(rows);
     drawHeatmap();
+    drawCrossAsset();
     if (!rows.some(r=>r.id===selection)) { selection=undefined; el("rotation-detail").replaceChildren(node("p","点击主题，查看历史、个股候选与原版对账。")); detailSequence++; }
   }
   function chart(history) {
@@ -510,6 +511,45 @@
       }
       host.append(tile);
     });
+  }
+  function drawCrossAsset() {
+    const panel = el("rotation-cross-panel");
+    const host = el("rotation-cross");
+    const status = el("rotation-cross-status");
+    if (!panel || !host) return;
+    const payload = data && data.cross_asset;
+    if (isLegacy() || !payload || !Array.isArray(payload.items) || !payload.items.length) {
+      panel.hidden = true;
+      host.replaceChildren();
+      if (status) status.textContent = "";
+      return;
+    }
+    panel.hidden = false;
+    const available = payload.available_count;
+    const total = payload.total_count || payload.items.length;
+    if (status) {
+      status.textContent = Number.isFinite(available)
+        ? `${available}/${total} 个 ETF 代理有读数`
+        : `${total} 个 ETF 代理`;
+    }
+    host.replaceChildren();
+    for (const item of payload.items) {
+      const card = node("article", undefined, "rotation-cross-item");
+      card.append(node("h3", item.name || item.symbol || "ETF 代理"));
+      card.append(node("p", `${item.symbol || "—"} · ${item.observes || "ETF 代理"}`, "rotation-cross-meta"));
+      const list = node("dl");
+      for (const [key, label] of [["abs5", "5日"], ["abs20", "20日"], ["abs60", "60日"]]) {
+        const row = node("div");
+        const value = item[key];
+        const dd = node("dd", pct(value));
+        if (typeof value === "number" && Number.isFinite(value) && value > 0) dd.className = "rotation-positive";
+        else if (typeof value === "number" && Number.isFinite(value) && value < 0) dd.className = "rotation-negative";
+        row.append(node("dt", label), dd);
+        list.append(row);
+      }
+      card.append(list);
+      host.append(card);
+    }
   }
   async function loadHeatmap() {
     const panel = el("rotation-heatmap-panel");
