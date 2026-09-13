@@ -388,7 +388,9 @@ class CupHandleDetector:
                     now=now, bars=bars, outcome="ERROR", reason="INVALID_5M_BAR",
                     details=common,
                 )
-            parsed.append({"timestamp": timestamp, **values})
+            invalid_sources = _finite(bar.get("invalid_source_volume_count", 0))
+            parsed.append({"timestamp": timestamp, **values,
+                           "invalid_source_volume": invalid_sources is None or invalid_sources != 0})
         current = parsed[-1]
         if any(
             bar["timestamp"].strftime("%Y-%m-%d") != session_date
@@ -460,12 +462,18 @@ class CupHandleDetector:
         cup_midpoint = candidate.cup_bottom + (rim - candidate.cup_bottom) * 0.5
         baseline_volume = sum(float(bar["volume"] or 0.0) for bar in baseline) / len(baseline)
         handle_volume = sum(float(bar["volume"] or 0.0) for bar in handle) / len(handle)
-        if baseline_volume <= 0 or handle_volume <= 0 or float(current["volume"] or 0.) <= 0:
+        volume_evidence = [*baseline, *handle, current]
+        invalid_volume_bars = sum(
+            bar["volume"] is None or bar["volume"] <= 0 or bar["invalid_source_volume"]
+            for bar in volume_evidence
+        )
+        if invalid_volume_bars:
             return self._result(
                 started=started, candidate=candidate, session_date=session_date,
                 now=now, bars=bars, outcome="REJECTED", reason="INSUFFICIENT_VOLUME_EVIDENCE",
                 details={**common, "baseline_volume": baseline_volume, "handle_volume": handle_volume,
-                         "breakout_volume": float(current["volume"] or 0.)},
+                         "breakout_volume": float(current["volume"] or 0.),
+                         "invalid_volume_bar_count": invalid_volume_bars},
             )
         handle_volume_ratio = (
             handle_volume / baseline_volume

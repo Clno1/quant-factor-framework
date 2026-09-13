@@ -1,25 +1,594 @@
+# Reviewed exact mappings and prior exclusions. Full-scope publication gates remain mandatory.
 schema_version: 1
 query_mappings:
-  - id: hson_strr_provider_merger_window
-    security_id: sec_9227ef0c29095fddbf7b0a2e9d60d9e0
-    historical_ticker: HSON
-    query_ticker: STRR
-    start: "2025-08-22"
-    end: "2025-09-04"
-    next_alias_start: "2025-09-05"
-    reason: "Merger closed August 22, but HSON changed its trading symbol to STRR only September 5. FMP stores the intervening nine sessions under STRR. Do not change the historical ticker or remap earlier STRR history."
-    sources:
-      - "https://www.sec.gov/Archives/edgar/data/1210708/000121070825000081/hson-20250902.htm"
-      - "https://www.sec.gov/Archives/edgar/data/1210708/000119312525185799/d931756dex991.htm"
+- id: hson_strr_provider_merger_window
+  security_id: sec_9227ef0c29095fddbf7b0a2e9d60d9e0
+  historical_ticker: HSON
+  query_ticker: STRR
+  start: '2025-08-22'
+  end: '2025-09-04'
+  next_alias_start: '2025-09-05'
+  reason: Merger closed August 22, but HSON changed its trading symbol to STRR only
+    September 5. FMP stores the intervening nine sessions under STRR. Do not change
+    the historical ticker or remap earlier STRR history.
+  sources:
+  - https://www.sec.gov/Archives/edgar/data/1210708/000121070825000081/hson-20250902.htm
+  - https://www.sec.gov/Archives/edgar/data/1210708/000119312525185799/d931756dex991.htm
+- id: sag_ineo_provider_announcement_session
+  security_id: sec_3dbacd49f0ff564ea275b8bc0567ffb5
+  historical_ticker: SAG
+  query_ticker: INEO
+  start: '2025-04-25'
+  end: '2025-04-25'
+  next_alias_start: '2025-04-28'
+  reason: The issuer announced its name change April 25; the SEC filing specifies
+    the trading-symbol change on April 28. FMP stores April 25 under INEO and SAG
+    ends April 24. Query only this one session under INEO, retaining the formal historical
+    ticker SAG.
+  sources:
+  - https://www.sec.gov/Archives/edgar/data/1933951/000164117225008113/form6-k.htm
+  - https://www.sec.gov/Archives/edgar/data/1933951/000164117225008113/ex99-1.htm
+- id: ptmn_bcic_provider_merger_window
+  security_id: sec_58b8e5e5591c5c79b9c513d3313e493e
+  historical_ticker: PTMN
+  query_ticker: BCIC
+  start: '2025-07-15'
+  end: '2025-08-22'
+  next_alias_start: '2025-08-25'
+  reason: The SEC filing explicitly dates the trading-symbol change to August 25.
+    FMP's PTMN query ends July 14, while its BCIC canonical query supplies the intervening
+    29 sessions following the July 15 merger. Query only this bounded window under
+    BCIC, preserving PTMN as the historical symbol. Revalidate the entire security
+    and all previously authenticated dates.
+  sources:
+  - https://www.sec.gov/Archives/edgar/data/1372807/000119312525185297/d937608d8k.htm
+  - https://www.sec.gov/Archives/edgar/data/2051820/000162828026001776/mlci-20260112.htm
+- id: nftg_gxai_provider_window
+  security_id: sec_76e53b73950252cf951a357c43148340
+  historical_ticker: NFTG
+  query_ticker: GXAI
+  start: '2024-01-10'
+  end: '2024-01-18'
+  next_alias_start: '2024-01-19'
+  reason: SEC annual filing confirms the January 19 symbol change. FMP GXAI supplies
+    the six missing preceding sessions. Preserve NFTG identity and validate the complete
+    replacement.
+  sources:
+  - https://www.sec.gov/Archives/edgar/data/1895618/000121390024026681/ea0202356-10k_gaxosai.htm
+- id: eyen_hypd_provider_boundary
+  security_id: sec_7d1964996d3a559391141cfd7b00a611
+  historical_ticker: EYEN
+  query_ticker: HYPD
+  start: '2025-07-02'
+  end: '2025-07-02'
+  next_alias_start: '2025-07-03'
+  reason: SEC exhibit confirms July 3 trading change. FMP HYPD supplies July 2; retain
+    EYEN for that session and revalidate the whole security.
+  sources:
+  - https://www.sec.gov/Archives/edgar/data/1682639/000110465925065294/tm2519676d1_ex99-1.htm
+- id: ocx_imdx_provider_boundary
+  security_id: sec_80d56a8cb6c35c2883b29b3a42cd20d2
+  historical_ticker: OCX
+  query_ticker: IMDX
+  start: '2025-06-17'
+  end: '2025-06-17'
+  next_alias_start: '2025-06-18'
+  reason: SEC filing confirms June 18 symbol change with unchanged CUSIP. Query June
+    17 under IMDX but preserve OCX and full-history authentication.
+  sources:
+  - https://www.sec.gov/Archives/edgar/data/1642380/000164117225015338/form8-k.htm
+- id: byon_bbby_same_issuer_provider_alias
+  security_id: sec_86ab565da4205ff28e2aafd13c377539
+  historical_ticker: BYON
+  query_ticker: BBBY
+  start: '2023-11-06'
+  end: '2025-08-28'
+  next_alias_start: '2025-08-29'
+  reason: CIK 1130713 Overstock successor only. SEC filings bound BYON from November
+    6 2023 to August 28 2025, BBBY from August 29, and NXH from August 17 2026. FMP
+    BYON is empty; BBBY supplies 454 sessions in this exact interval. Never query
+    the unrelated bankrupt former BBBY issuer. Preserve all four formal historical
+    aliases and revalidate every parent date.
+  sources:
+  - https://www.sec.gov/Archives/edgar/data/1130713/000113071323000074/nameandlistingchangepressr.htm
+  - https://www.sec.gov/Archives/edgar/data/1130713/000113071325000078/byon-20250930.htm
+  - https://www.sec.gov/Archives/edgar/data/1130713/000114036126033194/ef20080088_8k.htm
+- id: verb_tonx_provider_window
+  security_id: sec_88e1e876da1e53ebb1e00206d4ae5143
+  historical_ticker: VERB
+  query_ticker: TONX
+  start: '2024-10-21'
+  end: '2025-08-29'
+  next_alias_start: '2025-09-02'
+  reason: SEC exhibit dates trading change to September 2. FMP TONX supplies the 215
+    sessions omitted by VERB. Keep VERB historical identity and authenticate the entire
+    history.
+  sources:
+  - https://www.sec.gov/Archives/edgar/data/1566610/000164117225026325/ex99-1.htm
+- id: ctac_gdyn_same_spac_provider_alias
+  security_id: sec_8dffa89bf2c9542da9d7cf6cb0f184d9
+  historical_ticker: CTAC
+  query_ticker: GDYN
+  start: '2019-01-02'
+  end: '2020-03-05'
+  next_alias_start: '2020-03-06'
+  reason: SEC confirms ChaSerg to Grid Dynamics trading transition on March 6 2020.
+    FMP CTAC is empty and GDYN supplies the 296-session approved old interval. Do
+    not use a later unrelated CTAC issuer; retain CTAC historical identity and verify
+    the complete parent.
+  sources:
+  - https://www.sec.gov/Archives/edgar/data/1743725/000121390020005742/ea119399-8k_griddynamics.htm
+  - https://www.sec.gov/Archives/edgar/data/1743725/000121390020005551/ea119360ex99-1_chaserg.htm
+- id: syta_chai_provider_merger_window
+  security_id: sec_9e30a89561395d60b36005280befb143
+  historical_ticker: SYTA
+  query_ticker: CHAI
+  start: '2025-10-03'
+  end: '2025-10-06'
+  next_alias_start: '2025-10-07'
+  reason: SEC confirms October 3 merger and October 7 trading/split boundary. FMP
+    CHAI supplies October 3 and 6. Keep SYTA and independently sourced nominal prices;
+    no manual split adjustments or rounding.
+  sources:
+  - https://www.sec.gov/Archives/edgar/data/1649009/000149315225017099/form6-k.htm
+- id: vach_vrxa_provider_boundary
+  security_id: sec_a1c2ba7804225710b37f9a24dff60553
+  historical_ticker: VACH
+  query_ticker: VRXA
+  start: '2026-06-09'
+  end: '2026-06-10'
+  next_alias_start: '2026-06-11'
+  reason: SEC registration and exhibit date VRXA trading to June 11. FMP VRXA supplies
+    June 9 and 10. Keep VACH historical identity and validate the entire security.
+  sources:
+  - https://www.sec.gov/Archives/edgar/data/2079109/000182912626006302/veraxabiotech_8-a12ba.htm
+  - https://www.sec.gov/Archives/edgar/data/2079109/000182912626006329/veraxabiotech_ex99-1.htm
+- id: fwaa_smrt_same_spac_provider_alias
+  security_id: sec_c35068574a2051cfa4ba85e2474ec559
+  historical_ticker: FWAA
+  query_ticker: SMRT
+  start: '2021-02-04'
+  end: '2021-08-24'
+  next_alias_start: '2021-08-25'
+  reason: SEC confirms FWAA ceased trading August 24 and SMRT commenced August 25.
+    Query only the approved FWAA interval under SMRT; FMP supplies 139 real sessions
+    starting February 5. Do not fabricate a February 4 bar. Full parent-date authentication
+    remains mandatory.
+  sources:
+  - https://www.sec.gov/Archives/edgar/data/1837014/000119312521260632/d166902d8k.htm
+- id: fgf_fgnx_provider_window
+  security_id: sec_ca7f09cd2e1c55e7b811c87596b01832
+  historical_ticker: FGF
+  query_ticker: FGNX
+  start: '2024-02-29'
+  end: '2025-08-08'
+  next_alias_start: '2025-08-11'
+  reason: SEC exhibit explicitly dates the symbol switch to August 11. FMP FGNX supplies
+    the 362 preceding sessions omitted by FGF. Preserve FGF identity, separate nominal
+    prices, and complete-history validation.
+  sources:
+  - https://www.sec.gov/Archives/edgar/data/1591890/000164117225023074/ex99-1.htm
+- id: myte_luxe_provider_announcement_window
+  security_id: sec_dd5d882edcba5425b19180737365fec5
+  historical_ticker: MYTE
+  query_ticker: LUXE
+  start: '2025-04-21'
+  end: '2025-04-30'
+  next_alias_start: '2025-05-01'
+  reason: SEC annual filing confirms May 1 trading-symbol change. FMP LUXE supplies
+    the eight sessions after the April 21 announcement omitted by MYTE. Retain MYTE
+    historical identity and authenticate the complete security.
+  sources:
+  - https://www.sec.gov/Archives/edgar/data/1831907/000110465925104454/luxe-20250630x20f.htm
+- id: jwa_wly_class_a_provider_alias
+  security_id: sec_f90ad99be9ca54cea25ed4095f7de16d
+  historical_ticker: JW-A
+  query_ticker: WLY
+  start: '2019-01-02'
+  end: '2022-03-31'
+  next_alias_start: '2022-04-01'
+  reason: SEC annual filing establishes Wiley Class A identity, not the exact transition
+    date. The issuer's March 15 announcement and OCC memo 50195 independently establish
+    the April 1 2022 JW-A to WLY boundary and unchanged Class A CUSIP. FMP WLY supplies
+    819 sessions where JW-A is empty. Retain JW-A identity and do not use Class B/WLYB.
+    Entire-security authentication is mandatory.
+  sources:
+  - https://www.sec.gov/Archives/edgar/data/107140/000010714023000092/jwa-20230430.htm
+  boundary_sources:
+  - https://newsroom.wiley.com/press-releases/press-release-details/2022/Wiley-Announces-NYSE-Ticker-Symbol-Change-to-WLY-and-WLYB/default.aspx
+  - https://infomemo.theocc.com/infomemos?number=50195
+- id: ptsi_pamt_provider_redomestication_window
+  security_id: sec_f9e080c61eed561e9954539b5d4d9104
+  historical_ticker: PTSI
+  query_ticker: PAMT
+  start: '2024-11-08'
+  end: '2024-11-11'
+  next_alias_start: '2024-11-12'
+  reason: SEC exhibit distinguishes November 7 redomestication from November 12 trading
+    change and confirms one-for-one share continuity. PAMT supplies the two missing
+    November 8 and 11 sessions. Retain PTSI and validate the complete history.
+  sources:
+  - https://www.sec.gov/Archives/edgar/data/798287/000168316824007944/pam_ex9901.htm
+- id: nvfy_xwin_provider_two_session_boundary
+  security_id: sec_3fe2e95c9faa5f7f927029ac1de11ea2
+  historical_ticker: NVFY
+  query_ticker: XWIN
+  start: '2025-11-06'
+  end: '2025-11-07'
+  next_alias_start: '2025-11-10'
+  reason: SEC confirms the same issuer's November 3 corporate name change, not the
+    exchange trading date. The authenticated master supplies the November 10
+    alias boundary; Trading 212's November 10 executed-corporate-events notice
+    independently corroborates that transition. Query only the two missing
+    November 6 and 7 sessions under XWIN, retain NVFY as historical ticker, and
+    reauthenticate every parent date and all nominal/executable/return fields.
+    The broker notice is corroboration, not a Nasdaq announcement.
+  sources:
+  - https://www.sec.gov/Archives/edgar/data/1473334/000149315225020756/form8-k.htm
+  boundary_sources:
+  - https://community.trading212.com/t/corporate-events-in-november-2025/88702/4
 prior_quarantine:
-  version_id: ad5de5cfd10d47e2ae21364f1808248d
-  manifest_sha256: 6fbe3bc28ac4e477b782fa9cc337a3618a75875b4c3f31bf6676d9b481c8b7c0
-  quarantine_sha256: 081f7e715620f7e71a52102a96451d25843b91113b65fe2ed2a6f24b7b719255
-  # Only these previously reviewed rows may be inherited, and only on exact OHLCV match.
+  version_id: 562967c01bb54e2ab39454804cc4ac73
+  manifest_sha256: 7388933abb12306b88ebe05bf51c2eb9fa15b29e1ac51c3af273e29af1326579
+  quarantine_sha256: e5ea49cc797694e27cc5c02c21f1e54449cf917a8f1a30cde6cca6dc3b2cba4f
   rows:
-    - {security_id: sec_3a54d48f107154568ff4b6a5a4ad31f2, ticker: PROP, date: "2019-01-04"}
-    - {security_id: sec_3a54d48f107154568ff4b6a5a4ad31f2, ticker: PROP, date: "2023-10-16"}
-    - {security_id: sec_92f654c0b5f25bd3834cce79b86f244e, ticker: ATCX, date: "2019-11-22"}
-    - {security_id: sec_92f654c0b5f25bd3834cce79b86f244e, ticker: ATCX, date: "2020-04-03"}
-    - {security_id: sec_b4a354ad8d91591dbc72d67186367360, ticker: BGLC, date: "2022-07-26"}
-    - {security_id: sec_b4a354ad8d91591dbc72d67186367360, ticker: BGLC, date: "2023-04-06"}
+  - security_id: sec_22c51932eec8568eb8923eb61bb2f298
+    ticker: SNYR
+    date: '2020-03-11'
+  - security_id: sec_22c51932eec8568eb8923eb61bb2f298
+    ticker: SNYR
+    date: '2020-04-08'
+  - security_id: sec_22c51932eec8568eb8923eb61bb2f298
+    ticker: SNYR
+    date: '2021-03-17'
+  - security_id: sec_2ec7bd4002f558ff86522f0a0e56148d
+    ticker: QVCG
+    date: '2026-08-09'
+  - security_id: sec_3a54d48f107154568ff4b6a5a4ad31f2
+    ticker: PROP
+    date: '2019-01-04'
+  - security_id: sec_3a54d48f107154568ff4b6a5a4ad31f2
+    ticker: PROP
+    date: '2023-10-16'
+  - security_id: sec_555aef3066fd59e6899fd6e08f7cbbf2
+    ticker: PGHL
+    date: '2024-11-26'
+  - security_id: sec_59d2c9c222a45b0ab1a292729fa936c9
+    ticker: BSEM
+    date: '2021-08-31'
+  - security_id: sec_5b5ddd18325d5749b63a098f17200fa1
+    ticker: YALA
+    date: '2023-02-08'
+  - security_id: sec_92f654c0b5f25bd3834cce79b86f244e
+    ticker: ATCX
+    date: '2019-11-22'
+  - security_id: sec_92f654c0b5f25bd3834cce79b86f244e
+    ticker: ATCX
+    date: '2020-04-03'
+  - security_id: sec_a6c22e908f225e64b5437b22032a67b6
+    ticker: WATR
+    date: '2026-08-16'
+  - security_id: sec_a9771a27b17a528ba7890fb46f19b914
+    ticker: IMA
+    date: '2025-07-25'
+  - security_id: sec_abb1e5efe57652a09b7d7ea824428cb1
+    ticker: NUR
+    date: '2026-08-16'
+  - security_id: sec_b4a354ad8d91591dbc72d67186367360
+    ticker: BGLC
+    date: '2022-07-26'
+  - security_id: sec_b4a354ad8d91591dbc72d67186367360
+    ticker: BGLC
+    date: '2023-04-06'
+  - security_id: sec_c655ed8ceac35191ba5028bea62c44bb
+    ticker: CIIT
+    date: '2020-10-08'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2024-11-24'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2024-11-28'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2024-12-01'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2024-12-08'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2024-12-15'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2024-12-22'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2024-12-25'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2024-12-29'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-01-01'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-01-05'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-01-09'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-01-12'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-01-20'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-01-26'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-02-02'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-02-09'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-02-17'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-02-23'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-03-02'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-03-09'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-03-16'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-03-23'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-03-30'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-04-06'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-04-13'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-04-20'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-04-27'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-05-04'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-05-11'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-05-18'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-05-26'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-06-01'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-06-08'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-06-15'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-06-19'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-06-22'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-06-29'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-07-06'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-07-13'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-07-20'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-07-27'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-08-03'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-08-10'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-08-17'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-08-24'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-09-01'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-09-07'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-09-14'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-09-21'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-09-28'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-10-05'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-10-12'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-10-19'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-10-26'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-11-02'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-11-09'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-11-16'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-11-23'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-11-27'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-11-30'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-12-07'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-12-14'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-12-21'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-12-25'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2025-12-28'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2026-01-01'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2026-01-04'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2026-01-11'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2026-01-19'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2026-01-25'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2026-02-01'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2026-02-08'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2026-02-16'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2026-02-22'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2026-03-01'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2026-03-08'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2026-03-15'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2026-03-22'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2026-03-29'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2026-04-05'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2026-04-12'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2026-04-19'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2026-04-26'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2026-05-03'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2026-05-10'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2026-05-17'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2026-05-25'
+  - security_id: sec_ca059ebba1b95fb4a7f6d1f943b2486b
+    ticker: JDZG
+    date: '2026-05-31'
+  - security_id: sec_d8df4f4f1e0858198bfa9ec719297ffd
+    ticker: MWG
+    date: '2023-04-03'
+  - security_id: sec_d8f2a36b466858a290e3a4c8f9fdc6a4
+    ticker: ZXZZT
+    date: '2025-07-15'
+  - security_id: sec_d8f2a36b466858a290e3a4c8f9fdc6a4
+    ticker: ZXZZT
+    date: '2025-07-25'
+  - security_id: sec_d8f2a36b466858a290e3a4c8f9fdc6a4
+    ticker: ZXZZT
+    date: '2025-08-11'
+  - security_id: sec_d8f2a36b466858a290e3a4c8f9fdc6a4
+    ticker: ZXZZT
+    date: '2025-09-02'
+  - security_id: sec_d8f2a36b466858a290e3a4c8f9fdc6a4
+    ticker: ZXZZT
+    date: '2025-09-09'
+  - security_id: sec_d8f2a36b466858a290e3a4c8f9fdc6a4
+    ticker: ZXZZT
+    date: '2025-09-17'
+  - security_id: sec_d8f2a36b466858a290e3a4c8f9fdc6a4
+    ticker: ZXZZT
+    date: '2025-10-09'
+  - security_id: sec_d8f2a36b466858a290e3a4c8f9fdc6a4
+    ticker: ZXZZT
+    date: '2025-11-24'
+  - security_id: sec_d8f2a36b466858a290e3a4c8f9fdc6a4
+    ticker: ZXZZT
+    date: '2025-12-29'
+  - security_id: sec_d8f2a36b466858a290e3a4c8f9fdc6a4
+    ticker: ZXZZT
+    date: '2026-01-12'
+  - security_id: sec_dfb175b9fa275d5e9a8d1fa774d900bf
+    ticker: OCAC
+    date: '2026-08-02'
+  - security_id: sec_e817bae84fd85069bc79cbe106047751
+    ticker: IVDA
+    date: '2019-03-07'
+  - security_id: sec_e972ef7e91405294b85ec4971c23f9e1
+    ticker: BEP
+    date: '2025-11-08'
+  - security_id: sec_ef27675e05e55b9ba1721deda046f23e
+    ticker: STSS
+    date: '2025-04-28'

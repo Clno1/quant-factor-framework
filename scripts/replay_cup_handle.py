@@ -59,6 +59,8 @@ def main() -> int:
         start=args.start,
         end=args.end,
     )
+    result["data_contract"] = dataset.contract.to_dict()
+    result["counts_for_shadow_promotion"] = False
     output = args.output or (
         ROOT
         / "outputs"

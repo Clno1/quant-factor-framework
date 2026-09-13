@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+import hashlib
+import json
 import shutil
 import subprocess
 from typing import Any, Iterable
@@ -247,6 +249,18 @@ def _broad_catalog() -> dict[str, dict[str, Any]]:
                     output["pit"] = dict(zip(
                         [column[0] for column in connection.description], row
                     ))
+            for name in ("coverage", "pit"):
+                record = output.get(name)
+                if not record or not record.get("manifest_path"):
+                    continue
+                path = CONFIG.abs_path(record["manifest_path"])
+                content = Path(path).read_bytes()
+                expected = record.get("manifest_checksum_sha256") or record.get("manifest_sha256")
+                if hashlib.sha256(content).hexdigest() != expected:
+                    raise RuntimeError("availability manifest hash mismatch")
+                manifest = json.loads(content)
+                record["security_availability"] = (manifest.get("quality_lineage") or {}).get(
+                    "security_availability") if name == "coverage" else manifest.get("security_availability")
             return output
         finally:
             connection.close()
@@ -643,8 +657,16 @@ def collect_broad_evidence(
             blockers=(readiness or {}).get("blockers") or ["PIT_INDUSTRY_HISTORY_NOT_READY"],
         ),
     ]
+    availability = (coverage or {}).get("security_availability") or {}
+    isolation_active = availability.get("status") == "DEGRADED"
+    if isolation_active:
+        for stage in stages[1:3]:
+            stage["metadata"]["security_availability"] = availability
+            if stage["status"] == JobStatus.SUCCESS.value:
+                stage["status"] = JobStatus.DEGRADED.value
+                stage["detail"] += f"；逐票隔离 {len(availability.get('unavailable', []))}/{availability.get('expected_count')}，其他证券继续生产"
     required_ready = all(
-        stage["status"] == JobStatus.SUCCESS.value for stage in stages[:4]
+        stage["status"] in {JobStatus.SUCCESS.value, JobStatus.DEGRADED.value} for stage in stages[:4]
     )
     observing = stages[4]["status"] == JobStatus.RUNNING.value
     initial_target = str((initial_rollout or {}).get("target_session") or "")
@@ -694,6 +716,9 @@ def collect_broad_evidence(
             reason = "定时任务保持关闭；证券主表候选已通过，等待正式发布"
         else:
             reason = "定时任务按上线计划保持关闭，等待首次回填与影子验收"
+    elif required_ready and isolation_active:
+        job_status = JobStatus.DEGRADED
+        reason = "少量证券已显式隔离，正常证券继续生产；不是全市场完整通过"
     elif required_ready and observing:
         job_status = JobStatus.RUNNING
         reason = "正式数据已就绪，正在累计五个交易日影子观察"
@@ -803,6 +828,7 @@ def collect_broad_evidence(
         progress_total=5.0,
         output_version=str((factor_publication or {}).get("generation_id") or "") or None,
         metrics={
+            "security_availability": availability,
             "web_default_enabled": bool(CONFIG.data.broad_factor_data.web_default_enabled),
             "shadow_passed": _integer_metric(
                 ledger,

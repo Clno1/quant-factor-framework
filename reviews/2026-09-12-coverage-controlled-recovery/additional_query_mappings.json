@@ -1,0 +1,120 @@
+[
+  {
+    "id": "nftg_gxai_provider_window",
+    "security_id": "sec_76e53b73950252cf951a357c43148340",
+    "historical_ticker": "NFTG", "query_ticker": "GXAI",
+    "start": "2024-01-10", "end": "2024-01-18", "next_alias_start": "2024-01-19",
+    "reason": "SEC annual filing confirms the January 19 symbol change. FMP GXAI supplies the six missing preceding sessions. Preserve NFTG identity and validate the complete replacement.",
+    "sources": ["https://www.sec.gov/Archives/edgar/data/1895618/000121390024026681/ea0202356-10k_gaxosai.htm"]
+  },
+  {
+    "id": "eyen_hypd_provider_boundary",
+    "security_id": "sec_7d1964996d3a559391141cfd7b00a611",
+    "historical_ticker": "EYEN", "query_ticker": "HYPD",
+    "start": "2025-07-02", "end": "2025-07-02", "next_alias_start": "2025-07-03",
+    "reason": "SEC exhibit confirms July 3 trading change. FMP HYPD supplies July 2; retain EYEN for that session and revalidate the whole security.",
+    "sources": ["https://www.sec.gov/Archives/edgar/data/1682639/000110465925065294/tm2519676d1_ex99-1.htm"]
+  },
+  {
+    "id": "ocx_imdx_provider_boundary",
+    "security_id": "sec_80d56a8cb6c35c2883b29b3a42cd20d2",
+    "historical_ticker": "OCX", "query_ticker": "IMDX",
+    "start": "2025-06-17", "end": "2025-06-17", "next_alias_start": "2025-06-18",
+    "reason": "SEC filing confirms June 18 symbol change with unchanged CUSIP. Query June 17 under IMDX but preserve OCX and full-history authentication.",
+    "sources": ["https://www.sec.gov/Archives/edgar/data/1642380/000164117225015338/form8-k.htm"]
+  },
+  {
+    "id": "byon_bbby_same_issuer_provider_alias",
+    "security_id": "sec_86ab565da4205ff28e2aafd13c377539",
+    "historical_ticker": "BYON", "query_ticker": "BBBY",
+    "start": "2023-11-06", "end": "2025-08-28", "next_alias_start": "2025-08-29",
+    "reason": "CIK 1130713 Overstock successor only. SEC filings bound BYON from November 6 2023 to August 28 2025, BBBY from August 29, and NXH from August 17 2026. FMP BYON is empty; BBBY supplies 454 sessions in this exact interval. Never query the unrelated bankrupt former BBBY issuer. Preserve all four formal historical aliases and revalidate every parent date.",
+    "sources": [
+      "https://www.sec.gov/Archives/edgar/data/1130713/000113071323000074/nameandlistingchangepressr.htm",
+      "https://www.sec.gov/Archives/edgar/data/1130713/000113071325000078/byon-20250930.htm",
+      "https://www.sec.gov/Archives/edgar/data/1130713/000114036126033194/ef20080088_8k.htm"
+    ]
+  },
+  {
+    "id": "verb_tonx_provider_window",
+    "security_id": "sec_88e1e876da1e53ebb1e00206d4ae5143",
+    "historical_ticker": "VERB", "query_ticker": "TONX",
+    "start": "2024-10-21", "end": "2025-08-29", "next_alias_start": "2025-09-02",
+    "reason": "SEC exhibit dates trading change to September 2. FMP TONX supplies the 215 sessions omitted by VERB. Keep VERB historical identity and authenticate the entire history.",
+    "sources": ["https://www.sec.gov/Archives/edgar/data/1566610/000164117225026325/ex99-1.htm"]
+  },
+  {
+    "id": "ctac_gdyn_same_spac_provider_alias",
+    "security_id": "sec_8dffa89bf2c9542da9d7cf6cb0f184d9",
+    "historical_ticker": "CTAC", "query_ticker": "GDYN",
+    "start": "2019-01-02", "end": "2020-03-05", "next_alias_start": "2020-03-06",
+    "reason": "SEC confirms ChaSerg to Grid Dynamics trading transition on March 6 2020. FMP CTAC is empty and GDYN supplies the 296-session approved old interval. Do not use a later unrelated CTAC issuer; retain CTAC historical identity and verify the complete parent.",
+    "sources": [
+      "https://www.sec.gov/Archives/edgar/data/1743725/000121390020005742/ea119399-8k_griddynamics.htm",
+      "https://www.sec.gov/Archives/edgar/data/1743725/000121390020005551/ea119360ex99-1_chaserg.htm"
+    ]
+  },
+  {
+    "id": "syta_chai_provider_merger_window",
+    "security_id": "sec_9e30a89561395d60b36005280befb143",
+    "historical_ticker": "SYTA", "query_ticker": "CHAI",
+    "start": "2025-10-03", "end": "2025-10-06", "next_alias_start": "2025-10-07",
+    "reason": "SEC confirms October 3 merger and October 7 trading/split boundary. FMP CHAI supplies October 3 and 6. Keep SYTA and independently sourced nominal prices; no manual split adjustments or rounding.",
+    "sources": ["https://www.sec.gov/Archives/edgar/data/1649009/000149315225017099/form6-k.htm"]
+  },
+  {
+    "id": "vach_vrxa_provider_boundary",
+    "security_id": "sec_a1c2ba7804225710b37f9a24dff60553",
+    "historical_ticker": "VACH", "query_ticker": "VRXA",
+    "start": "2026-06-09", "end": "2026-06-10", "next_alias_start": "2026-06-11",
+    "reason": "SEC registration and exhibit date VRXA trading to June 11. FMP VRXA supplies June 9 and 10. Keep VACH historical identity and validate the entire security.",
+    "sources": [
+      "https://www.sec.gov/Archives/edgar/data/2079109/000182912626006302/veraxabiotech_8-a12ba.htm",
+      "https://www.sec.gov/Archives/edgar/data/2079109/000182912626006329/veraxabiotech_ex99-1.htm"
+    ]
+  },
+  {
+    "id": "fwaa_smrt_same_spac_provider_alias",
+    "security_id": "sec_c35068574a2051cfa4ba85e2474ec559",
+    "historical_ticker": "FWAA", "query_ticker": "SMRT",
+    "start": "2021-02-04", "end": "2021-08-24", "next_alias_start": "2021-08-25",
+    "reason": "SEC confirms FWAA ceased trading August 24 and SMRT commenced August 25. Query only the approved FWAA interval under SMRT; FMP supplies 139 real sessions starting February 5. Do not fabricate a February 4 bar. Full parent-date authentication remains mandatory.",
+    "sources": ["https://www.sec.gov/Archives/edgar/data/1837014/000119312521260632/d166902d8k.htm"]
+  },
+  {
+    "id": "fgf_fgnx_provider_window",
+    "security_id": "sec_ca7f09cd2e1c55e7b811c87596b01832",
+    "historical_ticker": "FGF", "query_ticker": "FGNX",
+    "start": "2024-02-29", "end": "2025-08-08", "next_alias_start": "2025-08-11",
+    "reason": "SEC exhibit explicitly dates the symbol switch to August 11. FMP FGNX supplies the 362 preceding sessions omitted by FGF. Preserve FGF identity, separate nominal prices, and complete-history validation.",
+    "sources": ["https://www.sec.gov/Archives/edgar/data/1591890/000164117225023074/ex99-1.htm"]
+  },
+  {
+    "id": "myte_luxe_provider_announcement_window",
+    "security_id": "sec_dd5d882edcba5425b19180737365fec5",
+    "historical_ticker": "MYTE", "query_ticker": "LUXE",
+    "start": "2025-04-21", "end": "2025-04-30", "next_alias_start": "2025-05-01",
+    "reason": "SEC annual filing confirms May 1 trading-symbol change. FMP LUXE supplies the eight sessions after the April 21 announcement omitted by MYTE. Retain MYTE historical identity and authenticate the complete security.",
+    "sources": ["https://www.sec.gov/Archives/edgar/data/1831907/000110465925104454/luxe-20250630x20f.htm"]
+  },
+  {
+    "id": "jwa_wly_class_a_provider_alias",
+    "security_id": "sec_f90ad99be9ca54cea25ed4095f7de16d",
+    "historical_ticker": "JW-A", "query_ticker": "WLY",
+    "start": "2019-01-02", "end": "2022-03-31", "next_alias_start": "2022-04-01",
+    "reason": "SEC annual filing establishes Wiley Class A identity, not the exact transition date. The issuer's March 15 announcement and OCC memo 50195 independently establish the April 1 2022 JW-A to WLY boundary and unchanged Class A CUSIP. FMP WLY supplies 819 sessions where JW-A is empty. Retain JW-A identity and do not use Class B/WLYB. Entire-security authentication is mandatory.",
+    "sources": ["https://www.sec.gov/Archives/edgar/data/107140/000010714023000092/jwa-20230430.htm"],
+    "boundary_sources": [
+      "https://newsroom.wiley.com/press-releases/press-release-details/2022/Wiley-Announces-NYSE-Ticker-Symbol-Change-to-WLY-and-WLYB/default.aspx",
+      "https://infomemo.theocc.com/infomemos?number=50195"
+    ]
+  },
+  {
+    "id": "ptsi_pamt_provider_redomestication_window",
+    "security_id": "sec_f9e080c61eed561e9954539b5d4d9104",
+    "historical_ticker": "PTSI", "query_ticker": "PAMT",
+    "start": "2024-11-08", "end": "2024-11-11", "next_alias_start": "2024-11-12",
+    "reason": "SEC exhibit distinguishes November 7 redomestication from November 12 trading change and confirms one-for-one share continuity. PAMT supplies the two missing November 8 and 11 sessions. Retain PTSI and validate the complete history.",
+    "sources": ["https://www.sec.gov/Archives/edgar/data/798287/000168316824007944/pam_ex9901.htm"]
+  }
+]

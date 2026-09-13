@@ -1,0 +1,563 @@
+{
+  "schema_version": 1,
+  "role": "local_and_sg_evidence_inventory_not_acceptance",
+  "production_publication": false,
+  "cup_delivery_enabled": false,
+  "files": [
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/a502b09eb7264b078a1e481aa501bf88.json",
+      "bytes": 33112,
+      "sha256": "8c386c94f6e42ee94bd5c4378b8c838a80bef5efdb83299c5e42b7b55149cdb0"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/BBBY_alias_window.parquet",
+      "bytes": 26035,
+      "sha256": "02c8cce7e7067f1f3c89036afb27a57662f6b37031136951198615fa60b14a94"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/BBBY_formal_alias.parquet",
+      "bytes": 15672,
+      "sha256": "8c158e59989c0a2dd9a7eb39d4dd934b1cc41e24c03640da9f71bfbce39150d9"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/BCIC_alias_boundary.parquet",
+      "bytes": 7155,
+      "sha256": "b4ee96900e7b595e47b77a2fb8c7a9da1317f774e1923d7f58b6b867a0d6288a"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/candidate_policy_validation.json",
+      "bytes": 2729,
+      "sha256": "4e9ff9dd47d04f0411c026136c982866638abace4e48ab742801e16495ef0f56"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/candidate2_policy_validation.json",
+      "bytes": 3563,
+      "sha256": "01a8bd94fcd1a57d768e78d8bb0bf665b99f32212a09d2c33119304950ab793b"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/candidate3-deployment.json",
+      "bytes": 444,
+      "sha256": "5efe1bc625fd54aa9be682816631bdcae5a634edd16386a548576e3b45783084"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/CHAI_alias_window.parquet",
+      "bytes": 5816,
+      "sha256": "698fe7a50861ae711884a5bd58bb51c9926a98e5f39d66e258d2b2897e59f3eb"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/closeout-final.json",
+      "bytes": 34840,
+      "sha256": "7aa1f02662dc14e764aac9d9079f05eb89f17f20414f7e8a313642c11ea17705"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/failure-inventory-2058.json",
+      "bytes": 30646,
+      "sha256": "43e02922070b6158e7dcbd9894e73e026577ff1dad1fceca2da59b825adcaaf1"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/failure-inventory-2120.json",
+      "bytes": 33680,
+      "sha256": "6efa5a75ce052355dbadf88551eed4ae3afd6faa182b82437b4dd3da5cb80192"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/failure-inventory-2129.json",
+      "bytes": 39389,
+      "sha256": "cf32ec4d30057c648795e082c0f23e4d7cae9120db36e8ae7d6001e0a86cd362"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/failure-inventory-2138.json",
+      "bytes": 65453,
+      "sha256": "c519ccaac9e00f24cebf3e7f9371b919fa44a3955bf0d37a1c276d54fff47d0c"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/failure-inventory-2148.json",
+      "bytes": 73960,
+      "sha256": "5ab8a22db081f98841bcb8c3ebe1a7fbeb4ea2ebe616079ead951b904ce61573"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/failure-inventory-2158.json",
+      "bytes": 77494,
+      "sha256": "ab5888f2f235e3be7f9b3a7cbb6f93aa9e038eb3c1ccebce657d84757dfb2591"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/failure-inventory-2206.json",
+      "bytes": 86790,
+      "sha256": "40ca3b5e8245ab24c848abe7ea40d8f141b2a2fc94b1ad63e3b16ecbd1446ab1"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/failure-inventory-2211.json",
+      "bytes": 89633,
+      "sha256": "6bbafce1f794b04108ae8d3c93954c1d82c71593f57373a14bca273df772ffea"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/failure-inventory-final.json",
+      "bytes": 204654,
+      "sha256": "c0a7317280e63de081e2c5c6debf2a145ad99d4fe5d52c1e2c6fb7ec8c8b9b3b"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/followthrough-20260908/audit.json",
+      "bytes": 7413,
+      "sha256": "ff5ccbb82b4e48f9f7016ec860b90b4d75db164c20312152585eed190c1a641d"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/followthrough-20260908/NKTR_1min_response.json",
+      "bytes": 54429,
+      "sha256": "3023318e374810ab9d36e86643e73935d5e8d8195cc880a667d9cf25b25ea70f"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/followthrough-20260908/NKTR_candidate.json",
+      "bytes": 848462,
+      "sha256": "a15606f98c2d2aaf74300a605669b079a1d2e11dc96e92bd427f9b04a67e3341"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/followthrough-20260908/VTS_1min_response.json",
+      "bytes": 50995,
+      "sha256": "9745978677cd2f480d77929fda127ced77a1e2c1003139f1c57dff7b95815de1"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/followthrough-20260908/VTS_candidate.json",
+      "bytes": 848462,
+      "sha256": "a15606f98c2d2aaf74300a605669b079a1d2e11dc96e92bd427f9b04a67e3341"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/full_history_repair_rules.candidate3.validation.json",
+      "bytes": 24258,
+      "sha256": "fdcca040042f039c92fe26dfe6b23f8c5104c5e83952ec88c38f2d04eaa21fa8"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/full-history-original-policy-final.json",
+      "bytes": 8433263,
+      "sha256": "7cee92f0f7051ed95c2d456926de2ef8fd65f734d3d1298be3db5bcd6f752d3a"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/full-history-revalidation-final.json",
+      "bytes": 13157596,
+      "sha256": "8f65155994b3f813c888745d01840cc4de81af88ef13cda3edc97de36b7e9042"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/GDYN_alias_window.parquet",
+      "bytes": 14677,
+      "sha256": "8f8363376d459342efa82a6bef3c583b7442d27916e73ad7c0ea753d0c027483"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/GXAI_alias_boundary.parquet",
+      "bytes": 6046,
+      "sha256": "a275ca944c77b4b977bd07b90663c2db66612bf09ba187864e9e558064f8ed99"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/HYPD_alias_boundary.parquet",
+      "bytes": 5752,
+      "sha256": "39f09ad5f641c8a5042a00892c0680a212918a8a2c97eca66635a8a3518a067e"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/IMDX_alias_boundary.parquet",
+      "bytes": 5752,
+      "sha256": "1726fb1e7e8b76dab18e9cae9eb264f2b845bc92c981262da207f48e4a48cb8c"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/INEO_alias_boundary.parquet",
+      "bytes": 5752,
+      "sha256": "4c974baf8c90a84217263a6818b90cad69b385578293877f560bf7bd96cc1804"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/later_quarantine_certificate.json",
+      "bytes": 3556,
+      "sha256": "7361a6bf2b93c7fc4d528d53513019c83e658afd3b1f8bbc0a294ce47c1899b4"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/legacy_endpoint_probe.json",
+      "bytes": 550,
+      "sha256": "1102c4ef12447f857494b48135de986ded7eff725f1fb3ee89eef22c3e3d95d9"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/minute-gap-requery.json",
+      "bytes": 139983,
+      "sha256": "9389f26802203ecbab07e79be71a5d6fc62e63bfc3bd07c8d3618bea5afa5a86"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/NXH_formal_alias.parquet",
+      "bytes": 6716,
+      "sha256": "1390f67eaae95e4d8044eada108c0558825a07914ea28ff8cfa29fbdfeae4d9c"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/operations_checkpoint.json",
+      "bytes": 8844,
+      "sha256": "6afabb3aa422f9e898a954fac5092d58ef644d04485862468c7dca8398569328"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/qvcg_source_failure.json",
+      "bytes": 5277,
+      "sha256": "619775be01975e4427cf91f7ded01f25f77fa14af021ff1936b64eac54b66812"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/revalidation-summary.json",
+      "bytes": 23346,
+      "sha256": "a98c7a576dd47dfb83da04bf78d8274a82c0b8a14b5be401268e7c07e2693529"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/september_quarantine_certificate.json",
+      "bytes": 2024,
+      "sha256": "c5bb80877d97a1a0b3347cf4512f5a47846ed29eeca4a2889f304b7549ac6021"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/snyr_quarantine_certificate.json",
+      "bytes": 2983,
+      "sha256": "fc231c7eb59c0cb2642db59936f93c5670d53b096d057801f6c5c75b55b75566"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/LUXE_alias_window.parquet",
+      "bytes": 6184,
+      "sha256": "e9266fbac72dfb109c0a620713a7fd73194dec8f30c930c5fca59ca525dd9188"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/OB_dividend-adjusted.json",
+      "bytes": 2,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/OB_full.json",
+      "bytes": 2,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/OB_non-split-adjusted.json",
+      "bytes": 2,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/PAMT_alias_window.parquet",
+      "bytes": 5816,
+      "sha256": "d581ea0c991cd8743faecfa2daf71011b95dca3959e7a7d0ae69aa1c5e696db7"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/BBBY_alias_window.parquet",
+      "bytes": 26035,
+      "sha256": "02c8cce7e7067f1f3c89036afb27a57662f6b37031136951198615fa60b14a94"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/BBBY_formal_alias.parquet",
+      "bytes": 15672,
+      "sha256": "8c158e59989c0a2dd9a7eb39d4dd934b1cc41e24c03640da9f71bfbce39150d9"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/BCIC_alias_boundary.parquet",
+      "bytes": 7155,
+      "sha256": "b4ee96900e7b595e47b77a2fb8c7a9da1317f774e1923d7f58b6b867a0d6288a"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/BGMS_dividend-adjusted_20260912.json",
+      "bytes": 2,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/BGMS_full_20260912.json",
+      "bytes": 2,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/BGMS_non-split-adjusted_20260912.json",
+      "bytes": 2,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/candidate_policy_validation.json",
+      "bytes": 2729,
+      "sha256": "4e9ff9dd47d04f0411c026136c982866638abace4e48ab742801e16495ef0f56"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/CHAI_alias_window.parquet",
+      "bytes": 5816,
+      "sha256": "698fe7a50861ae711884a5bd58bb51c9926a98e5f39d66e258d2b2897e59f3eb"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/FGNX_alias_window.parquet",
+      "bytes": 19086,
+      "sha256": "2603ba3504a872cfac98ef8d3c45501963b751bbf774a002f15d0941e83b128e"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/GDYN_alias_window.parquet",
+      "bytes": 14677,
+      "sha256": "8f8363376d459342efa82a6bef3c583b7442d27916e73ad7c0ea753d0c027483"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/GXAI_alias_boundary.parquet",
+      "bytes": 6046,
+      "sha256": "a275ca944c77b4b977bd07b90663c2db66612bf09ba187864e9e558064f8ed99"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/HYPD_alias_boundary.parquet",
+      "bytes": 5752,
+      "sha256": "39f09ad5f641c8a5042a00892c0680a212918a8a2c97eca66635a8a3518a067e"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/IMDX_alias_boundary.parquet",
+      "bytes": 5752,
+      "sha256": "1726fb1e7e8b76dab18e9cae9eb264f2b845bc92c981262da207f48e4a48cb8c"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/INEO_alias_boundary.parquet",
+      "bytes": 5752,
+      "sha256": "4c974baf8c90a84217263a6818b90cad69b385578293877f560bf7bd96cc1804"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/later_quarantine_certificate.json",
+      "bytes": 3556,
+      "sha256": "7361a6bf2b93c7fc4d528d53513019c83e658afd3b1f8bbc0a294ce47c1899b4"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/legacy_endpoint_probe.json",
+      "bytes": 550,
+      "sha256": "1102c4ef12447f857494b48135de986ded7eff725f1fb3ee89eef22c3e3d95d9"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/LUXE_alias_window.parquet",
+      "bytes": 6184,
+      "sha256": "e9266fbac72dfb109c0a620713a7fd73194dec8f30c930c5fca59ca525dd9188"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/NXH_formal_alias.parquet",
+      "bytes": 6716,
+      "sha256": "1390f67eaae95e4d8044eada108c0558825a07914ea28ff8cfa29fbdfeae4d9c"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/OB_dividend-adjusted.json",
+      "bytes": 2,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/OB_full.json",
+      "bytes": 2,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/OB_non-split-adjusted.json",
+      "bytes": 2,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/operations_checkpoint.json",
+      "bytes": 8844,
+      "sha256": "6afabb3aa422f9e898a954fac5092d58ef644d04485862468c7dca8398569328"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/qvcg_source_failure.json",
+      "bytes": 5277,
+      "sha256": "619775be01975e4427cf91f7ded01f25f77fa14af021ff1936b64eac54b66812"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/remaining_alias_probe.json",
+      "bytes": 2418,
+      "sha256": "06b9affaaa147be0bca142af4bbd5a6f0e4291f22823e3c285b7166ceb860c63"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/september_quarantine_certificate.json",
+      "bytes": 2024,
+      "sha256": "c5bb80877d97a1a0b3347cf4512f5a47846ed29eeca4a2889f304b7549ac6021"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/SMRT_alias_window.parquet",
+      "bytes": 11861,
+      "sha256": "f330e401d97d4988b5a26cf56be0b8372205f5cc514559b03dcd1b85fcd58182"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/snyr_quarantine_certificate.json",
+      "bytes": 2983,
+      "sha256": "fc231c7eb59c0cb2642db59936f93c5670d53b096d057801f6c5c75b55b75566"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/STEX_dividend-adjusted_20260912.json",
+      "bytes": 2,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/STEX_full_20260912.json",
+      "bytes": 2,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/STEX_non-split-adjusted_20260912.json",
+      "bytes": 2,
+      "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/TEAD_dividend-adjusted.json",
+      "bytes": 2912,
+      "sha256": "b545e880edc13870ca163d619cb18e525a1f3e45adbee4bb92acec1758f4bc66"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/TEAD_full.json",
+      "bytes": 3957,
+      "sha256": "aead079d59b331301833a55911bc3fc90370b7615667a4f3e1044b56334b75a8"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/tead_merger_window.parquet",
+      "bytes": 6721,
+      "sha256": "c9b7847aecc961e1394ae0b3acda2646f5f86de3f872c29a2664e7a0a6dc0f04"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/TEAD_non-split-adjusted.json",
+      "bytes": 2912,
+      "sha256": "b545e880edc13870ca163d619cb18e525a1f3e45adbee4bb92acec1758f4bc66"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/TONX_alias_window.parquet",
+      "bytes": 15060,
+      "sha256": "5a841506da7e96179b98104ca56ae13d38611cbcc67707fadd49e2dec6a83666"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/upstream_preflight.json",
+      "bytes": 508,
+      "sha256": "b941de4e9048c7d377ae360bdf52804a2bd28838827f02a344ea3c87d1ddf834"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/VRXA_alias_window.parquet",
+      "bytes": 5816,
+      "sha256": "85521a7ecf3b835bc8752e59aced823d89697642d9685c375770fec3329d8651"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/watr_quarantine_discovery.json",
+      "bytes": 6801,
+      "sha256": "4d225916247ef9fd97c6e93f341c15c10af69b6bb0fda3a4ca221f92053595f3"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_alias_20260912/XWIN_alias_boundary.parquet",
+      "bytes": 5816,
+      "sha256": "8558f280e7de900ae5c2aa51dd2752b950c518831cc51e182f2bcec5b4ca779e"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/TEAD_dividend-adjusted.json",
+      "bytes": 2912,
+      "sha256": "b545e880edc13870ca163d619cb18e525a1f3e45adbee4bb92acec1758f4bc66"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/TEAD_full.json",
+      "bytes": 3957,
+      "sha256": "aead079d59b331301833a55911bc3fc90370b7615667a4f3e1044b56334b75a8"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/tead_merger_window.parquet",
+      "bytes": 6721,
+      "sha256": "c9b7847aecc961e1394ae0b3acda2646f5f86de3f872c29a2664e7a0a6dc0f04"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/TEAD_non-split-adjusted.json",
+      "bytes": 2912,
+      "sha256": "b545e880edc13870ca163d619cb18e525a1f3e45adbee4bb92acec1758f4bc66"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/tead-alias-evidence/WLY_alias_window.parquet",
+      "bytes": 42913,
+      "sha256": "3731e970d9554e23aea627d23fae0053d4e0bb7aac79f38d32444525e100f7ba"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/TONX_alias_window.parquet",
+      "bytes": 15060,
+      "sha256": "5a841506da7e96179b98104ca56ae13d38611cbcc67707fadd49e2dec6a83666"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/upstream_preflight.json",
+      "bytes": 508,
+      "sha256": "b941de4e9048c7d377ae360bdf52804a2bd28838827f02a344ea3c87d1ddf834"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/VRXA_alias_window.parquet",
+      "bytes": 5816,
+      "sha256": "85521a7ecf3b835bc8752e59aced823d89697642d9685c375770fec3329d8651"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/watr_quarantine_discovery.json",
+      "bytes": 6801,
+      "sha256": "4d225916247ef9fd97c6e93f341c15c10af69b6bb0fda3a4ca221f92053595f3"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-controlled-recovery/XWIN_alias_boundary.parquet",
+      "bytes": 5816,
+      "sha256": "8558f280e7de900ae5c2aa51dd2752b950c518831cc51e182f2bcec5b4ca779e"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-revision-authentication/audit-summary.json",
+      "bytes": 12504,
+      "sha256": "e7d4dcd734e055408e575654262c8e3a24fe9bfa2cdcf6725366551b653d8566"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-revision-authentication/deployment.json",
+      "bytes": 503,
+      "sha256": "d6e93ff5a37ab68c8cce30d8ae38714e883d1d66e6e38639dddffa511d135991"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-revision-authentication/docs-sync.json",
+      "bytes": 573,
+      "sha256": "1bad5093566d564b83302d3108b21eff4beb58cceaa6cc4b8ee31b95042f01d1"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-revision-authentication/mdb-replay.json",
+      "bytes": 580,
+      "sha256": "e1eadaae48cf8ace34f8858b8c19a9bd506ddca9f35bfd9371062f9a6756b700"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-revision-authentication/operations-snapshot.json",
+      "bytes": 5954,
+      "sha256": "2b02fd9b137656105a20532986deec1a66732c6894962d825af07de8a0aaa889"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-revision-authentication/pit-signals-and-resources.json",
+      "bytes": 4875,
+      "sha256": "b19d9669af7f8518ed532266aa223764f6eb5c520c02c7a7daf3df2682c9f2a5"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-revision-authentication/shadow-state.json",
+      "bytes": 13658,
+      "sha256": "728e3f3d051e37dec3907634173c7e2e663070d8af4c71656561f72192523e6b"
+    },
+    {
+      "path": "reviews/2026-09-12-coverage-revision-authentication/test-results.json",
+      "bytes": 573,
+      "sha256": "392b09f330085fc4fbd7d1d732c3901c00f5d92715ac3cc2a5d250eeee14a941"
+    },
+    {
+      "path": "reviews/2026-09-12-cup-shadow-investigation/closeout-status.json",
+      "bytes": 4034,
+      "sha256": "f1b9c9d91b6e570ddd156b14dfd15075060159e1f86a6d8f361e34d24c4dcf93"
+    },
+    {
+      "path": "reviews/2026-09-12-cup-shadow-investigation/daily-revision-scope.json",
+      "bytes": 2297,
+      "sha256": "61f48af166b50bc56c457f05cb0c85788cefc29c0d29f64ed5c77dcb7ab95587"
+    },
+    {
+      "path": "reviews/2026-09-12-cup-shadow-investigation/daily-source-samples.json",
+      "bytes": 31427,
+      "sha256": "cb95c5c30c4f4488f65e1f01ae532291bf80e97b42cc4adea40b0008cca678fa"
+    },
+    {
+      "path": "reviews/2026-09-12-cup-shadow-investigation/gate-deployment.json",
+      "bytes": 523,
+      "sha256": "b42bf9aeed39161fb57b69f1099db0d517c828cd82e04eb12e16ac303c76528b"
+    },
+    {
+      "path": "reviews/2026-09-12-cup-shadow-investigation/interval-comparison.json",
+      "bytes": 3613,
+      "sha256": "21e20bd4f257eb99f32f809e5fe94ecade18eaa6df65f440278418ad6da00858"
+    },
+    {
+      "path": "reviews/2026-09-12-cup-shadow-investigation/provider-requery.json",
+      "bytes": 139983,
+      "sha256": "7f89d0d2dd7312a158ebe09ba75b55f57d6f88f13cc65817534379e8baaf0e9e"
+    },
+    {
+      "path": "reviews/2026-09-12-cup-shadow-investigation/requery-summary.json",
+      "bytes": 34291,
+      "sha256": "ee4d220f050786c89104cc146370ae4f94c916503362910c770e96e6d5e69fa3"
+    },
+    {
+      "path": "reviews/2026-09-12-cup-shadow-investigation/runtime-evidence.json",
+      "bytes": 8142,
+      "sha256": "3f1c95be121e90e278c1d68696468a2cfce1d5a12c918a56155c119fa0b649e9"
+    },
+    {
+      "path": "reviews/2026-09-12-cup-shadow-investigation/upstream-recovery.json",
+      "bytes": 9215,
+      "sha256": "549a159ec0a282131440ea6064cb41889b8d7c07b179e119e853376069133680"
+    }
+  ]
+}

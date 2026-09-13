@@ -44,6 +44,7 @@ from src.data.research_history_policy import (
 )
 from src.data.universe_ids import US_EQUITY_COVERAGE
 from src.utils.file_lock import file_lock
+from src.data.security_availability import validate_availability, availability_from_manifest, unavailable_ids
 
 
 PARTITION_INDEX_SCHEMA_VERSION = 1
@@ -754,8 +755,11 @@ class BroadCoverageStore:
         security_universe: pd.DataFrame,
         target_session: pd.Timestamp,
         min_target_coverage: float,
+        security_availability: dict | None = None,
     ) -> tuple[list[QualityCheck], dict[str, Any]]:
         import duckdb
+
+        isolated_ids = validate_availability(security_availability, security_universe, target_session=target_session)
 
         path_values = [str(path) for path in paths]
         validation_temp_root = self.lake_dir / "tmp"
@@ -861,6 +865,10 @@ class BroadCoverageStore:
         exited_ids = set(exited["security_id"].astype(str))
         exited_missing = sorted(exited_ids - bar_ids)
         selected_ids = set(security_universe["security_id"].astype(str))
+        benchmark_mask = security_universe["ticker"].astype(str).str.upper().isin({"SPY", "QQQ", "IWM"})
+        if "coverage_role" in security_universe:
+            benchmark_mask |= security_universe.coverage_role.astype(str).str.startswith("BENCHMARK")
+        benchmark_ids = set(security_universe.loc[benchmark_mask, "security_id"].astype(str)) & current_ids
         unexpected_ids = sorted(bar_ids - selected_ids)
         stats = {
             "row_count": int(row[0]),
@@ -883,6 +891,11 @@ class BroadCoverageStore:
             "unexpected_security_sample": unexpected_ids[:20],
             "validation_memory_limit_mb": 420,
             "validation_temp_directory_max_gb": 12,
+            "availability_status": "DEGRADED" if isolated_ids else "READY",
+            "expected_security_count": len(selected_ids),
+            "isolated_security_count": len(isolated_ids),
+            "isolated_security_ratio": len(isolated_ids) / len(selected_ids) if selected_ids else 0.0,
+            "isolated_security_ids": sorted(isolated_ids),
         }
         checks = [
             QualityCheck(
@@ -934,7 +947,7 @@ class BroadCoverageStore:
             ),
             QualityCheck(
                 "historical_exit_bar_presence",
-                not exited_missing,
+                not (set(exited_missing) - isolated_ids),
                 {"exit_count": len(exited_ids), "missing_sample": exited_missing[:20]},
                 {"missing": 0},
                 "every selected historical exit has at least one bar",
@@ -950,6 +963,14 @@ class BroadCoverageStore:
                 "coverage bars contain only identities in the selected universe",
             ),
         ]
+        checks.append(QualityCheck(
+            "isolated_security_bar_absence", not (isolated_ids & bar_ids),
+            sorted(isolated_ids & bar_ids), [], "isolated securities have no usable rows in this version",
+        ))
+        checks.append(QualityCheck(
+            "required_benchmark_target_presence", not (benchmark_ids - target_ids),
+            sorted(benchmark_ids - target_ids), [], "required benchmarks must have real target-session bars",
+        ))
         return checks, stats
 
     def publish_partitions(
@@ -1019,10 +1040,20 @@ class BroadCoverageStore:
                     "incremental broad-coverage semantic parent is not a "
                     "published immutable version"
                 )
-            MarketDataReader(catalog=self.catalog).verify_version(
+            parent_manifest = MarketDataReader(catalog=self.catalog).verify_version(
                 parent,
                 require_price_semantics=True,
             )
+            prior_availability = availability_from_manifest(parent_manifest)
+            current_availability = availability_from_manifest({"quality_lineage": quality_lineage})
+            if prior_availability is not None:
+                if current_availability is None:
+                    raise DataFoundationError("incremental publication cannot discard availability contract")
+                removed = unavailable_ids(prior_availability) - unavailable_ids(current_availability)
+                proofs = ((quality_lineage or {}).get("full_security_history_repair") or {}).get("securities", [])
+                certified = {p["security_id"] for p in proofs if p.get("missing_dates") == 0}
+                if not removed <= (set(current_availability.get("restored_security_ids", [])) & certified):
+                    raise DataFoundationError("isolation removal requires explicit whole-history certification")
             if pd.Timestamp(parent.target_session).normalize() > target:
                 raise DataFoundationError(
                     "incremental broad-coverage target predates its semantic parent"
@@ -1032,6 +1063,7 @@ class BroadCoverageStore:
             security_universe=security_universe,
             target_session=target,
             min_target_coverage=min_target_coverage,
+            security_availability=availability_from_manifest({"quality_lineage": quality_lineage}),
         )
         checks.extend(list(external_checks))
         failed = [check for check in checks if not check.passed]
@@ -1260,6 +1292,7 @@ class BroadCoverageStore:
                 "price_semantics": semantic_contract,
                 "price_semantics_parent_version_id": semantics_parent,
                 "status": "PUBLISHED",
+                "availability_status": stats["availability_status"],
                 "target_session": target.date().isoformat(),
                 "created_at": created_at.isoformat(),
                 "bars_storage_type": PARTITION_STORAGE_TYPE,

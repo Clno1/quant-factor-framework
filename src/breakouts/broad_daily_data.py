@@ -19,6 +19,7 @@ from src.data.broad_coverage import BroadCoverageReader
 from src.data.foundation import DataFoundationError, DatasetVersion, MarketDataReader
 from src.data.membership_state import resolve_membership_asof
 from src.data.security_master_store import SecurityMasterStore
+from src.data.security_availability import availability_from_manifest, unavailable_ids, verify_consumer_availability
 from src.data.universe_ids import US_EQUITY_COVERAGE, US_LIQUID_5M
 from src.data.universe_publication import DerivedUniverseStore, DerivedUniverseVersion
 from src.utils.market_calendar import (
@@ -90,6 +91,7 @@ def _current_metadata(
     *,
     reader: MarketDataReader,
     parent: DatasetVersion,
+    parent_manifest: dict[str, Any],
     universe_version: DerivedUniverseVersion,
     asof: pd.Timestamp,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -99,6 +101,9 @@ def _current_metadata(
         version_id=universe_version.universe_version_id,
     )
     current = resolve_membership_asof(membership, asof)
+    isolated_ids = unavailable_ids(availability_from_manifest(parent_manifest))
+    if current.security_id.astype(str).isin(isolated_ids).any():
+        raise DataFoundationError("isolated upstream security cannot enter breakout candidates")
     if current.empty:
         raise DataFoundationError(
             f"[{US_LIQUID_5M}] no active PIT members at {asof.date()}"
@@ -140,7 +145,16 @@ def _current_metadata(
         CONFIG.abs_path(str(CONFIG.data.foundation.catalog_path)),
         CONFIG.abs_path(str(security_settings.snapshot_dir)),
     )
-    generation, frames = security_store.load_published()
+    bound_id = universe_version.security_master_generation_id
+    bound_hash = universe_version.security_master_manifest_sha256
+    if (
+        not bound_id or not bound_hash
+        or parent_manifest.get("security_master_generation_id") != bound_id
+        or parent_manifest.get("security_master_manifest_sha256") != bound_hash
+    ):
+        raise DataFoundationError(f"[{US_LIQUID_5M}] coverage and PIT Security Master bindings differ")
+    # A newer master must not invalidate an intact older coverage/PIT bundle.
+    generation, frames = security_store.load_generation(bound_id)
     if (
         generation.generation_id != universe_version.security_master_generation_id
         or generation.manifest_sha256
@@ -149,6 +163,8 @@ def _current_metadata(
         raise DataFoundationError(
             f"[{US_LIQUID_5M}] PIT and Security Master generations differ"
         )
+    if generation.target_session < asof.date():
+        raise DataFoundationError(f"[{US_LIQUID_5M}] bound Security Master is stale for {asof.date()}")
     classifications = frames["classifications"].copy()
     if not classifications.empty:
         starts = pd.to_datetime(classifications["effective_from"], errors="coerce")
@@ -213,6 +229,7 @@ def _resolve_context(
     metadata, coverage = _current_metadata(
         reader=reader,
         parent=parent,
+        parent_manifest=parent_manifest,
         universe_version=universe_version,
         asof=expected,
     )
@@ -268,6 +285,7 @@ def _contract(
     }
     coverage_payload = coverage.to_dict()
     coverage_payload["derived_universe"] = derived
+    coverage_payload["security_availability"] = availability_from_manifest(parent_manifest)
     supported = {item.name for item in fields(DataContract)}
     values: dict[str, Any] = {
         "schema_version": 3 if "price_semantics" in supported else 2,
@@ -466,12 +484,17 @@ def validate_breakout_daily_data_contract(
     """Authenticate both the parent bars and the exact derived PIT publication."""
     payload = contract.to_dict() if isinstance(contract, DataContract) else dict(contract)
     parent = validate_daily_data_contract(payload)
+    availability = (payload.get("coverage") or {}).get("security_availability")
     derived = (payload.get("coverage") or {}).get("derived_universe")
     if not isinstance(derived, dict):
+        if payload.get("data_universe") == US_EQUITY_COVERAGE:
+            raise DataFoundationError("broad breakout contract requires exact PIT and availability bindings")
         return parent
     if derived.get("universe") != US_LIQUID_5M:
         raise DataFoundationError("breakout derived-universe contract is invalid")
     reader = MarketDataReader()
+    manifest = reader.verify_version(parent)
+    verify_consumer_availability(manifest, {"security_availability": availability})
     store = _universe_store(reader)
     version = store.get(US_LIQUID_5M, str(derived.get("universe_version_id") or ""))
     if version is None:

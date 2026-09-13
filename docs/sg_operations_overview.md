@@ -1469,3 +1469,206 @@ Web昨晚23:43有序重启但盘中进程未重启，本轮未操作服务。可
 候选/盘中timer下次09-14 18:30/21:20。宽基版本仍09-10，因新目标09-11显示STALE，
 今日11:30:19日更尚待执行；不把它归因于昨晚失败，不提前重复启动全量重算。
 详见茶杯柄34、可观测性48、宽基实施30.6。
+
+## 52. 2026-09-12 下午：shadow失败根因与上游分页修复
+
+再次SSH执行正式status并读取四张cup表，09-11完成但FAIL：600候选、70批、2800评估，
+命中0/拒绝2243/等待480/不可评估77/错误0。53/56可评估和3/56缺口仍越过95%/5%门槛；
+周期89.7436%、P95=0.588805ms、最大77根、70批完整合同均通过。前八原因未变，见茶杯柄34。
+最近五个完整XNYS日09-04/08/09/10/11无通过日，0/5、仍需5日，发送false。
+
+16:47逐桶重查：UAN九个及IBTA一个原空桶在1min和5min源中均无记录；WBI两个原空桶
+事后已有native 5min，但1min仅一桶有记录且价格/量口径不同。历史12事件仍全部UNRESOLVED，
+NO_TRADE_CONFIRMED/PROVIDER_GAP_CONFIRMED均0；不能将事后回填当成盘中成功或无成交证明。
+供应商核对草稿和源响应保存于`reviews/2026-09-12-cup-shadow-investigation/`，未对外发送。
+新增非正成交量回归测试，SG隔离验证33项通过，含六种0/-1子场景；本轮未在本地venv执行。
+MDB仍仅v1零信号回放，09-11零信号不等于0%误报，v3后验代理仍待真实证据。
+
+今天共享上游确实发生新故障：11:30及12:06主表因退市历史100页不足失败，12:41达到启动限制。
+在确认下一页有更早真实记录后，将分页预算100改200；2019-01-01历史边界及质量门槛不变。
+SG配置已备份在`outputs/deploy_backups/cup_shadow_20260912_pagination/default.yaml.before`，
+本轮部署只涉及该配置项，不含同时开发的EP代码。受控恢复使用生产锁、MemoryHigh=700M、
+MemoryMax=900M、TasksMax=64、Nice=10，未通过重启分钟monitor掩盖质量问题。
+17:02主表已PASS；行情/PIT最终状态及版本见宽基30.7，恢复不追认任何历史通过日。
+
+候选/盘中timer仍active，下一次09-14 18:30/21:20；盘中04:05正常结束、零重启、峰值440MiB。
+watchdog成功（峰值111.6MiB），Web长驻健康（约42MiB，峰值46MiB），17:02 healthz正常且快照
+56秒内。16:51主机可用内存约783MiB、swap0、磁盘约28GiB可用。运维API目标虽为09-14，
+仍保留09-11完整日失败、v3和0/5，不被SCHEDULED覆盖。达到5/5后也只供人工验收，不自动发送。
+
+17:30恢复终态不是整链成功：主表PASS，但coverage有5295只重叠认证失败，PIT未执行；
+耗时34分28秒，CPU349.723秒、cgroup峰值701.9MiB、swap0，退出1而非OOM/超时。
+正式coverage/PIT仍09-10，17:32隔离检查下周一候选明确stale，未写入生产状态。
+冻结对比发现4680只在匹配范围内仅末日有修订、615只还有更早变化，另12行未匹配；
+三只逐票样本验证了末日源修订，但不能外推整批放行。修复分流建议及版本见宽基30.7终态。
+
+17:30:49另部署cup合同门槛的单行修复：由any改为非空且all，不改旧动量日结。
+新增测试先复现漏检，再在隔离模块及正式部署模块各跑62项回归，全过；生产历史日结未重算。
+新状态模块及备份见茶杯柄35；本轮未部署并行EP修改，未开启发送，v3仍0/5。
+
+17:42收尾：恢复进程已退出并清理其临时/run配置；候选/盘中上次exit0且timer仍启用，
+watchdog17:41:51成功，Web active/running，healthz正常且快照36秒。可用内存1034MiB、
+磁盘28GiB、swap0，Web当前约41.3MiB/峰值51.9MiB。API继续保留09-11 FAIL及0/5。
+
+## 53. 2026-09-12 18:13：只读修订认证已部署，上游仍未发布
+
+SG新增`audit_coverage_revisions.py`及认证模块，历史修复辅助函数仅加默认关闭的cache_only。
+部署前核对原文件SHA，备份在`outputs/deploy_backups/coverage_revision_audit_20260912/`；
+未部署并行EP修改，未重启四个生产服务。SG实际部署模块71项回归全过（9.90秒）。
+
+独立单次审计`quant-coverage-revision-audit-20260912.service`在18:10:13到18:13:06完成，
+退出0，峰值571.5MiB、CPU157.209秒、swap0，受650M/750M内存和900秒时限保护。
+5295只按正式历史身份与冻结源重建为4844末日修订候选/450更早修订/1个CEPS日期覆盖阻断；
+BRBS、UNCY、NKE完整前缀认证通过，但全部publishable=false。AUDITED不代表正式上游恢复。
+正式coverage/PIT仍09-10，下周一候选仍需新正式数据；输入、代码和报告SHA见宽基30.8。
+
+18:11正式status及四张cup表复核仍v3 0/5、delivery=false，09-11 FAIL、12个未决缺口不变。
+候选/盘中上次均exit0、零重启，timer下次09-14 18:30/21:20；盘中峰值440MiB、CPU381.173秒。
+watchdog18:10:47成功，峰值180.2MiB；Webactive/running，当前约41.3MiB、峰值51.9MiB。
+18:13运维站已有认证请求200，healthz正常、快照68秒；未认证401为预期安全行为，不是服务故障。
+API目标09-14仍保留09-11完整日FAIL、算法v3和0/5。具体计数、资源和未解决事项保存在
+`reviews/2026-09-12-coverage-revision-authentication/`，没有增加通过日或自动启用发送。
+
+## 54. 2026-09-12 20:15：受控认证与独立后验审计
+
+新增只准备、分批认证及缓存只读发布控制，SG原文件备份在
+`outputs/deploy_backups/coverage_repair_batches_20260912/`。正式writer和认证模块已部署，
+coverage/PIT/基础数据回归130项通过。缺父身份反例先复现，再收紧批量读取为身份集合完全
+一致；19:51部署更严格模块，已启动的准备进程仍用旧加载代码，后续发布必须重新验证全部缓存。
+
+50只准备试点50/50，208.489秒、峰值701.9MiB、CPU102.033秒、swap0，publication=null。
+全范围`quant-coverage-repair-all-20260912.service`于19:46启动，生产flock保护，MemoryHigh=700M、
+MemoryMax=900M、TasksMax=64、RuntimeMaxSec=14400、Nice=10、worker=2；没有OnSuccess自动发布。
+20:14完成740/5295，738通过、2失败，仍RUNNING。TEAD缺完整源日期、SNYR无效行情不在已审核
+隔离规则内，任一未解均阻断整批发布。完整绑定、代码SHA和最终检查点见宽基30.9及本轮review。
+
+20:12四个服务复核：候选和盘中上次exit0、零重启，timer仍09-14 18:30/21:20；盘中峰值
+440MiB、CPU381.173秒。watchdog成功、峰值108.5MiB；Web active/running、当前41.3MiB、
+峰值51.9MiB，无timer为长驻设计。上次09-10任务失败journal仍保留，不以09-11进程exit0抹掉。
+没有重启这些服务或修改并行EP代码，发送关闭、v3 0/5。全量任务的资源和终态须单独报告，
+进程成功不等于业务数据通过。
+
+独立只读后验审计17项测试通过，09-08两信号为NKTR失败代理、VTS因零成交量未决；不是0%误报。
+20:11 PIT与下周一候选前置验证均明确阻断，未发布PIT/候选、未重算八因子或生产日结。
+
+## 55. 2026-09-12 23:36：全量修复复验终态和服务复核
+
+原全量准备19:46:27至23:08:04完成5295只，5260通过、35失败；耗时3h21m36.450s，
+CPU1489.744s、峰值735870976B、swap0、重启0，exit1为明确数据拒绝，不是OOM或中断。
+受控修复策略23:13:50在生产flock下备份并原子部署，SHA=
+`050371ca4001ad8c6e050fc5db118b055e8728cd704d8348fb8e0b92d6c1057f`。
+备份`outputs/deploy_backups/coverage_repair_batches_20260912/full_history_repair_rules.before_candidate3.yaml`。
+只部署修复规则，未切换coverage/PIT，也未改发送开关。
+
+`quant-coverage-revalidate-all-20260912.service`于23:14:12至23:35:35完成严格全量复验：
+5291/5295通过、4失败，31项原失败已修复。耗时21m23.206s、CPU1056.403s、
+峰值736043008B（701.9MiB）、swap0、重启0，exit1为TEAD/XMAX/BGMS/STEX源或身份证据阻断。
+MemoryHigh700M/MemoryMax900M、TasksMax64、Nice10、worker2，复验RuntimeMax7200s。
+两次任务均已结束，没有后台遗留恢复进程，没有OnSuccess发布或发送。
+
+23:36四服务及timer/journal再次核对：候选上次exit0、CPU2.588s，timer09-14 18:30:25；
+盘中上次exit0、CPU381.173s、峰值440MiB，timer09-14 21:20:04。watchdog本次exit0、
+CPU3.182s、峰值137388032B，timer active；Web active/running、当前44199936B、
+峰值54796288B、7 tasks、重启0，无timer为长驻设计。没有重启上述四服务；历史失败日志仍保留。
+healthz=ok，快照10.2秒新鲜；运维站仍显示09-11 v3 FAIL，而非用09-14 SCHEDULED覆盖。
+
+正式coverage/PIT仍09-10，实际PIT、下周一候选、MDB v3回放均被上游合同阻断。分钟12个唯一
+未决事件另行保留，不因日线修复而自动通过。发送仍false、v3仍0/5；未重算八因子、未改并行EP。
+详细根因及下一步条件见茶杯柄38、宽基30.10，真实服务/日志证据为本轮review的closeout-final.json。
+
+## 56. 2026-09-13 00:09-00:10：原要求剩余项复核
+
+SSH重跑status、读取四张v3表及四服务/timer/journal：仍shadow、发送false、0/5。
+候选和盘中上次exit0，timer下次09-14 18:30:25/21:20:04；inactive是已结束等待定时，
+不是本轮服务故障。盘中CPU381.173s、峰值461377536B；候选CPU2.588s，峰值未提供。
+00:09检查watchdog上次exit0、CPU3.165s、峰值117006336B，timer active且journal随后继续成功；
+Web active/running、当前44277760B、峰值54796288B，无timer为长驻设计；四服务当前NRestarts=0。
+09-10历史启动失败journal仍保留，不能以当前零重启覆盖历史失败。healthz正常、快照42秒。
+
+本轮实际PIT验证仍报coverage未绑定当前主表，09-14候选仍报09-10日线stale，MDB回放仍因
+PIT/主表代际不一致exit1。没有发布数据或重启服务。剩余验收项仅为：正式数据及新候选恢复、
+分钟覆盖质量达标、MDB v3/后验未决证据、五个连续完整合格日，详细对照见茶杯柄39。
+共享宽基正式版本未变，保持宽基30.10原记录；这不是新增任务范围或采购要求。
+
+## 57. 2026-09-13 03:28：隔离修复验证与正式运行边界
+
+本轮补丁位于本地main，SG仅在`/tmp/quant-cup-resilience-20260913-j4aMBx/project`隔离验证，
+未覆盖生产源码、未部署/提交/push、未重启服务。297项回归通过；原始证据持久归档到
+`outputs/data_audits/cup_resilience_20260913/isolated-verification/`，本地副本见
+[本轮审计](../reviews/2026-09-13-cup-resilience/README.md)。未改Cursor板块或并行EP。
+
+指定status及四服务/timer/journal重新核验：候选/盘中均上次exit0，inactive等待定时；两个timer
+active，下次分别09-14 18:30:25/21:20:04。候选CPU2.588秒，峰值未提供；盘中CPU381.173秒，
+峰值461377536B。watchdog在03:28:27采样时start-pre，03:28:30实际成功结束exit0，CPU3.289秒，
+峰值117039104B，timer active；不是启动中断。Web running，当前43687936B、峰值54796288B，
+7 tasks，无timer为长驻设计。四服务NRestarts=0，历史失败journal仍保留。healthz=ok，快照约70秒。
+
+正式四张v3表仍140/5560/2/25且SHA未变，0/5、发送false。API仍DEGRADED/completed_session，
+target09-14但证据为09-11 FAIL。隔离版MDB已成功读取旧正式绑定组合并回放，XMAX整票认证通过；
+这些都未推进正式coverage/PIT日期，09-14候选仍stale。分钟缺口未自动消失，详见茶杯柄40。
+
+## 58. 2026-09-13：逐票降级发布实现与SG隔离验证
+
+本轮仅在SG独立项目验证本地main新补丁，未部署正式源码、未提交/push、未重启服务或推进
+coverage/PIT指针。日更编排已支持PUBLISHED_DEGRADED继续构建精确绑定PIT，整体报告DEGRADED；
+旧NOOP结果也携带隔离状态，不能被误报为全市场SUCCESS。运维适配器读取hash绑定manifest，
+显示隔离数量、完整分母、名单和原因；不覆盖茶杯柄最近完整日失败。
+
+真实冻结行情只读复验：TEAD/BGMS/STEX满足隔离错误分类，3/8026=0.0373785%，零供应商请求，
+四张live表哈希未变，发送false。代码上线后仍须完整受控准备、发布及PIT/候选验证，不能把
+单票探针当作已经恢复正式生产。没有修改Cursor板块轮动、其systemd单元或并行EP文件。
+证据及发布边界见[本轮记录](../reviews/2026-09-13-security-isolation/README.md)。
+最终352项测试通过；SG持久证据为`outputs/data_audits/security_isolation_20260913/evidence.tar.gz`，
+源码与本地26文件SHA一致，不将隔离测试目录冒充正式部署。
+
+## 59. 2026-09-13：逐票隔离受控上线
+
+58节之后，用户已批准并实际部署：原26文件SHA/原版本校验通过，生产202项回归通过；只短暂停止
+并恢复watchdog，重启operations-web，未启动盘中交易任务，未改EP/Cursor板块及其服务。
+SG仍是明确范围的源码覆盖部署，不改全局Git版本标记。本轮无commit/push。
+完整准备5292只通过、三只隔离（3/8026），XMAX1934日期通过。首轮无供应商请求的发布完成
+认证后卡在首月大范围文件查询，已在0/93分区、正式指针未变时SIGTERM受控停止；systemd包装器
+exit0不代表发布成功，保留原检查点和明确中断记录。修复为25文件一批的有界装载，真实7868781
+行验证及首月逐列匹配通过，61项隔离测试/8项生产测试通过后仅追加部署writer与测试文件。
+正式发布重试使用原范围hash、生产锁、100% CPU。实际装载工作集触发700MiB软限额回收，
+仅临时任务的MemoryHigh调整到800再850MiB，MemoryMax900MiB不变，未修改正式服务单元。
+12:30:51 SGT发布成功：coverage `a5ea8408daa04e4da15735d6790154c5`，target09-11、93分区、
+10514109行，目标覆盖5713/5742=99.494949%，全部质量检查通过，状态PUBLISHED_DEGRADED。
+成功运行1860.115秒，进程RSS峰值884.398MiB；旧停止尝试未冒充成功，无新供应商请求。
+12:33:47精确绑定PIT `5c6090a2d5464a429af75147cfd3d992` 发布，完整历史门禁通过，当前2846成员；
+112.217秒、RSS峰值787.391MiB。12:39:56已保存09-14候选，精确日线2844/2846，v3合格1240/选入600。
+验证程序曾因多保留整张资格审计而受控停止，改为整文件hash认证后按隔离ID读取；最终验证在
+正式候选620/700MiB软/硬限额下60.409秒完成，三只隔离不入成员/候选、276条隔离资格false，历史四表未变。
+
+最终候选/盘中服务inactive、上次exit0，两timer enabled/active，下一次09-14 18:30:25/21:20:04。
+候选CPU2.588秒、峰值不可用；盘中CPU381.173秒、峰值461377536B。watchdog手动刷新exit0，
+CPU3.269秒、峰值134148096B，timer正常；Web running、7 tasks、当前42962944B/峰值55377920B。
+四服务NRestarts=0，Web无timer属设计。运维候选SUCCESS，盘中仍保留09-11 FAIL/completed_session及v3，
+0/5、发送false。宽基总任务旧FAILED和研究门禁BLOCKED保留，本轮未运行八因子或伪造全链成功。
+正式日线至候选依赖已恢复，分钟质量仍需独立解决，至少五个未来连续合格完整日后仅报人工验收。证据见
+[受控上线记录](../reviews/2026-09-13-security-isolation/ROLLOUT.md)。
+
+## 60. 2026-09-13：分钟源隔离取证
+
+13:37至13:40 SGT执行29次有界历史HTTP请求，11项隔离测试通过；诊断脚本仅在/tmp运行，
+证据写outputs/data_audits/cup_minute_mechanism/20260913，未改生产行情、源码、服务或timer。
+24次stable单日/多日/重复请求均HTTP200，09-11逐值一致且解析零丢行；4次09-08单日请求证明
+宽范围一分钟响应会省略仍可单日取回的历史。legacy首次请求403立即停止后续尝试。
+完整正量桶仍有跨间隔OHLCV差异：IBTA8/8、WBI33/40、SPY29/78；测试时间偏移不能消除差异。
+分日历史加载可恢复被省略日期，但本次不能修复09-11的12个live缺口。未切换native 5min或降门槛。
+最终只读核验四表与27份部署源码hash不变，v3仍0/5、发送false；候选SUCCESS，盘中保持09-11
+FAIL/completed_session。coverage/PIT仍为59节版本，无新的共享宽基发布。
+证据与限制见[分钟机制取证](../reviews/2026-09-13-cup-resilience/MINUTE_MECHANISM.md)。
+
+## 61. 2026-09-13：独立分钟同期采样定时器上线
+
+新增quant-cup-minute-witness@live/@recheck.service及两只witness timer，不修改或重启现网服务。
+下一触发分别09-14 21:29:45、09-15 20:00 SGT；日期限定、Persistent=false、Restart=no，避免历史追补。
+live覆盖09-14真实常规时段并复查至09-15 05:00；四只股票双间隔共计划2552次请求、硬限2600次。
+ProtectSystem=strict，只能写outputs/data_audits/cup_minute_live/2026-09-14；CPU20%、MemoryHigh192MiB、
+MemoryMax256MiB、TasksMax8、低CPU/I/O优先级。主机可用内存低于300MiB时主动跳过旁路轮次。
+15项测试通过，历史8请求沙箱冒烟17.901秒/CPU572ms通过，不作为实时结果；37份部署证据已归档。
+最终核验两个timer enabled/active，两个服务尚未运行，无实时requests，原27份runtime源码及四表hash不变，
+发送false、v3 0/5。Codex单heartbeat在09-15 05:15和20:15检查结果；采样本身由SG定时器执行。
+共享coverage/PIT未变，本节不表示分钟缺口已修好。详见
+[同期取证计划](../reviews/2026-09-13-cup-resilience/LIVE_WITNESS.md)。

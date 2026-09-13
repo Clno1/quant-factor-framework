@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -22,10 +23,82 @@ from src.data.broad_coverage import (
 from src.data.foundation import DataFoundationError, _rebase_parent_to_fetched_scale
 from src.data.semantic_recovery import is_recoverable_semantic_drift
 from src.utils.io import atomic_save_json
+from src.operations.evidence import safe_text
+from src.data.security_availability import MissingAuthenticatedHistory, REASON
 
 
 REPAIR_METHOD = "FULL_SECURITY_CANONICAL_REPLACEMENT_V2"
 VALUE_COLUMNS = ["open", "high", "low", "close", "adj_close", "volume", "unadjusted_close"]
+
+
+def collect_replacements(*, failures, load_previous, replace_security, report_path,
+                         contract, workers=1, offset=0, limit=None, batch_size=25,
+                         progress=None):
+    """Bound parent reads and provider concurrency; a batch is never a full PASS."""
+    if workers not in (1, 2) or not 1 <= batch_size <= 50 or offset < 0:
+        raise ValueError("invalid bounded history repair settings")
+    if limit is not None and limit < 1:
+        raise ValueError("repair limit must be positive")
+    ids = [str(item["security_id"]) for item in failures]
+    if len(ids) != len(set(ids)) or (ids and offset >= len(ids)):
+        raise DataFoundationError("duplicate repair identities or out-of-range offset")
+    selected = failures[offset:] if limit is None else failures[offset:offset + limit]
+    complete_scope = len(selected) == len(failures)
+    report = {"method": REPAIR_METHOD, "contract": contract, "total": len(failures),
+              "offset": offset, "selected_count": len(selected), "complete_scope": complete_scope,
+              "workers": workers, "read_batch_size": batch_size, "completed": 0,
+              "status": "RUNNING", "validated": [], "errors": []}
+    paths = []
+    atomic_save_json(report, report_path)
+
+    def process(item, previous):
+        sid = str(item["security_id"])
+        try:
+            path, proof = replace_security(sid, previous)
+            return path, {"security_id": sid, "ticker": item["ticker"], **proof}, None
+        except Exception as exc:
+            error = {"security_id": sid, "ticker": item["ticker"],
+                     "error": safe_text(str(exc), limit=3000)}
+            if isinstance(exc, MissingAuthenticatedHistory) and exc.security_id == sid and exc.evidence:
+                error.update(error_code=REASON, missing_dates=exc.missing_dates, isolation_evidence=exc.evidence)
+            return None, None, error
+
+    try:
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            for start in range(0, len(selected), batch_size):
+                batch = selected[start:start + batch_size]
+                batch_ids = [str(item["security_id"]) for item in batch]
+                previous = load_previous(batch_ids)
+                if set(previous.security_id.astype(str)) != set(batch_ids):
+                    raise DataFoundationError("parent read identity coverage mismatch: missing or foreign identities")
+                groups = previous.groupby("security_id", sort=False).indices
+                futures = [executor.submit(
+                    process, item, previous.iloc[groups.get(str(item["security_id"]), [])].copy(),
+                ) for item in batch]
+                for item, future in zip(batch, futures):
+                    path, proof, error = future.result()
+                    if error is not None:
+                        report["errors"].append(error)
+                    else:
+                        paths.append(path)
+                        report["validated"].append(proof)
+                    report["completed"] += 1
+                    report["updated_at"] = datetime.now(timezone.utc).isoformat()
+                    if error is not None or report["completed"] % 10 == 0:
+                        atomic_save_json(report, report_path)
+                    if progress:
+                        progress(report["completed"], len(selected), item["ticker"],
+                                 len(report["validated"]), len(report["errors"]))
+                del previous, groups, futures
+        report["status"] = ("FAIL" if report["errors"] else
+                            "VALIDATED" if complete_scope else "PREPARED_BATCH")
+    except Exception as exc:
+        report.update(status="FAIL", interruption=safe_text(str(exc), limit=3000))
+        atomic_save_json(report, report_path)
+        raise
+    report["completed_at"] = datetime.now(timezone.utc).isoformat()
+    atomic_save_json(report, report_path)
+    return paths, report
 
 
 def file_sha256(path: Path) -> str:
@@ -152,7 +225,7 @@ def audit_overlap(previous: pd.DataFrame, fresh: pd.DataFrame, parent_ids: set[s
     return audit, failures
 
 
-def validate_replacement(frame, *, security_id, previous, recent, aliases, target):
+def validate_replacement(frame, *, security_id, previous, recent, aliases, target, extra_required_dates=()):
     """Reject truncated/invalid histories; no repair-specific quality exemptions."""
     if frame.empty or set(frame["security_id"].astype(str)) != {security_id}:
         raise DataFoundationError(f"{security_id}: empty or foreign replacement identity")
@@ -171,12 +244,10 @@ def validate_replacement(frame, *, security_id, previous, recent, aliases, targe
     if not allowed.all():
         raise DataFoundationError(f"{security_id}: replacement violates approved alias intervals")
     required = set(pd.to_datetime(previous["date"])) | set(pd.to_datetime(recent["date"]))
+    required |= set(pd.to_datetime(list(extra_required_dates)))
     missing = sorted(required - set(dates))
     if missing:
-        raise DataFoundationError(
-            f"{security_id}: full replacement loses {len(missing)} authenticated dates: "
-            f"{[str(d.date()) for d in missing[:20]]}"
-        )
+        raise MissingAuthenticatedHistory(security_id, missing)
     # Conflicting endpoints are retained as evidence, not silently rounded.
     matched = recent.merge(frame, on=["date", "security_id"], suffixes=("_bulk", "_full"))
     conflicts = {}
@@ -225,7 +296,7 @@ def fetch_replacement(*, cache_dir, contract, security_id, universe, symbols,
                       previous, recent, history_start, target, fetcher,
                       query_mappings=(), approved_quarantine=None, rules_contract=None,
                       selection_scope="ENTIRE_SECURITY_HISTORY_INCLUDING_OVERLAP_AND_NEW_SESSIONS",
-                      reuse_frozen_inputs=False):
+                      reuse_frozen_inputs=False, cache_only=False, extra_required_dates=()):
     """Freeze one complete history; only a hash-bound verified success is reusable."""
     selected = universe.loc[universe.security_id.astype(str).eq(security_id)]
     if len(selected) != 1 or not symbols.security_id.astype(str).eq(security_id).any():
@@ -240,10 +311,18 @@ def fetch_replacement(*, cache_dir, contract, security_id, universe, symbols,
                "query_mappings": [r for r in query_mappings if r["security_id"] == security_id],
                "history_start": str(history_start), "target_session": str(pd.Timestamp(target).date()),
                "aliases": json.loads(aliases.to_json(orient="records", date_format="iso"))}
+    if len(extra_required_dates):
+        binding["extra_required_dates"] = sorted({str(pd.Timestamp(d).date()) for d in extra_required_dates})
     key = hashlib.sha256(json.dumps(binding, sort_keys=True).encode()).hexdigest()
     base = Path(cache_dir) / "full_security_repair" / security_id / key
-    base.mkdir(parents=True, exist_ok=True)
     manifest_path = base / "manifest.json"
+    cached_failure_inputs = None
+    if cache_only and not manifest_path.is_file():
+        cached_failure_inputs = _frozen_raw_inputs(base, binding, segments)
+        if not cached_failure_inputs[0]:
+            raise DataFoundationError(f"{security_id}: authenticated replacement cache is missing")
+    if not cache_only or cached_failure_inputs is not None:
+        base.mkdir(parents=True, exist_ok=True)
     if manifest_path.exists():
         manifest = json.loads(manifest_path.read_text())
         path = base / manifest["artifact"]
@@ -259,7 +338,7 @@ def fetch_replacement(*, cache_dir, contract, security_id, universe, symbols,
         _, bad = inherit_quarantine(pd.concat([frame, pd.read_parquet(quarantine_path)], ignore_index=True),
                                     approved=approved_quarantine, previous=previous)
         proof = validate_replacement(frame, security_id=security_id, previous=previous,
-                                     recent=recent, aliases=aliases, target=target)
+                                     recent=recent, aliases=aliases, target=target, extra_required_dates=extra_required_dates)
         proof["selection_scope"] = selection_scope
         frozen_proof = manifest.get("proof", {}).get("frozen_source_proof")
         if frozen_proof and file_sha256(Path(frozen_proof["record_path"])) != frozen_proof["record_sha256"]:
@@ -274,7 +353,8 @@ def fetch_replacement(*, cache_dir, contract, security_id, universe, symbols,
     attempt.mkdir()
     pieces, raw_artifacts = [], []
     try:
-        frozen, source_proof = _frozen_raw_inputs(base, binding, segments) if reuse_frozen_inputs else ([], None)
+        frozen, source_proof = (cached_failure_inputs if cached_failure_inputs is not None else
+                               _frozen_raw_inputs(base, binding, segments) if reuse_frozen_inputs else ([], None))
         for i, (historical, query, first, last) in enumerate(segments):
             start, end = str(first.date()), str(last.date())
             raw = pd.read_parquet(frozen[i]) if frozen else fetcher(str(query), start, end)
@@ -305,7 +385,7 @@ def fetch_replacement(*, cache_dir, contract, security_id, universe, symbols,
         quarantine_path = attempt / "quarantine.parquet"
         bad.to_parquet(quarantine_path, index=False)
         proof = validate_replacement(frame, security_id=security_id, previous=previous,
-                                     recent=recent, aliases=aliases, target=target)
+                                     recent=recent, aliases=aliases, target=target, extra_required_dates=extra_required_dates)
         proof["selection_scope"] = selection_scope
         proof["raw_inputs_reused"] = bool(frozen)
         proof["frozen_source_proof"] = source_proof
@@ -323,15 +403,21 @@ def fetch_replacement(*, cache_dir, contract, security_id, universe, symbols,
                       "quarantine_sha256": file_sha256(quarantine_path),
                       "manifest_sha256": file_sha256(manifest_path), "cache_hit": False}
     except Exception as exc:
-        atomic_save_json({"contract": binding, "status": "FAIL", "error": str(exc),
-                          "raw_artifacts": raw_artifacts}, attempt / "failure.json")
+        failure = {"contract": binding, "status": "FAIL", "error": str(exc), "raw_artifacts": raw_artifacts}
+        if isinstance(exc, MissingAuthenticatedHistory):
+            failure.update(error_code=REASON, missing_dates=exc.missing_dates)
+        atomic_save_json(failure, attempt / "failure.json")
+        if isinstance(exc, MissingAuthenticatedHistory):
+            exc.evidence = {"path": str(attempt / "failure.json"),
+                            "sha256": file_sha256(attempt / "failure.json"), "record": failure}
         if isinstance(exc, ValueError):
             raise DataFoundationError(f"{security_id}: full-history provider contract failed: {exc}") from exc
         raise
 
 
 def refresh_canonical_sources(*, mapped, previous_overlap, security_ids, cache_dir,
-                              contract, universe, symbols, refresh_start, target, fetcher):
+                              contract, universe, symbols, refresh_start, target, fetcher,
+                              cache_only=False):
     """Do not put bulk precision back into an authenticated full-source history."""
     frames, proofs = [], []
     for sid in sorted(security_ids):
@@ -353,6 +439,7 @@ def refresh_canonical_sources(*, mapped, previous_overlap, security_ids, cache_d
             previous=old, recent=recent,
             history_start=str(pd.Timestamp(refresh_start).date()), target=target, fetcher=fetcher,
             selection_scope="AUTHENTICATED_RECENT_WINDOW_SAME_CANONICAL_SOURCE",
+            cache_only=cache_only,
         )
         frames.append(pd.read_parquet(path))
         proofs.append({"security_id": sid, **proof})

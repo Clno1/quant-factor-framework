@@ -91,7 +91,7 @@ data:
     profile_parts: [0, 1, 2, 3]
     symbol_change_limit: 10000
     delisted_page_size: 100
-    delisted_max_pages: 100
+    delisted_max_pages: 200
     minimum_active_stocks: 3000
     minimum_name_coverage: 0.99
     minimum_classification_coverage: 0.95
@@ -105,6 +105,8 @@ data:
     shard_size: 100
     max_workers: 2
     min_target_coverage: 0.98
+    security_isolation_max_ratio: 0.001
+    security_isolation_max_count: 10
     # FMP 原始坏行只允许进入公开隔离台账，禁止修价或进入研究数据。
     # 任一比例越界时整次发布继续 fail-closed。
     max_bar_quarantine_ratio: 0.0005

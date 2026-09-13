@@ -1,0 +1,12 @@
+[Unit]
+Description=One-session minute witness, September 14 XNYS
+
+[Timer]
+OnCalendar=2026-09-14 13:29:45 UTC
+AccuracySec=1s
+RandomizedDelaySec=0
+Persistent=false
+Unit=quant-cup-minute-witness@live.service
+
+[Install]
+WantedBy=timers.target

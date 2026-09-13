@@ -1,0 +1,55 @@
+# Review candidate only. Not production policy until full-scope revalidation.
+schema_version: 1
+query_mappings:
+  - id: hson_strr_provider_merger_window
+    security_id: sec_9227ef0c29095fddbf7b0a2e9d60d9e0
+    historical_ticker: HSON
+    query_ticker: STRR
+    start: "2025-08-22"
+    end: "2025-09-04"
+    next_alias_start: "2025-09-05"
+    reason: "Merger closed August 22, but HSON changed its trading symbol to STRR only September 5. FMP stores the intervening nine sessions under STRR. Do not change the historical ticker or remap earlier STRR history."
+    sources:
+      - "https://www.sec.gov/Archives/edgar/data/1210708/000121070825000081/hson-20250902.htm"
+      - "https://www.sec.gov/Archives/edgar/data/1210708/000119312525185799/d931756dex991.htm"
+  - id: sag_ineo_provider_announcement_session
+    security_id: sec_3dbacd49f0ff564ea275b8bc0567ffb5
+    historical_ticker: SAG
+    query_ticker: INEO
+    start: "2025-04-25"
+    end: "2025-04-25"
+    next_alias_start: "2025-04-28"
+    reason: "The issuer announced its name change April 25; the SEC filing specifies the trading-symbol change on April 28. FMP stores April 25 under INEO and SAG ends April 24. Query only this one session under INEO, retaining the formal historical ticker SAG."
+    sources:
+      - "https://www.sec.gov/Archives/edgar/data/1933951/000164117225008113/form6-k.htm"
+      - "https://www.sec.gov/Archives/edgar/data/1933951/000164117225008113/ex99-1.htm"
+  - id: ptmn_bcic_provider_merger_window
+    security_id: sec_58b8e5e5591c5c79b9c513d3313e493e
+    historical_ticker: PTMN
+    query_ticker: BCIC
+    start: "2025-07-15"
+    end: "2025-08-22"
+    next_alias_start: "2025-08-25"
+    reason: "The SEC filing explicitly dates the trading-symbol change to August 25. FMP's PTMN query ends July 14, while its BCIC canonical query supplies the intervening 29 sessions following the July 15 merger. Query only this bounded window under BCIC, preserving PTMN as the historical symbol. Revalidate the entire security and all previously authenticated dates."
+    sources:
+      - "https://www.sec.gov/Archives/edgar/data/1372807/000119312525185297/d937608d8k.htm"
+      - "https://www.sec.gov/Archives/edgar/data/2051820/000162828026001776/mlci-20260112.htm"
+prior_quarantine:
+  version_id: 5ed0bc1f4b104e4f8b85256f15efba45
+  manifest_sha256: 6b791bfc95f8199d4909c114e4aa3cde570f71b980965646dc135cc2826a33ad
+  quarantine_sha256: c5048e83f49dc14c12c2e657a8a54ab4adf22cbd638fe5d3f074e0c5a35d5d21
+  # Exact prior exclusions only. No formerly valid parent date may be removed.
+  rows:
+    - {security_id: sec_3a54d48f107154568ff4b6a5a4ad31f2, ticker: PROP, date: "2019-01-04"}
+    - {security_id: sec_3a54d48f107154568ff4b6a5a4ad31f2, ticker: PROP, date: "2023-10-16"}
+    - {security_id: sec_92f654c0b5f25bd3834cce79b86f244e, ticker: ATCX, date: "2019-11-22"}
+    - {security_id: sec_92f654c0b5f25bd3834cce79b86f244e, ticker: ATCX, date: "2020-04-03"}
+    - {security_id: sec_b4a354ad8d91591dbc72d67186367360, ticker: BGLC, date: "2022-07-26"}
+    - {security_id: sec_b4a354ad8d91591dbc72d67186367360, ticker: BGLC, date: "2023-04-06"}
+    - {security_id: sec_22c51932eec8568eb8923eb61bb2f298, ticker: SNYR, date: "2020-03-11"}
+    - {security_id: sec_22c51932eec8568eb8923eb61bb2f298, ticker: SNYR, date: "2020-04-08"}
+    - {security_id: sec_22c51932eec8568eb8923eb61bb2f298, ticker: SNYR, date: "2021-03-17"}
+    - {security_id: sec_2ec7bd4002f558ff86522f0a0e56148d, ticker: QVCG, date: "2026-08-09"}
+    - {security_id: sec_555aef3066fd59e6899fd6e08f7cbbf2, ticker: PGHL, date: "2024-11-26"}
+    - {security_id: sec_59d2c9c222a45b0ab1a292729fa936c9, ticker: BSEM, date: "2021-08-31"}
+    - {security_id: sec_5b5ddd18325d5749b63a098f17200fa1, ticker: YALA, date: "2023-02-08"}
