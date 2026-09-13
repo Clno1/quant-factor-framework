@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh rotation cap references after the overnight coverage publish
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 05:45:00 America/New_York
+Persistent=true
+AccuracySec=30s
+RandomizedDelaySec=15s
+Unit=quant-group-rotation-reference.service
+
+[Install]
+WantedBy=timers.target

@@ -17,6 +17,23 @@ def _setting(path: Path, name: str) -> str:
 
 
 class SystemdUnitTests(unittest.TestCase):
+    def test_rotation_reference_refresh_is_independent_of_price_and_momentum(self):
+        timer = SYSTEMD_DIR / 'quant-group-rotation-reference.timer'
+        self.assertEqual(_setting(timer, 'OnCalendar'), 'Mon..Fri *-*-* 05:45:00 America/New_York')
+        self.assertEqual(_setting(timer, 'Unit'), 'quant-group-rotation-reference.service')
+        for name in ('quant-group-rotation-reference-root.service', 'quant-group-rotation-reference.service'):
+            service = SYSTEMD_DIR / name
+            text = service.read_text()
+            self.assertIn('refresh_rotation_reference.py', text)
+            self.assertIn('/usr/bin/timeout 120', text)
+            self.assertEqual(_setting(service, 'MemoryMax'), '550M')
+            self.assertEqual(_setting(service, 'Restart'), 'on-failure')
+            self.assertNotIn('run_group_rotation.py', text)
+            self.assertNotIn('OnSuccess=', text)
+            self.assertNotIn('Requires=', text)
+        for name in ('quant-premarket-prepare-root.service', 'quant-premarket-digest-root.service'):
+            self.assertNotIn('quant-group-rotation-reference', (SYSTEMD_DIR / name).read_text())
+
     def test_data_request_rate_limit_allows_every_timer_start(self):
         timer = SYSTEMD_DIR / "quant-data-requests.timer"
         self.assertEqual(_setting(timer, "OnUnitInactiveSec"), "5min")
