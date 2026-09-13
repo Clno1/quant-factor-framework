@@ -1,10 +1,10 @@
 [Unit]
-Description=Associate breakout candidates onto the published rotation price snapshot
+Description=Retry rotation candidate linkage before the premarket digest, independently of payload prepare
 Wants=network-online.target
-After=network-online.target quant-market-data.service quant-us-equity-coverage.service quant-broad-factor-data.service
+After=network-online.target
 OnSuccess=quant-premarket-prepare-sector-rotation.service
-StartLimitIntervalSec=4h
-StartLimitBurst=3
+StartLimitIntervalSec=40min
+StartLimitBurst=2
 
 [Service]
 Type=oneshot
@@ -17,10 +17,10 @@ EnvironmentFile=-/etc/quant/momentum-alerts.env
 Environment=GROUP_ANALYTICS_ENABLED=true
 Environment=GROUP_ANALYTICS_WEB_ENABLED=false
 ExecStartPre=/opt/quant/.venv/bin/python -c "import sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
-ExecStart=/usr/bin/flock --exclusive --wait 10800 /opt/quant/data/lake/.broad-production.lock /opt/quant/.venv/bin/python /opt/quant/scripts/run_group_rotation.py --stage linkage --asof latest
-TimeoutStartSec=3h
+ExecStart=/usr/bin/flock --exclusive --wait 60 /opt/quant/data/lake/.broad-production.lock /opt/quant/.venv/bin/python /opt/quant/scripts/run_group_rotation.py --stage linkage --asof latest
+TimeoutStartSec=15min
 Restart=on-failure
-RestartSec=30min
+RestartSec=10min
 MemoryHigh=400M
 MemoryMax=550M
 MemorySwapMax=0

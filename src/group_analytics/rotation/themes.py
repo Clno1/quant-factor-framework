@@ -77,3 +77,8 @@ def default_themes() -> tuple[Theme, ...]:
 
 def required_symbols(themes):
     return sorted({s for t in themes for s in (*t.members, t.benchmark, *((t.proxy,) if t.proxy else ()))})
+
+
+def proxy_etf_symbols(themes=None):
+    """Registered ETF proxies only; custom baskets have no holdings endpoint."""
+    return tuple(sorted({t.proxy for t in (themes or default_themes()) if t.proxy}))

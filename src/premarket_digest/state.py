@@ -36,6 +36,16 @@ def payload_hash(payload: dict[str, Any]) -> str:
     return "sha256:" + hashlib.sha256(_payload_json(payload).encode("utf-8")).hexdigest()
 
 
+def unsent_replaceable(row: Any) -> bool:
+    status = str(row["status"] if not isinstance(row, dict) else row.get("status") or "")
+    if status == DeliveryState.PENDING.value:
+        return True
+    if status == DeliveryState.FAILED.value:
+        retryable = row["retryable"] if not isinstance(row, dict) else row.get("retryable")
+        return int(retryable or 0) == 1
+    return False
+
+
 @dataclass(frozen=True, slots=True)
 class DeliveryClaim:
     action: str
@@ -128,6 +138,7 @@ class DigestStateStore:
         payload: dict[str, Any],
         *,
         rebuild_failed: bool = False,
+        replace_unsent: bool = False,
     ) -> dict[str, Any]:
         encoded = _payload_json(payload)
         digest = "sha256:" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -182,6 +193,34 @@ class DigestStateStore:
                         target_session,
                         channel.value,
                         DeliveryState.FAILED.value,
+                    ),
+                )
+                row = connection.execute(
+                    "SELECT * FROM deliveries WHERE target_session=? AND channel=?",
+                    (target_session, channel.value),
+                ).fetchone()
+            elif replace_unsent and unsent_replaceable(row) and str(row["payload_hash"]) != digest:
+                previous = str(row["payload_hash"])
+                connection.execute(
+                    """
+                    UPDATE deliveries
+                    SET destination=?, source_session=?, payload_hash=?, payload_json=?,
+                        status=?, message_id=NULL, last_error_code=?, last_error=?,
+                        updated_at=?, sent_at=NULL, retryable=NULL
+                    WHERE target_session=? AND channel=? AND status=?
+                    """,
+                    (
+                        channel.destination,
+                        source_session,
+                        digest,
+                        encoded,
+                        DeliveryState.PENDING.value,
+                        "REPLACED_UNSENT",
+                        previous,
+                        timestamp,
+                        target_session,
+                        channel.value,
+                        str(row["status"]),
                     ),
                 )
                 row = connection.execute(
@@ -429,4 +468,5 @@ __all__ = [
     "DeliveryClaim",
     "DigestStateStore",
     "payload_hash",
+    "unsent_replaceable",
 ]

@@ -1078,17 +1078,34 @@ def _rotation_snapshot(run: str | None):
         store = RotationStore(settings.output_root / "group_analytics" / "rotation")
         snapshot = store.load(run)
         snapshot.pop("input_panel", None)  # Audit input remains local, not a bulk data API.
-        snapshot["last_attempt"] = store.last_attempt() if run is None else None
     except FileNotFoundError:
-        raise HTTPException(status_code=503, detail="尚无轮动快照，请运行 scripts/run_group_rotation.py --refresh") from None
+        raise HTTPException(status_code=503, detail="尚无轮动快照，请运行 scripts/run_group_rotation.py --stage price --refresh") from None
     except (ValueError, KeyError, OSError, TypeError):
         raise HTTPException(status_code=503, detail="轮动快照未通过校验，未使用旧单日榜替代") from None
     try:
         expected = latest_completed_session().date().isoformat()
         snapshot["freshness"] = "current" if snapshot["source_session"] == expected else "historical"
     except Exception:
+        expected = None
         snapshot["freshness"] = "unknown"
+    # Latest-page run health is the current expected session, not the displayed
+    # snapshot date. A stale successful snapshot must still surface today's failure.
+    snapshot["last_attempt"] = (
+        store.last_attempt(source_session=expected) if run is None else None
+    )
     return snapshot
+
+
+@router.get("/api/group-analytics/rotation/heatmap", response_class=JSONResponse)
+def rotation_heatmap(session: str | None = None, run: str | None = None):
+    from src.group_analytics.rotation.heatmap import load_coverage_heatmap
+
+    if run is not None and not re.fullmatch(r"rot_[0-9]{8}_[a-f0-9]{16}", run):
+        raise HTTPException(status_code=422, detail="无效快照编号")
+    if session is not None and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", session):
+        raise HTTPException(status_code=422, detail="无效交易日")
+    payload = load_coverage_heatmap(source_session=session, historical=run is not None)
+    return JSONResponse(payload)
 
 
 @router.get("/api/group-analytics/rotation", response_class=JSONResponse)

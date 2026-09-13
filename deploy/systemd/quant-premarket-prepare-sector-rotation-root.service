@@ -1,9 +1,9 @@
 [Unit]
-Description=Prepare immutable US premarket digest payloads without delivery
+Description=Rebuild unsent sector-rotation digest from the latest rotation snapshot (root deployment)
 Wants=network-online.target
-After=network-online.target quant-us-equity-coverage.service quant-group-analytics-eod.service
-StartLimitIntervalSec=1h
-StartLimitBurst=3
+After=network-online.target
+StartLimitIntervalSec=30min
+StartLimitBurst=4
 
 [Service]
 Type=oneshot
@@ -25,13 +25,13 @@ EnvironmentFile=/etc/quant/premarket-digest.env
 Environment=GROUP_ANALYTICS_ENABLED=true
 Environment=GROUP_ANALYTICS_WEB_ENABLED=false
 ExecStartPre=/home/projects/quant/.venv/bin/python -c "import sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
-ExecStart=/home/projects/quant/.venv/bin/python /home/projects/quant/scripts/run_premarket_digest.py --env-file /etc/quant/premarket-digest.env --prepare --channel all
-TimeoutStartSec=1h
+ExecStart=/home/projects/quant/.venv/bin/python /home/projects/quant/scripts/run_premarket_digest.py --env-file /etc/quant/premarket-digest.env --prepare --channel sector-rotation
+TimeoutStartSec=10min
 Restart=on-failure
-RestartSec=15min
+RestartSec=3min
 UMask=0077
-MemoryHigh=500M
-MemoryMax=700M
+MemoryHigh=400M
+MemoryMax=550M
 MemorySwapMax=0
 CPUQuota=100%
 TasksMax=64

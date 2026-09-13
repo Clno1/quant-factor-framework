@@ -114,6 +114,41 @@ class SystemdUnitTests(unittest.TestCase):
             SYSTEMD_DIR / "quant-premarket-prepare.timer"
         ).read_text(encoding="utf-8")
         self.assertIn("07:00:00 America/New_York", premarket_prepare_timer)
+        sector_prepare_timer = (
+            SYSTEMD_DIR / "quant-premarket-prepare-sector-rotation.timer"
+        ).read_text(encoding="utf-8")
+        self.assertIn("09:00:00 America/New_York", sector_prepare_timer)
+        self.assertIn(
+            "Unit=quant-premarket-prepare-sector-rotation.service",
+            sector_prepare_timer,
+        )
+        group_price_timer = (
+            SYSTEMD_DIR / "quant-group-rotation-price.timer"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "OnCalendar=Mon..Fri *-*-* 17:30:00 America/New_York",
+            group_price_timer,
+        )
+        self.assertIn("Unit=quant-group-rotation-price.service", group_price_timer)
+        holdings_timer = (
+            SYSTEMD_DIR / "quant-group-rotation-holdings.timer"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "OnCalendar=Mon *-*-* 12:00:00 America/New_York",
+            holdings_timer,
+        )
+        self.assertIn("Unit=quant-group-rotation-holdings.service", holdings_timer)
+        linkage_retry_timer = (
+            SYSTEMD_DIR / "quant-group-rotation-linkage-retry.timer"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "OnCalendar=Mon..Fri *-*-* 07:00:00 America/New_York",
+            linkage_retry_timer,
+        )
+        self.assertIn(
+            "Unit=quant-group-rotation-linkage-retry.service",
+            linkage_retry_timer,
+        )
 
     def test_broad_units_form_a_resource_bounded_success_chain(self):
         coverage = (
@@ -217,6 +252,120 @@ class SystemdUnitTests(unittest.TestCase):
             broad_factor,
         )
 
+    def test_rotation_price_and_linkage_units_are_split(self):
+        price = (
+            SYSTEMD_DIR / "quant-group-rotation-price.service"
+        ).read_text(encoding="utf-8")
+        price_root = (
+            SYSTEMD_DIR / "quant-group-rotation-price-root.service"
+        ).read_text(encoding="utf-8")
+        linkage = (
+            SYSTEMD_DIR / "quant-group-analytics-eod.service"
+        ).read_text(encoding="utf-8")
+        prepare = (
+            SYSTEMD_DIR / "quant-premarket-prepare.service"
+        ).read_text(encoding="utf-8")
+        prepare_root = (
+            SYSTEMD_DIR / "quant-premarket-prepare-root.service"
+        ).read_text(encoding="utf-8")
+
+        for content in (price, price_root):
+            self.assertIn("--stage price --refresh --asof latest", content)
+            self.assertIn("MemoryHigh=700M", content)
+            self.assertIn("MemoryMax=900M", content)
+            self.assertIn("EnvironmentFile=-/etc/quant/market-data.env", content)
+            self.assertIn("EnvironmentFile=-/etc/quant/momentum-alerts.env", content)
+            self.assertIn(".broad-production.lock", content)
+            self.assertNotIn("quant-broad-factor-data.service", content)
+        holdings = (
+            SYSTEMD_DIR / "quant-group-rotation-holdings.service"
+        ).read_text(encoding="utf-8")
+        holdings_root = (
+            SYSTEMD_DIR / "quant-group-rotation-holdings-root.service"
+        ).read_text(encoding="utf-8")
+        for content in (holdings, holdings_root):
+            self.assertIn("observe_rotation_holdings.py --all --no-refresh-members", content)
+            self.assertNotIn("--refresh-members", content.replace("--no-refresh-members", ""))
+            self.assertIn("MemoryHigh=700M", content)
+            self.assertIn("MemoryMax=900M", content)
+            self.assertIn("EnvironmentFile=-/etc/quant/market-data.env", content)
+            self.assertIn(".rotation-holdings.lock", content)
+            self.assertNotIn("quant-broad-factor-data.service", content)
+            self.assertNotIn("--stage price", content)
+        self.assertIn("--stage linkage --asof latest", linkage)
+        self.assertNotIn("--refresh", next(
+            line for line in linkage.splitlines() if line.startswith("ExecStart=")
+        ))
+        retry = (
+            SYSTEMD_DIR / "quant-group-rotation-linkage-retry.service"
+        ).read_text(encoding="utf-8")
+        retry_root = (
+            SYSTEMD_DIR / "quant-group-rotation-linkage-retry-root.service"
+        ).read_text(encoding="utf-8")
+        for content in (retry, retry_root):
+            start = next(line for line in content.splitlines() if line.startswith("ExecStart="))
+            self.assertIn("flock --exclusive --wait 60", start)
+            self.assertIn("--stage linkage --asof latest", start)
+            self.assertNotIn("--refresh", start)
+            self.assertIn("TimeoutStartSec=15min", content)
+            self.assertIn("MemoryHigh=400M", content)
+            self.assertIn("MemoryMax=550M", content)
+            self.assertIn("Environment=GROUP_ANALYTICS_ENABLED=true", content)
+            self.assertNotIn("Requires=quant-premarket-prepare.service", content)
+        self.assertIn(
+            "OnSuccess=quant-premarket-prepare-sector-rotation.service",
+            retry,
+        )
+        self.assertIn(
+            "OnSuccess=quant-premarket-prepare-sector-rotation.service",
+            retry_root,
+        )
+        self.assertNotIn(
+            "OnSuccess=quant-premarket-prepare-sector-rotation-root.service",
+            retry_root,
+        )
+        self.assertIn(
+            "OnSuccess=quant-premarket-prepare-sector-rotation.service",
+            linkage,
+        )
+        sector_prepare = (
+            SYSTEMD_DIR / "quant-premarket-prepare-sector-rotation.service"
+        ).read_text(encoding="utf-8")
+        sector_prepare_root = (
+            SYSTEMD_DIR / "quant-premarket-prepare-sector-rotation-root.service"
+        ).read_text(encoding="utf-8")
+        for content in (sector_prepare, sector_prepare_root):
+            self.assertIn("--prepare --channel sector-rotation", content)
+            self.assertNotIn("--channel all", content)
+            self.assertNotIn("--send", content)
+            self.assertIn("TimeoutStartSec=10min", content)
+            self.assertIn("Environment=GROUP_ANALYTICS_ENABLED=true", content)
+        for content in (prepare, prepare_root):
+            self.assertNotIn("--stage linkage", content)
+            self.assertNotIn("run_group_rotation.py", content)
+            self.assertNotIn("quant-group-rotation-linkage-retry.service", content)
+            self.assertNotIn("quant-premarket-prepare-sector-rotation.service", content)
+            self.assertNotIn(
+                "ExecStartPre=-/usr/bin/flock --exclusive --wait 60",
+                content,
+            )
+            self.assertIn("Environment=GROUP_ANALYTICS_ENABLED=true", content)
+            self.assertGreater(
+                content.index("Environment=GROUP_ANALYTICS_ENABLED=true"),
+                content.index("EnvironmentFile=/etc/quant/premarket-digest.env"),
+            )
+            self.assertIn("--prepare --channel all", content)
+        digest = (
+            SYSTEMD_DIR / "quant-premarket-digest.service"
+        ).read_text(encoding="utf-8")
+        digest_root = (
+            SYSTEMD_DIR / "quant-premarket-digest-root.service"
+        ).read_text(encoding="utf-8")
+        for content in (digest, digest_root):
+            self.assertIn("--send --scheduled --channel all", content)
+            self.assertNotIn("quant-premarket-prepare-sector-rotation.service", content)
+            self.assertNotIn("quant-group-rotation-linkage-retry.service", content)
+
     def test_operations_site_is_independent_and_read_only(self):
         web = (
             SYSTEMD_DIR / "quant-operations-web-root.service"
@@ -259,6 +408,38 @@ class SystemdUnitTests(unittest.TestCase):
         for directory in ("data", "outputs", "logs", "runlog"):
             self.assertIn(f"--exclude='/{directory}/'", guide)
             self.assertNotIn(f"--exclude='{directory}/'", guide)
+
+    def test_root_service_dependencies_resolve_after_install_rename(self):
+        installed = {
+            path.name.replace("-root.service", ".service", 1)
+            for path in SYSTEMD_DIR.glob("quant-*-root.service")
+        }
+        self.assertIn("quant-premarket-prepare-sector-rotation.service", installed)
+        self.assertIn("quant-group-rotation-linkage-retry.service", installed)
+        keys = {
+            "After", "Wants", "Requires", "Requisite", "OnSuccess", "OnFailure",
+            "Before", "BindsTo", "PartOf", "Upholds",
+        }
+        for path in SYSTEMD_DIR.glob("quant-*-root.service"):
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                if key not in keys:
+                    continue
+                for unit in value.split():
+                    if not unit.endswith(".service"):
+                        continue
+                    self.assertFalse(
+                        unit.endswith("-root.service"),
+                        f"{path.name} {key} still references template {unit}",
+                    )
+                    self.assertIn(
+                        unit,
+                        installed,
+                        f"{path.name} {key}={unit} is missing after *-root install rename",
+                    )
+
 
 if __name__ == "__main__":
     unittest.main()

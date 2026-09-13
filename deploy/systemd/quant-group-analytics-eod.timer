@@ -1,5 +1,5 @@
 [Unit]
-Description=Build group analytics after each completed US trading session
+Description=Retry rotation candidate linkage after the broad data chain
 
 [Timer]
 OnCalendar=Tue..Sat *-*-* 13:15:00 Asia/Singapore

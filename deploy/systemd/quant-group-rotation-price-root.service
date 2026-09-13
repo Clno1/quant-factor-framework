@@ -1,0 +1,40 @@
+[Unit]
+Description=Build sector/theme rotation prices after the US cash close (root deployment)
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=4h
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/home/projects/quant
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONPATH=/home/projects/quant
+EnvironmentFile=-/etc/quant/market-data.env
+EnvironmentFile=-/etc/quant/momentum-alerts.env
+Environment=GROUP_ANALYTICS_ENABLED=true
+Environment=GROUP_ANALYTICS_WEB_ENABLED=false
+ExecStartPre=/home/projects/quant/.venv/bin/python -c "import sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
+ExecStart=/usr/bin/flock --exclusive --wait 10800 /home/projects/quant/data/lake/.broad-production.lock /home/projects/quant/.venv/bin/python /home/projects/quant/scripts/run_group_rotation.py --stage price --refresh --asof latest
+TimeoutStartSec=3h
+Restart=on-failure
+RestartSec=30min
+MemoryHigh=700M
+MemoryMax=900M
+MemorySwapMax=0
+CPUQuota=100%
+TasksMax=64
+OOMPolicy=stop
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/projects/quant/data /home/projects/quant/outputs /home/projects/quant/logs
+ReadWritePaths=-/home/projects/quant/runlog
+
+[Install]
+WantedBy=multi-user.target
