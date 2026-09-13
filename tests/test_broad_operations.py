@@ -169,7 +169,8 @@ def test_daily_pipeline_stops_after_first_failed_stage(monkeypatch, tmp_path):
     }
 
 
-def test_daily_pipeline_freezes_coverage_version_for_pit(monkeypatch, tmp_path):
+@pytest.mark.parametrize("degraded", [False, True])
+def test_daily_pipeline_freezes_coverage_version_for_pit(monkeypatch, tmp_path, degraded):
     calls: list[list[str]] = []
 
     def fake_run(command, **_kwargs):
@@ -181,6 +182,8 @@ def test_daily_pipeline_freezes_coverage_version_for_pit(monkeypatch, tmp_path):
         }
         if number == 2:
             payload["publication"] = {"version_id": "coverage-v1"}
+            if degraded:
+                payload["security_availability"] = {"status": "DEGRADED"}
         return SimpleNamespace(
             returncode=0,
             stdout="[INFO] stage complete\n" + json.dumps(payload),
@@ -196,13 +199,14 @@ def test_daily_pipeline_freezes_coverage_version_for_pit(monkeypatch, tmp_path):
     ))
 
     assert code == 0
-    assert report["status"] == "SUCCESS"
+    assert report["status"] == ("DEGRADED" if degraded else "SUCCESS")
     assert [stage["name"] for stage in report["stages"]] == [
         "SECURITY_MASTER",
         "US_EQUITY_COVERAGE",
         "US_LIQUID_5M_PIT",
     ]
     assert calls[2][calls[2].index("--dataset-version-id") + 1] == "coverage-v1"
+    assert "--repair-full-history" in calls[1]
 
 
 def test_shadow_ledger_counts_distinct_consecutive_trading_sessions():

@@ -124,6 +124,7 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
                 "--target-session",
                 target,
                 *env_arguments,
+                "--repair-full-history",
                 "--publish",
                 "--json",
             ],
@@ -151,6 +152,8 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
         stages.append(stage)
         if stage["returncode"] != 0:
             break
+        if (result.get("security_availability") or {}).get("status") == "DEGRADED":
+            stage["status"] = "DEGRADED"
         if name == "US_EQUITY_COVERAGE":
             publication = result.get("publication") or {}
             coverage_version_id = (
@@ -179,6 +182,8 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     status = "SUCCESS" if len(stages) == len(commands) and all(
         stage["returncode"] == 0 for stage in stages
     ) else "FAILED"
+    if status == "SUCCESS" and any(stage["status"] == "DEGRADED" for stage in stages):
+        status = "DEGRADED"
     report = {
         "schema_version": 1,
         "run_id": run_id,
@@ -197,7 +202,7 @@ def run(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     report_path.parent.mkdir(parents=True, exist_ok=True)
     atomic_save_json(report, report_path)
     report["report_path"] = str(report_path)
-    return report, 0 if status == "SUCCESS" else 1
+    return report, 0 if status in {"SUCCESS", "DEGRADED"} else 1
 
 
 def main(argv: list[str] | None = None) -> int:

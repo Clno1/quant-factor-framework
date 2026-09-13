@@ -311,7 +311,16 @@ class DerivedUniverseStore:
             )
         if parent_version.status != "PUBLISHED":
             raise DataFoundationError("parent dataset version is not published")
-        self.market_reader.verify_version(parent_version)
+        parent_manifest = self.market_reader.verify_version(parent_version)
+        from src.data.security_availability import availability_from_manifest, unavailable_ids
+        availability = availability_from_manifest(parent_manifest)
+        isolated_ids = unavailable_ids(availability)
+        if isolated_ids and membership.security_id.astype(str).isin(isolated_ids).any():
+            raise DataFoundationError("isolated security cannot enter PIT membership")
+        if isolated_ids and eligibility.loc[eligibility.security_id.astype(str).isin(isolated_ids), "eligible"].any():
+            raise DataFoundationError("isolated security cannot have positive PIT eligibility")
+        if isolated_ids and not isolated_ids <= set(eligibility.security_id.astype(str)):
+            raise DataFoundationError("PIT eligibility audit cannot omit isolated securities")
         target_session = parent_version.target_session
         normalized_membership = _normalize_membership(
             membership,
@@ -350,6 +359,7 @@ class DerivedUniverseStore:
             manifest = {
                 "schema_version": DERIVED_UNIVERSE_SCHEMA_VERSION,
                 "publication_type": "DERIVED_UNIVERSE",
+                "security_availability": availability,
                 "universe_version_id": version_id,
                 "universe": universe,
                 "parent_dataset_version_id": parent_version.version_id,
@@ -551,6 +561,9 @@ class DerivedUniverseStore:
             raise DataFoundationError(
                 f"[{version.universe}] parent dataset manifest hash mismatch"
             )
+        from src.data.security_availability import verify_consumer_availability
+        parent_manifest = self.market_reader.verify_version(parent, verify_partition_children=verify_parent_partition_children)
+        verify_consumer_availability(parent_manifest, manifest)
         return manifest
 
     def require_latest(

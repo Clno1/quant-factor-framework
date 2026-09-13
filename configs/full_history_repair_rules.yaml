@@ -209,6 +209,24 @@ query_mappings:
     November 8 and 11 sessions. Retain PTSI and validate the complete history.
   sources:
   - https://www.sec.gov/Archives/edgar/data/798287/000168316824007944/pam_ex9901.htm
+- id: nvfy_xwin_provider_two_session_boundary
+  security_id: sec_3fe2e95c9faa5f7f927029ac1de11ea2
+  historical_ticker: NVFY
+  query_ticker: XWIN
+  start: '2025-11-06'
+  end: '2025-11-07'
+  next_alias_start: '2025-11-10'
+  reason: SEC confirms the same issuer's November 3 corporate name change, not the
+    exchange trading date. The authenticated master supplies the November 10
+    alias boundary; Trading 212's November 10 executed-corporate-events notice
+    independently corroborates that transition. Query only the two missing
+    November 6 and 7 sessions under XWIN, retain NVFY as historical ticker, and
+    reauthenticate every parent date and all nominal/executable/return fields.
+    The broker notice is corroboration, not a Nasdaq announcement.
+  sources:
+  - https://www.sec.gov/Archives/edgar/data/1473334/000149315225020756/form8-k.htm
+  boundary_sources:
+  - https://community.trading212.com/t/corporate-events-in-november-2025/88702/4
 prior_quarantine:
   version_id: 562967c01bb54e2ab39454804cc4ac73
   manifest_sha256: 7388933abb12306b88ebe05bf51c2eb9fa15b29e1ac51c3af273e29af1326579

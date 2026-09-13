@@ -73,6 +73,8 @@ outputs/
 !/reviews/2026-09-12-coverage-controlled-recovery/additional_query_mappings.json
 /reviews/2026-09-12-coverage-revision-authentication/**/*.json
 /reviews/2026-09-12-cup-shadow-investigation/**/*.json
+/reviews/2026-09-13-cup-resilience/evidence/
+/reviews/2026-09-13-security-isolation/evidence/
 
 # Generated EP review outputs (source scripts and sanitized test fixtures remain tracked)
 /reviews/2026-09-10-ep-span-selection/brief-review*/

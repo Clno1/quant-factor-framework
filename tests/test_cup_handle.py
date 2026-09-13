@@ -670,6 +670,8 @@ class CupHandleAlgorithmTests(unittest.TestCase):
                     "volume": float(row["volume"]) / 5.0,
                 })
         minute = pd.DataFrame(minute_rows, index=minute_index)
+        # A barrier in the actual trigger minute cannot establish post-entry order.
+        minute.loc[pd.Timestamp("2026-04-09 10:35"), ["open", "high", "low", "close"]] = trigger_close
 
         result = replay_cup_handle(
             {"TEST": _daily_cup()},
@@ -683,6 +685,115 @@ class CupHandleAlgorithmTests(unittest.TestCase):
         self.assertEqual(result["signal_count"], 1)
         self.assertEqual(result["outcome_counts"], {"CONFIRMED_PROXY": 1})
         self.assertEqual(result["false_positive_rate_proxy"], 0.0)
+        self.assertLessEqual(result["max_bar_count"], 96)
+        self.assertGreaterEqual(result["detection_p95_ms"], 0)
+        self.assertEqual(result["signals"][0]["followthrough_evidence"]["status"], "TARGET_REACHED")
+
+        for defect, reason in [
+            ("missing", "INCOMPLETE_CONTIGUOUS_HORIZON"),
+            ("zero", "NONPOSITIVE_OHLCV"),
+            ("duplicate", "DUPLICATE_MINUTE"),
+            ("trigger", "TRIGGER_MINUTE_ORDER_UNKNOWN"),
+            ("both", "SAME_MINUTE_BARRIER_ORDER_UNKNOWN"),
+        ]:
+            with self.subTest(defect=defect):
+                bad = minute.copy()
+                timestamp = pd.Timestamp("2026-04-09 10:36")
+                if defect == "missing":
+                    bad = bad.drop(timestamp)
+                elif defect == "zero":
+                    bad.loc[timestamp, "volume"] = 0
+                elif defect == "duplicate":
+                    bad = pd.concat([bad, bad.loc[[timestamp]]])
+                elif defect == "trigger":
+                    bad.loc[pd.Timestamp("2026-04-09 10:35"), "high"] = trigger_close * 1.02
+                else:
+                    bad.loc[timestamp, "low"] = result["signals"][0]["pattern"]["handle_low"] * 0.99
+                checked = replay_cup_handle({"TEST": _daily_cup()}, {"TEST": bad}, settings=settings)
+                self.assertEqual(checked["signal_count"], 1)
+                self.assertEqual(checked["outcome_counts"], {"UNRESOLVED": 1})
+                self.assertIsNone(checked["false_positive_rate_proxy"])
+                self.assertEqual(checked["signals"][0]["followthrough_evidence"]["reason"], reason)
+
+        empty = replay_cup_handle({}, {}, settings=settings)
+        self.assertEqual(empty["signal_count"], 0)
+        self.assertIsNone(empty["false_positive_rate_proxy"])
+
+
+def test_sparse_bucket_matures_without_another_source_row():
+    index = pd.to_datetime(["2026-04-09 09:30", "2026-04-09 09:31", "2026-04-09 09:33"])
+    frame = pd.DataFrame({"open": 10., "high": 11., "low": 9., "close": 10., "volume": 10.}, index=index)
+    rolling = RollingIntradayBars("TEST")
+    rolling.merge(frame)
+    early = rolling.metrics(now=datetime(2026, 4, 9, 9, 34, tzinfo=NEW_YORK), session_date="2026-04-09")
+    mature = rolling.metrics(now=datetime(2026, 4, 9, 9, 35, tzinfo=NEW_YORK), session_date="2026-04-09")
+    assert early["bars"] == []
+    assert len(mature["bars"]) == 1
+    assert mature["bars"][0]["source_minute_count"] == 3
+
+
+def test_single_invalid_volume_cannot_hide_inside_a_positive_average():
+    settings = IntradayMonitorSettings()
+    candidate = _candidate(settings)
+    valid = _handle_bars(candidate)
+    detector = CupHandleDetector(settings)
+    now = datetime(2026, 4, 9, 10, 35, 1, tzinfo=NEW_YORK)
+    positive = detector.evaluate(candidate, _quote(valid), {"bars": valid, "error": None},
+                                now=now, session_date="2026-04-09", market_open=True)
+    assert positive.outcome == "MATCH"
+    start_time = pd.Timestamp(positive.details["handle_start"]).tz_localize(None)
+    start = next(i for i, row in enumerate(valid) if pd.Timestamp(row["timestamp"]) == start_time)
+    for position in [start - settings.cup_volume_baseline_bars, start, len(valid) - 1]:
+        for value in [0., -1., None, float("nan"), float("inf")]:
+            bars = [dict(row) for row in valid]
+            bars[position]["volume"] = value
+            result = detector.evaluate(candidate, _quote(valid), {"bars": bars, "error": None},
+                                       now=now, session_date="2026-04-09", market_open=True)
+            assert result.rejection_reason == "INSUFFICIENT_VOLUME_EVIDENCE", (position, value, result)
+            assert result.signal is None
+            assert "handle_volume_ratio" not in result.details
+            assert "breakout_volume_ratio" not in result.details
+
+
+def test_invalid_source_minute_volume_survives_aggregation_as_evidence():
+    settings = IntradayMonitorSettings()
+    candidate = _candidate(settings)
+    valid = _handle_bars(candidate)
+    now = datetime(2026, 4, 9, 10, 35, 1, tzinfo=NEW_YORK)
+    positive = CupHandleDetector(settings).evaluate(candidate, _quote(valid), {"bars": valid, "error": None},
+        now=now, session_date="2026-04-09", market_open=True)
+    assert positive.outcome == "MATCH"
+    start_time = pd.Timestamp(positive.details["handle_start"]).tz_localize(None)
+    start = next(i for i, row in enumerate(valid) if pd.Timestamp(row["timestamp"]) == start_time)
+    for position in [(start - settings.cup_volume_baseline_bars) * 5, start * 5, (len(valid) - 1) * 5]:
+        for value in [0., -1., float("nan"), float("inf")]:
+            rows = []
+            for bar in valid:
+                for offset in range(5):
+                    rows.append({**bar, "timestamp": pd.Timestamp(bar["timestamp"]) + pd.Timedelta(minutes=offset),
+                                 "volume": bar["volume"] / 5})
+            rows[position]["volume"] = value
+            frame = pd.DataFrame(rows).set_index("timestamp")
+            rolling = RollingIntradayBars("TEST")
+            rolling.merge(frame)
+            metrics = rolling.metrics(now=now, session_date="2026-04-09")
+            assert metrics["bars"][position // 5]["invalid_source_volume_count"] == 1
+            result = CupHandleDetector(settings).evaluate(candidate, _quote(valid), metrics,
+                now=now, session_date="2026-04-09", market_open=True)
+            assert result.rejection_reason == "INSUFFICIENT_VOLUME_EVIDENCE"
+            assert result.signal is None
+            assert "handle_volume_ratio" not in result.details
+
+
+def test_replay_preserves_invalid_source_volume_evidence():
+    from src.breakouts.live.cup_handle_replay import _complete_five_minute_bars, _records
+    index = pd.date_range("2026-04-09 09:30", periods=5, freq="min")
+    for invalid in [0., -1., float("nan"), float("inf")]:
+        frame = pd.DataFrame({"open": 10., "high": 11., "low": 9., "close": 10.,
+                              "volume": [invalid, 10., 10., 10., 10.]}, index=index)
+        records = _records(_complete_five_minute_bars(frame), 96)
+        assert len(records) == 1
+        assert records[0]["invalid_source_volume_count"] == 1
 
 
 if __name__ == "__main__":

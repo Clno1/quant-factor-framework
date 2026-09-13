@@ -24,7 +24,7 @@ class RollingIntradayBars:
         self._derived_end = 0
         self._aggregated: list[dict[str, Any]] = []
         self._sessions: dict[str, dict[str, Any]] = {}
-        self._cached_key: tuple[str, int, int, int] | None = None
+        self._cached_key: tuple[str, int, int, int, int] | None = None
         self._cached_metrics: dict[str, Any] | None = None
         self._quote_observations: list[dict[str, Any]] = []
 
@@ -131,7 +131,9 @@ class RollingIntradayBars:
         high = float(row.high)
         low = float(row.low)
         close = float(row.close)
-        volume = max(0.0, float(row.volume))
+        raw_volume = float(row.volume)
+        invalid_volume = not math.isfinite(raw_volume) or raw_volume <= 0
+        volume = raw_volume if math.isfinite(raw_volume) and raw_volume > 0 else 0.0
         session_date = timestamp.strftime("%Y-%m-%d")
         session = self._sessions.setdefault(session_date, {
             "last_timestamp": timestamp,
@@ -187,6 +189,7 @@ class RollingIntradayBars:
             aggregate["close"] = close
             aggregate["volume"] = float(aggregate["volume"]) + volume
             aggregate["source_count"] = int(aggregate["source_count"]) + 1
+            aggregate["invalid_source_volume_count"] += int(invalid_volume)
         else:
             self._aggregated.append({
                 "timestamp": bucket,
@@ -196,6 +199,7 @@ class RollingIntradayBars:
                 "close": close,
                 "volume": volume,
                 "source_count": 1,
+                "invalid_source_volume_count": int(invalid_volume),
             })
 
     def _advance(self, completed_end: int, interval: int) -> None:
@@ -218,7 +222,10 @@ class RollingIntradayBars:
     ) -> dict[str, Any]:
         interval = max(1, int(interval))
         completed_end = self._completed_end(now)
-        key = (session_date, interval, completed_end, max(1, int(max_bars)))
+        aware = now if now.tzinfo is not None else now.replace(tzinfo=self.timezone)
+        local_now = pd.Timestamp(aware.astimezone(self.timezone).replace(tzinfo=None))
+        completed_bucket = local_now.floor(f"{interval}min").value
+        key = (session_date, interval, completed_end, max(1, int(max_bars)), completed_bucket)
         if self._cached_key == key and self._cached_metrics is not None:
             return dict(self._cached_metrics)
         self._advance(completed_end, interval)
@@ -501,6 +508,7 @@ class RollingIntradayBars:
                 "close": float(row["close"]),
                 "volume": float(row["volume"]),
                 "source_minute_count": int(row.get("source_count") or 0),
+                "invalid_source_volume_count": int(row.get("invalid_source_volume_count") or 0),
                 "source_minute_coverage": round(
                     int(row.get("source_count") or 0) / interval,
                     6,

@@ -1,0 +1,12 @@
+[Unit]
+Description=Next-session revision check for September 14 witness
+
+[Timer]
+OnCalendar=2026-09-15 12:00:00 UTC
+AccuracySec=1s
+RandomizedDelaySec=0
+Persistent=false
+Unit=quant-cup-minute-witness@recheck.service
+
+[Install]
+WantedBy=timers.target

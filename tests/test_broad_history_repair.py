@@ -422,7 +422,7 @@ def test_writer_end_to_end_full_history_or_no_publication(tmp_path, monkeypatch,
     args = NS(target_session="2024-02-02", overlap_calendar_days=2,
               output_dir=str(tmp_path / "incremental"), publish=True, repair_full_history=True)
     if truncate:
-        with pytest.raises(DataFoundationError, match="full-history repair rejected"):
+        with pytest.raises(DataFoundationError, match="isolation budget"):
             writer.run(args)
         assert catalog.latest_version("US_EQUITY_COVERAGE").version_id == parent.version_id
         return

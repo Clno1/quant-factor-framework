@@ -9,6 +9,7 @@ import argparse
 from datetime import date, datetime, timezone
 import hashlib
 import json
+import math
 from pathlib import Path
 import sqlite3
 import sys
@@ -24,18 +25,76 @@ from src.data.fmp import get_intraday_ohlcv  # noqa: E402
 from src.utils.env import load_local_env  # noqa: E402
 
 
+def _local_timestamp(value):
+    timestamp = pd.Timestamp(value)
+    return timestamp.tz_convert("America/New_York").tz_localize(None) if timestamp.tzinfo else timestamp
+
+
+def _bucket_evidence(frames: dict, gap: dict) -> dict:
+    """Compare later responses, without treating native 5min as a replacement feed."""
+    start, end = [_local_timestamp(gap[key]) for key in ("gap_start", "gap_end")]
+    result = {"timestamp_assumption": "START_LABELLED_EXCHANGE_LOCAL",
+              "historical_classification_changed": False, "intervals": {}}
+    aggregates = {}
+    for interval, frame in frames.items():
+        if frame is None:
+            result["intervals"][interval] = {"available": False}
+            continue
+        work = frame.copy()
+        index = pd.DatetimeIndex(pd.to_datetime(work.index, errors="coerce"))
+        if index.tz is not None:
+            index = index.tz_convert("America/New_York").tz_localize(None)
+        work.index = index
+        work = work.loc[(index >= start) & (index < end)].sort_index()
+        expected = pd.date_range(start, end, freq="min" if interval == "1min" else "5min", inclusive="left")
+        invalid = int(index.isna().sum())
+        duplicate = int(work.index.duplicated().sum())
+        values = work[["open", "high", "low", "close", "volume"]].apply(pd.to_numeric, errors="coerce")
+        finite = values.map(lambda value: pd.notna(value) and math.isfinite(float(value)))
+        nonfinite = int((~finite).any(axis=1).sum())
+        nonpositive = int(values.volume.le(0).sum())
+        invalid_ohlc = int(((values[["open", "high", "low", "close"]] <= 0).any(axis=1)
+            | values.high.lt(values[["open", "low", "close"]].max(axis=1))
+            | values.low.gt(values[["open", "high", "close"]].min(axis=1))).sum())
+        detail = {"available": True, "rows": len(work), "invalid_response_timestamps": invalid,
+                  "duplicate_timestamps": duplicate, "nonfinite_rows": nonfinite,
+                  "invalid_ohlc_rows": invalid_ohlc, "nonpositive_volume_rows": nonpositive,
+                  "missing_slots": [str(t) for t in expected.difference(work.index)],
+                  "off_grid_timestamps": [str(t) for t in work.index.difference(expected)]}
+        if not work.empty and not (invalid or duplicate or nonfinite or invalid_ohlc or detail["off_grid_timestamps"]):
+            aggregate = {"open": float(values.open.iloc[0]), "high": float(values.high.max()),
+                         "low": float(values.low.min()), "close": float(values.close.iloc[-1]),
+                         "volume": float(values.volume.sum())}
+            detail["observed_ohlcv"] = aggregate
+            aggregates[interval] = aggregate
+        result["intervals"][interval] = detail
+    if len(aggregates) == 2:
+        result["differences"] = {key: {"one_minute_aggregate": aggregates["1min"][key],
+                                      "native_five_minute": aggregates["5min"][key]}
+            for key in aggregates["1min"]
+            if not math.isclose(aggregates["1min"][key], aggregates["5min"][key], rel_tol=1e-9, abs_tol=1e-9)}
+        result["comparison"] = "OHLCV_DISAGREEMENT" if result["differences"] else "OBSERVED_VALUES_AGREE"
+    else:
+        result["comparison"] = "NO_COMPARABLE_PAIR"
+    result["can_confirm_no_trade"] = False
+    result["can_confirm_provider_gap"] = False
+    return result
+
+
 def audit_provider_gaps(gaps: list[dict], fetch=get_intraday_ohlcv) -> dict:
     responses = []
     results = []
-    for ticker in sorted({gap["ticker"] for gap in gaps}):
-        selected = [gap for gap in gaps if gap["ticker"] == ticker]
-        session = selected[0]["session_date"]
+    for ticker, session in sorted({(gap["ticker"], gap["session_date"]) for gap in gaps}):
+        selected = [gap for gap in gaps if gap["ticker"] == ticker and gap["session_date"] == session]
+        frames = {}
         by_interval = {}
         for interval in ("1min", "5min"):
             request = {"ticker": ticker, "interval": interval, "session_date": session}
             try:
                 frame = fetch(ticker, interval=interval, start=session, end=session)
+                frames[interval] = frame
                 if frame is None or frame.empty:
+                    frames[interval] = None
                     responses.append({**request, "status": "EMPTY_RESPONSE"})
                     by_interval[interval] = None
                     continue
@@ -48,7 +107,7 @@ def audit_provider_gaps(gaps: list[dict], fetch=get_intraday_ohlcv) -> dict:
                 })
                 counts = {}
                 for gap in selected:
-                    start, end = pd.Timestamp(gap["gap_start"]), pd.Timestamp(gap["gap_end"])
+                    start, end = _local_timestamp(gap["gap_start"]), _local_timestamp(gap["gap_end"])
                     index = pd.DatetimeIndex(frame.index)
                     if index.tz is not None:
                         index = index.tz_convert("America/New_York").tz_localize(None)
@@ -58,6 +117,7 @@ def audit_provider_gaps(gaps: list[dict], fetch=get_intraday_ohlcv) -> dict:
                 # Provider exception text can contain a credential-bearing URL.
                 responses.append({**request, "status": "REQUEST_FAILED", "error_type": type(exc).__name__})
                 by_interval[interval] = None
+                frames[interval] = None
         for gap in selected:
             counts = {
                 key: None if value is None else value[gap["gap_start"]]
@@ -68,11 +128,13 @@ def audit_provider_gaps(gaps: list[dict], fetch=get_intraday_ohlcv) -> dict:
                 else "STILL_ABSENT_BOTH_INTERVALS" if not any(counts.values())
                 else "ROWS_PRESENT_ON_REQUERY"
             )
-            results.append({**gap, "requery_status": status, "row_counts": counts})
+            results.append({**gap, "requery_status": status, "row_counts": counts,
+                            "bucket_evidence": _bucket_evidence(frames, gap)})
     return {
-        "audit_version": "cup-gap-requery-v1",
+        "audit_version": "cup-gap-requery-v2",
         "observed_at": datetime.now(timezone.utc).isoformat(),
         "historical_observation_unchanged": True,
+        "counts_for_shadow_promotion": False,
         "results": results, "responses": responses,
     }
 

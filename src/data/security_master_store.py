@@ -1604,17 +1604,24 @@ class SecurityMasterStore:
             connection.close()
         return generation
 
-    def published_generation(self) -> SecurityMasterGeneration:
+    def _generation(self, generation_id: str | None = None) -> SecurityMasterGeneration:
         connection = self._connect(read_only=True)
         try:
             try:
-                row = connection.execute("""
-                    SELECT g.*
-                    FROM published_security_master AS p
-                    JOIN security_master_generations AS g
-                      ON g.generation_id = p.generation_id
-                    WHERE p.singleton = TRUE
-                """).fetchone()
+                if generation_id is None:
+                    row = connection.execute("""
+                        SELECT g.*
+                        FROM published_security_master AS p
+                        JOIN security_master_generations AS g
+                          ON g.generation_id = p.generation_id
+                        WHERE p.singleton = TRUE
+                    """).fetchone()
+                else:
+                    row = connection.execute(
+                        "SELECT * FROM security_master_generations "
+                        "WHERE generation_id = ? AND status = 'PUBLISHED'",
+                        [generation_id],
+                    ).fetchone()
             except duckdb.CatalogException as exc:
                 raise FileNotFoundError(
                     "No Security Master generation is published"
@@ -1622,7 +1629,7 @@ class SecurityMasterStore:
         finally:
             connection.close()
         if row is None:
-            raise FileNotFoundError("No Security Master generation is published")
+            raise FileNotFoundError(f"No published Security Master generation: {generation_id or 'latest'}")
         return SecurityMasterGeneration(
             generation_id=str(row[0]),
             target_session=pd.Timestamp(row[1]).date(),
@@ -1642,8 +1649,19 @@ class SecurityMasterStore:
             manifest_sha256=str(row[15]),
         )
 
+    def published_generation(self) -> SecurityMasterGeneration:
+        return self._generation()
+
+    def load_generation(self, generation_id: str) -> tuple[SecurityMasterGeneration, dict[str, pd.DataFrame]]:
+        """Verify an immutable published snapshot without moving the latest pointer."""
+        if not isinstance(generation_id, str) or not generation_id.strip():
+            raise ValueError("an exact Security Master generation is required")
+        return self._load_snapshot(self._generation(generation_id))
+
     def load_published(self) -> tuple[SecurityMasterGeneration, dict[str, pd.DataFrame]]:
-        generation = self.published_generation()
+        return self._load_snapshot(self.published_generation())
+
+    def _load_snapshot(self, generation: SecurityMasterGeneration) -> tuple[SecurityMasterGeneration, dict[str, pd.DataFrame]]:
         paths = {
             "master": (Path(generation.master_path), generation.master_sha256),
             "symbols": (Path(generation.symbols_path), generation.symbols_sha256),
@@ -1663,6 +1681,8 @@ class SecurityMasterStore:
         manifest = json.loads(paths["manifest"][0].read_text(encoding="utf-8"))
         if manifest.get("generation_id") != generation.generation_id:
             raise RuntimeError("Security Master manifest generation mismatch")
+        if generation.status != "PUBLISHED" or manifest.get("status") != "PUBLISHED":
+            raise RuntimeError("Security Master snapshot is not published")
         frames = {
             name: pd.read_parquet(path)
             for name, (path, _) in paths.items()

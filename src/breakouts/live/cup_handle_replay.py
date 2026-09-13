@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime, timedelta
+import math
 from typing import Any, Mapping
 from zoneinfo import ZoneInfo
 
@@ -15,6 +16,7 @@ from src.breakouts.live.cup_handle import (
     detect_daily_cup,
 )
 from src.breakouts.live.models import DailyCandidate, QuoteSnapshot
+from src.breakouts.live.cup_handle_followthrough import assess_followthrough, summarize_followthrough
 from src.breakouts.live.settings import IntradayMonitorSettings
 
 
@@ -70,6 +72,11 @@ def _complete_five_minute_bars(frame: pd.DataFrame) -> pd.DataFrame:
             label="left",
             closed="left",
         ).count()
+        invalid_volume = session.volume.map(lambda value: not math.isfinite(float(value)) or value <= 0)
+        bars["invalid_source_volume_count"] = invalid_volume.astype(int).resample(
+            "5min", origin=pd.Timestamp(session.index[0]).normalize() + pd.Timedelta(hours=9, minutes=30),
+            label="left", closed="left",
+        ).sum()
         bars = bars.loc[counts >= 5].dropna(subset=["open", "high", "low", "close"])
         pieces.append(bars)
     return pd.concat(pieces).sort_index() if pieces else pd.DataFrame(columns=_REQUIRED)
@@ -84,6 +91,7 @@ def _records(frame: pd.DataFrame, limit: int) -> list[dict[str, Any]]:
             "low": float(row.low),
             "close": float(row.close),
             "volume": float(row.volume),
+            "invalid_source_volume_count": int(row.get("invalid_source_volume_count", 0)),
         }
         for timestamp, row in frame.tail(limit).iterrows()
     ]
@@ -150,6 +158,8 @@ def replay_cup_handle(
     daily_rejections: Counter[str] = Counter()
     evaluated_sessions = 0
     evaluated_bars = 0
+    max_bar_count = 0
+    detection_latencies: list[float] = []
     for raw_ticker in sorted(set(daily_frames) & set(minute_frames)):
         ticker = str(raw_ticker).upper()
         daily = _normalize(daily_frames[raw_ticker])
@@ -219,34 +229,31 @@ def replay_cup_handle(
                     market_open=True,
                 )
                 evaluated_bars += 1
+                max_bar_count = max(max_bar_count, evaluation.bar_count)
+                detection_latencies.append(evaluation.latency_ms)
                 if evaluation.outcome != "MATCH":
                     rejection_counts[evaluation.rejection_reason] += 1
                     continue
                 signal = evaluation.signal
                 assert signal is not None
-                future = session.iloc[
-                    index + 1:index + 1 + settings.cup_replay_confirmation_horizon_bars
-                ]
                 target = signal.price * (
                     1.0 + settings.cup_replay_confirmation_return_pct / 100.0
                 )
-                stop = float((signal.pattern or {}).get("handle_low") or 0.0)
-                outcome = "UNRESOLVED"
-                for _, bar in future.iterrows():
-                    if stop > 0 and float(bar["low"]) <= stop:
-                        outcome = "FALSE_POSITIVE_PROXY"
-                        break
-                    if float(bar["high"]) >= target:
-                        outcome = "CONFIRMED_PROXY"
-                        break
-                if (
-                    outcome == "UNRESOLVED"
-                    and len(future) >= settings.cup_replay_confirmation_horizon_bars
-                ):
-                    outcome = "FALSE_POSITIVE_PROXY"
+                # Keep raw duplicates, invalid volumes and missing minutes visible to the audit.
+                source = minute_frames[raw_ticker]
+                rows = source.assign(date=source.index).to_dict(orient="records")
+                evidence = assess_followthrough(
+                    signal.to_dict(), rows,
+                    horizon_bars=settings.cup_replay_confirmation_horizon_bars,
+                    target_return_pct=settings.cup_replay_confirmation_return_pct,
+                )
+                proxy = evidence["false_positive_proxy"]
+                outcome = ("UNRESOLVED" if proxy is None else
+                           "FALSE_POSITIVE_PROXY" if proxy else "CONFIRMED_PROXY")
                 signals.append({
                     **signal.to_dict(),
                     "replay_outcome": outcome,
+                    "followthrough_evidence": evidence,
                     "confirmation_target": target,
                     "confirmation_horizon_bars": (
                         settings.cup_replay_confirmation_horizon_bars
@@ -255,10 +262,7 @@ def replay_cup_handle(
                 break
 
     outcome_counts = Counter(signal["replay_outcome"] for signal in signals)
-    resolved = (
-        outcome_counts["CONFIRMED_PROXY"]
-        + outcome_counts["FALSE_POSITIVE_PROXY"]
-    )
+    followthrough = summarize_followthrough([signal["followthrough_evidence"] for signal in signals])
     return {
         "algorithm_version": CUP_HANDLE_ALGORITHM_VERSION,
         "parameter_version": CUP_HANDLE_PARAMETER_VERSION,
@@ -268,18 +272,22 @@ def replay_cup_handle(
         "ticker_count": len(set(daily_frames) & set(minute_frames)),
         "evaluated_sessions": evaluated_sessions,
         "evaluated_completed_5m_bars": evaluated_bars,
+        "max_bar_count": max_bar_count,
+        "detection_p95_ms": float(pd.Series(detection_latencies).quantile(0.95)) if detection_latencies else None,
         "signal_count": len(signals),
         "outcome_counts": dict(sorted(outcome_counts.items())),
         "false_positive_rate_proxy": (
-            outcome_counts["FALSE_POSITIVE_PROXY"] / resolved
-            if resolved else None
+            followthrough["false_positive_proxy_pct_all"] / 100
+            if followthrough["false_positive_proxy_pct_all"] is not None else None
         ),
+        "followthrough_summary": followthrough,
         "daily_rejection_counts": dict(daily_rejections.most_common()),
         "intraday_rejection_counts": dict(rejection_counts.most_common()),
         "proxy_definition": (
-            "A signal is confirmed when price reaches the configured return target "
-            "before the handle low within the configured completed-5m horizon; "
-            "otherwise a fully observed horizon is a false-positive proxy."
+            "Require a contiguous positive-OHLCV minute horizon and unambiguous post-trigger "
+            "barrier order. Target first is confirmed; stop first or no target in the full "
+            "horizon is a false-positive proxy. Missing or ambiguous evidence is unresolved. "
+            "The all-signal rate is null for zero signals or any unresolved signal."
         ),
         "signals": signals,
     }

@@ -29,6 +29,7 @@ from src.data.derived_universe import (  # noqa: E402
 from src.data.foundation import MarketDataCatalog, MarketDataReader  # noqa: E402
 from src.data.membership_state import complete_snapshot_dates  # noqa: E402
 from src.data.security_master_store import SecurityMasterStore  # noqa: E402
+from src.data.security_availability import availability_from_manifest, unavailable_ids  # noqa: E402
 from src.data.universe_ids import US_EQUITY_COVERAGE, US_LIQUID_5M  # noqa: E402
 from src.data.universe_publication import DerivedUniverseStore  # noqa: E402
 from src.utils.io import atomic_save_json  # noqa: E402
@@ -46,6 +47,9 @@ def _incremental_inputs_match(
         "full_security_history_repair"
     ) or {}
     if int(repair.get("security_count", 0)) > 0:
+        return False
+    availability = availability_from_manifest(coverage_manifest or {})
+    if availability and (availability["unavailable"] or availability.get("restored_security_ids")):
         return False
     return (
         getattr(previous, "security_master_generation_id", None)
@@ -100,6 +104,8 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
         )
     )
     parent_manifest = market_reader.verify_version(parent)
+    availability = availability_from_manifest(parent_manifest)
+    isolated_ids = unavailable_ids(availability)
     security_settings = CONFIG.data.security_master
     security_store = SecurityMasterStore(
         CONFIG.abs_path(str(CONFIG.data.foundation.catalog_path)),
@@ -172,6 +178,7 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
         if historical_gate_passed and not input_mismatch and not args.full_rebuild:
             return {
                 "status": "NOOP",
+                "security_availability": availability,
                 "target_session": parent.target_session.isoformat(),
                 "parent_dataset_version_id": parent.version_id,
                 "membership_rows": previous.membership_row_count,
@@ -261,6 +268,13 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
         f"candidate complete membership_rows={len(candidate.membership)} "
         f"eligibility_rows={len(candidate.eligibility)}"
     )
+    if isolated_ids:
+        if candidate.membership.security_id.astype(str).isin(isolated_ids).any():
+            raise RuntimeError("isolated security unexpectedly entered PIT membership")
+        affected = candidate.eligibility.security_id.astype(str).isin(isolated_ids)
+        candidate.eligibility["reason_codes"] = candidate.eligibility.reason_codes.astype(object)
+        candidate.eligibility.loc[affected, "reason_codes"] = "UPSTREAM_SECURITY_ISOLATED"
+        candidate.eligibility.loc[affected, "eligible"] = False
     coverage_paths = market_reader.partition_paths(
         parent,
         start=str(settings.research_start),
@@ -308,7 +322,9 @@ def run(args: argparse.Namespace) -> tuple[dict, int]:
     report = {
         "schema_version": 1,
         "audit": "US_LIQUID_5M_PIT_BUILD",
-        "status": "PUBLISHED" if publication else "PASS" if passed else "FAIL",
+        "status": ("PUBLISHED_DEGRADED" if isolated_ids else "PUBLISHED") if publication
+        else ("DEGRADED" if isolated_ids else "PASS") if passed else "FAIL",
+        "security_availability": availability,
         "mode": (
             "INCREMENTAL_PUBLISH"
             if publication is not None and incremental

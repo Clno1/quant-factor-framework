@@ -24,6 +24,7 @@ from src.data.foundation import DataFoundationError, _rebase_parent_to_fetched_s
 from src.data.semantic_recovery import is_recoverable_semantic_drift
 from src.utils.io import atomic_save_json
 from src.operations.evidence import safe_text
+from src.data.security_availability import MissingAuthenticatedHistory, REASON
 
 
 REPAIR_METHOD = "FULL_SECURITY_CANONICAL_REPLACEMENT_V2"
@@ -56,8 +57,11 @@ def collect_replacements(*, failures, load_previous, replace_security, report_pa
             path, proof = replace_security(sid, previous)
             return path, {"security_id": sid, "ticker": item["ticker"], **proof}, None
         except Exception as exc:
-            return None, None, {"security_id": sid, "ticker": item["ticker"],
-                                "error": safe_text(str(exc), limit=3000)}
+            error = {"security_id": sid, "ticker": item["ticker"],
+                     "error": safe_text(str(exc), limit=3000)}
+            if isinstance(exc, MissingAuthenticatedHistory) and exc.security_id == sid and exc.evidence:
+                error.update(error_code=REASON, missing_dates=exc.missing_dates, isolation_evidence=exc.evidence)
+            return None, None, error
 
     try:
         with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -221,7 +225,7 @@ def audit_overlap(previous: pd.DataFrame, fresh: pd.DataFrame, parent_ids: set[s
     return audit, failures
 
 
-def validate_replacement(frame, *, security_id, previous, recent, aliases, target):
+def validate_replacement(frame, *, security_id, previous, recent, aliases, target, extra_required_dates=()):
     """Reject truncated/invalid histories; no repair-specific quality exemptions."""
     if frame.empty or set(frame["security_id"].astype(str)) != {security_id}:
         raise DataFoundationError(f"{security_id}: empty or foreign replacement identity")
@@ -240,12 +244,10 @@ def validate_replacement(frame, *, security_id, previous, recent, aliases, targe
     if not allowed.all():
         raise DataFoundationError(f"{security_id}: replacement violates approved alias intervals")
     required = set(pd.to_datetime(previous["date"])) | set(pd.to_datetime(recent["date"]))
+    required |= set(pd.to_datetime(list(extra_required_dates)))
     missing = sorted(required - set(dates))
     if missing:
-        raise DataFoundationError(
-            f"{security_id}: full replacement loses {len(missing)} authenticated dates: "
-            f"{[str(d.date()) for d in missing[:20]]}"
-        )
+        raise MissingAuthenticatedHistory(security_id, missing)
     # Conflicting endpoints are retained as evidence, not silently rounded.
     matched = recent.merge(frame, on=["date", "security_id"], suffixes=("_bulk", "_full"))
     conflicts = {}
@@ -294,7 +296,7 @@ def fetch_replacement(*, cache_dir, contract, security_id, universe, symbols,
                       previous, recent, history_start, target, fetcher,
                       query_mappings=(), approved_quarantine=None, rules_contract=None,
                       selection_scope="ENTIRE_SECURITY_HISTORY_INCLUDING_OVERLAP_AND_NEW_SESSIONS",
-                      reuse_frozen_inputs=False, cache_only=False):
+                      reuse_frozen_inputs=False, cache_only=False, extra_required_dates=()):
     """Freeze one complete history; only a hash-bound verified success is reusable."""
     selected = universe.loc[universe.security_id.astype(str).eq(security_id)]
     if len(selected) != 1 or not symbols.security_id.astype(str).eq(security_id).any():
@@ -309,12 +311,17 @@ def fetch_replacement(*, cache_dir, contract, security_id, universe, symbols,
                "query_mappings": [r for r in query_mappings if r["security_id"] == security_id],
                "history_start": str(history_start), "target_session": str(pd.Timestamp(target).date()),
                "aliases": json.loads(aliases.to_json(orient="records", date_format="iso"))}
+    if len(extra_required_dates):
+        binding["extra_required_dates"] = sorted({str(pd.Timestamp(d).date()) for d in extra_required_dates})
     key = hashlib.sha256(json.dumps(binding, sort_keys=True).encode()).hexdigest()
     base = Path(cache_dir) / "full_security_repair" / security_id / key
     manifest_path = base / "manifest.json"
+    cached_failure_inputs = None
     if cache_only and not manifest_path.is_file():
-        raise DataFoundationError(f"{security_id}: authenticated replacement cache is missing")
-    if not cache_only:
+        cached_failure_inputs = _frozen_raw_inputs(base, binding, segments)
+        if not cached_failure_inputs[0]:
+            raise DataFoundationError(f"{security_id}: authenticated replacement cache is missing")
+    if not cache_only or cached_failure_inputs is not None:
         base.mkdir(parents=True, exist_ok=True)
     if manifest_path.exists():
         manifest = json.loads(manifest_path.read_text())
@@ -331,7 +338,7 @@ def fetch_replacement(*, cache_dir, contract, security_id, universe, symbols,
         _, bad = inherit_quarantine(pd.concat([frame, pd.read_parquet(quarantine_path)], ignore_index=True),
                                     approved=approved_quarantine, previous=previous)
         proof = validate_replacement(frame, security_id=security_id, previous=previous,
-                                     recent=recent, aliases=aliases, target=target)
+                                     recent=recent, aliases=aliases, target=target, extra_required_dates=extra_required_dates)
         proof["selection_scope"] = selection_scope
         frozen_proof = manifest.get("proof", {}).get("frozen_source_proof")
         if frozen_proof and file_sha256(Path(frozen_proof["record_path"])) != frozen_proof["record_sha256"]:
@@ -346,7 +353,8 @@ def fetch_replacement(*, cache_dir, contract, security_id, universe, symbols,
     attempt.mkdir()
     pieces, raw_artifacts = [], []
     try:
-        frozen, source_proof = _frozen_raw_inputs(base, binding, segments) if reuse_frozen_inputs else ([], None)
+        frozen, source_proof = (cached_failure_inputs if cached_failure_inputs is not None else
+                               _frozen_raw_inputs(base, binding, segments) if reuse_frozen_inputs else ([], None))
         for i, (historical, query, first, last) in enumerate(segments):
             start, end = str(first.date()), str(last.date())
             raw = pd.read_parquet(frozen[i]) if frozen else fetcher(str(query), start, end)
@@ -377,7 +385,7 @@ def fetch_replacement(*, cache_dir, contract, security_id, universe, symbols,
         quarantine_path = attempt / "quarantine.parquet"
         bad.to_parquet(quarantine_path, index=False)
         proof = validate_replacement(frame, security_id=security_id, previous=previous,
-                                     recent=recent, aliases=aliases, target=target)
+                                     recent=recent, aliases=aliases, target=target, extra_required_dates=extra_required_dates)
         proof["selection_scope"] = selection_scope
         proof["raw_inputs_reused"] = bool(frozen)
         proof["frozen_source_proof"] = source_proof
@@ -395,8 +403,13 @@ def fetch_replacement(*, cache_dir, contract, security_id, universe, symbols,
                       "quarantine_sha256": file_sha256(quarantine_path),
                       "manifest_sha256": file_sha256(manifest_path), "cache_hit": False}
     except Exception as exc:
-        atomic_save_json({"contract": binding, "status": "FAIL", "error": str(exc),
-                          "raw_artifacts": raw_artifacts}, attempt / "failure.json")
+        failure = {"contract": binding, "status": "FAIL", "error": str(exc), "raw_artifacts": raw_artifacts}
+        if isinstance(exc, MissingAuthenticatedHistory):
+            failure.update(error_code=REASON, missing_dates=exc.missing_dates)
+        atomic_save_json(failure, attempt / "failure.json")
+        if isinstance(exc, MissingAuthenticatedHistory):
+            exc.evidence = {"path": str(attempt / "failure.json"),
+                            "sha256": file_sha256(attempt / "failure.json"), "record": failure}
         if isinstance(exc, ValueError):
             raise DataFoundationError(f"{security_id}: full-history provider contract failed: {exc}") from exc
         raise

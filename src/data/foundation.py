@@ -2261,6 +2261,11 @@ class MarketDataReader:
                     f"Published bar-quarantine file is missing: {quarantine_path}"
                 )
             _verify_file_sha256(quarantine_path, str(quarantine_sha256))
+        from src.data.security_availability import availability_from_manifest, validate_availability
+        availability = availability_from_manifest(manifest)
+        if availability is not None:
+            validate_availability(availability, pd.read_parquet(files["universe"][0]),
+                                  target_session=version.target_session)
         return manifest
 
     def _load_partition_index(

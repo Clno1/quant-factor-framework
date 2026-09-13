@@ -717,6 +717,23 @@ def test_load_published_never_initializes_catalog_on_read(monkeypatch):
         assert loaded_generation.generation_id == generation.generation_id
 
 
+def test_exact_generation_remains_readable_after_new_publication(tmp_path):
+    store = SecurityMasterStore(tmp_path / "catalog.duckdb", tmp_path / "snapshots")
+    first = store.publish(_candidate())
+    second = store.publish(_candidate())
+    loaded, frames = store.load_generation(first.generation_id)
+    assert loaded.generation_id == first.generation_id
+    assert len(frames["master"]) == first.row_count
+    assert store.published_generation().generation_id == second.generation_id
+    with pytest.raises(FileNotFoundError):
+        store.load_generation("not-a-published-generation")
+    path = Path(first.symbols_path)
+    path.write_bytes(path.read_bytes() + b"tampered")
+    with pytest.raises(RuntimeError, match="hash verification failed"):
+        store.load_generation(first.generation_id)
+    assert store.load_published()[0].generation_id == second.generation_id
+
+
 def test_published_ticker_resolution_is_point_in_time_and_fail_closed():
     candidate = _candidate()
     with tempfile.TemporaryDirectory() as temporary:
