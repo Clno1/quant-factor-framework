@@ -317,6 +317,10 @@ class SystemdUnitTests(unittest.TestCase):
             retry,
         )
         self.assertIn(
+            "OnSuccess=quant-premarket-prepare-sector-rotation.service",
+            retry_root,
+        )
+        self.assertNotIn(
             "OnSuccess=quant-premarket-prepare-sector-rotation-root.service",
             retry_root,
         )
@@ -404,6 +408,38 @@ class SystemdUnitTests(unittest.TestCase):
         for directory in ("data", "outputs", "logs", "runlog"):
             self.assertIn(f"--exclude='/{directory}/'", guide)
             self.assertNotIn(f"--exclude='{directory}/'", guide)
+
+    def test_root_service_dependencies_resolve_after_install_rename(self):
+        installed = {
+            path.name.replace("-root.service", ".service", 1)
+            for path in SYSTEMD_DIR.glob("quant-*-root.service")
+        }
+        self.assertIn("quant-premarket-prepare-sector-rotation.service", installed)
+        self.assertIn("quant-group-rotation-linkage-retry.service", installed)
+        keys = {
+            "After", "Wants", "Requires", "Requisite", "OnSuccess", "OnFailure",
+            "Before", "BindsTo", "PartOf", "Upholds",
+        }
+        for path in SYSTEMD_DIR.glob("quant-*-root.service"):
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                if key not in keys:
+                    continue
+                for unit in value.split():
+                    if not unit.endswith(".service"):
+                        continue
+                    self.assertFalse(
+                        unit.endswith("-root.service"),
+                        f"{path.name} {key} still references template {unit}",
+                    )
+                    self.assertIn(
+                        unit,
+                        installed,
+                        f"{path.name} {key}={unit} is missing after *-root install rename",
+                    )
+
 
 if __name__ == "__main__":
     unittest.main()

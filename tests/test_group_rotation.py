@@ -362,7 +362,11 @@ def test_new_main_and_legacy_route_and_read_only_api(tmp_path):
         assert client.get("/api/group-analytics/rotation/heatmap", params={"session": "2000-01-01"}).json()["reason"] == "SESSION_MISMATCH"
         assert client.get("/api/group-analytics/rotation/heatmap", params={"run": "../../secret"}).status_code == 422
         store.failure(s["source_session"], "error")
-        assert client.get("/api/group-analytics/rotation").json()["last_attempt"]["status"] == "FAILED"
+        with patch.object(
+            routes, "latest_completed_session",
+            return_value=pd.Timestamp(s["source_session"]),
+        ):
+            assert client.get("/api/group-analytics/rotation").json()["last_attempt"]["status"] == "FAILED"
 
 
 def test_cli_publish_candidate_degradation_and_audit(tmp_path, capsys):
@@ -567,6 +571,42 @@ def test_yesterday_linkage_failure_does_not_fail_today_price_health(tmp_path):
     assert linkage_result.snapshots[0].status == JobStatus.DEGRADED
     assert linkage_result.snapshots[0].status != JobStatus.FAILED
     assert price_result.snapshots[0].status == JobStatus.SUCCESS
+
+
+def test_latest_page_run_health_uses_expected_session_not_snapshot_date(tmp_path):
+    from dataclasses import replace
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    import src.webapp.group_analytics_routes as routes
+    store = RotationStore(tmp_path / "group_analytics" / "rotation")
+    first = attach_candidates(snapshot())
+    first["source_session"] = "2026-09-08"
+    store.publish(first, stage="price")
+    linked = attach_candidates(copy.deepcopy(first), {
+        "source_session": "2026-09-08", "input_fingerprint": "fp",
+        "universe": "SP500", "rows": [],
+    })
+    store.publish(linked, stage="linkage")
+    store.failure("2026-09-09", "TransientError", stage="price")
+    assert store.load()["source_session"] == "2026-09-08"
+    assert store.last_attempt(source_session="2026-09-08")["status"] == "SUCCESS"
+    assert store.last_attempt(source_session="2026-09-09")["status"] == "FAILED"
+    app = FastAPI()
+    app.include_router(routes.router)
+    with patch.object(routes, "settings", replace(routes.settings, output_root=tmp_path)), \
+         patch.object(routes, "latest_completed_session",
+                      return_value=pd.Timestamp("2026-09-09")):
+        client = TestClient(app)
+        payload = client.get("/api/group-analytics/rotation").json()
+        pinned = client.get("/api/group-analytics/rotation",
+                            params={"run": payload["run_id"]}).json()
+    assert payload["source_session"] == "2026-09-08"
+    assert payload["freshness"] == "historical"
+    assert payload["last_attempt"]["status"] == "FAILED"
+    assert payload["last_attempt"]["source_session"] == "2026-09-09"
+    assert payload["last_attempt"]["checks"]["price"]["status"] == "FAILED"
+    assert payload["last_attempt"]["checks"]["price"]["source_session"] == "2026-09-09"
+    assert pinned["last_attempt"] is None
 
 
 def test_linkage_unavailable_does_not_overwrite_and_records_failed_check(tmp_path, capsys):

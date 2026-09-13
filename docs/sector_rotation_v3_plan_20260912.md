@@ -933,6 +933,7 @@ P5.2 增量验证         （在 P1 / P2 / P3 各自结束时分别跑一次）
 | 2026-09-13 | SG 部署前合入 `origin/main`（`44d5062`）：EP 消费者验收、茶杯柄隔离与 coverage 修复；与轮动无文件冲突 |
 | 2026-09-13 | 可靠性闭环：关联重试从盘前 `ExecStartPre` 拆成独立限时服务；`publish` 锁内校验父版本；广度指纹覆盖 20 日窗口；关联自有指纹；NOOP 记成功检查；关联缺口按本次结果重建。页面主表按选定指标全表排序，计划与产品对齐 |
 | 2026-09-13 | 复核补齐四项：关联成功后独立板块摘要换版（动量不等待）；本次关联读取失败不得记 SUCCESS，可重试时 CLI 退出 1；`last_attempt` 按阶段+交易日合成健康；广度指纹与测量共用校验输入，异常成员使广度降级而不打断价格层 |
+| 2026-09-13 | 根部署 OnSuccess 改为安装后正式 unit 名；最新页运行健康按应更新交易日，不被仍在展示的成功快照日期遮住今天的失败 |
 
 ---
 
@@ -972,9 +973,9 @@ P5.2 增量验证         （在 P1 / P2 / P3 各自结束时分别跑一次）
 11. 07:00 ET 关联重试为独立 `quant-group-rotation-linkage-retry` 服务，盘前 prepare 不再 `ExecStartPre` 等待它。
 12. `holdings_measurement_fingerprint` 覆盖 MA20 所用 20 个交易日；关联层使用自有 `linkage_fingerprint`。
 13. 每次关联清除并重建 `NO_QUALIFIED_CANDIDATE` / `LINKAGE_FAILED`，保留引擎缺口。
-14. 关联成功 `OnSuccess=` 只启动 `--channel sector-rotation` 的 prepare，并另有 09:00 ET 发送前换版；动量频道 07:00/09:20 都不等待该任务。
+14. 关联成功 `OnSuccess=` 只启动 `--channel sector-rotation` 的 prepare（root 模板也引用安装后的正式名，不带 `-root`），并另有 09:00 ET 发送前换版；动量频道 07:00/09:20 都不等待该任务。
 15. 本次动量读取失败时保留上次成功关联，但记 linkage FAILED / `LINKAGE_CHECK_FAILED` 或 `LINKAGE_UNAVAILABLE`，`retryable=true`，CLI 退出 1；只有实际读到并比较成功才记 SUCCESS NOOP。
-16. `last_attempt` 与运维适配器按「阶段 + 交易日」判断健康，昨天的 FAILED 不污染今天未执行或已成功的阶段。
+16. `last_attempt` 与运维适配器按「阶段 + 交易日」判断健康：昨天的 FAILED 不污染今天未执行或已成功的阶段；最新页运行健康绑定应更新交易日，今天的失败不会被仍在展示的旧成功快照遮住。
 17. `holdings_measurement_fingerprint` 与 `observation_breadth` 共用去重后的成员序列；重复日期等异常成员进入 `rejected` 并使广度降级，不打断价格发布。
 
 ### 10.3 刻意保持的行为

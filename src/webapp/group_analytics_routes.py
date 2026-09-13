@@ -1078,9 +1078,6 @@ def _rotation_snapshot(run: str | None):
         store = RotationStore(settings.output_root / "group_analytics" / "rotation")
         snapshot = store.load(run)
         snapshot.pop("input_panel", None)  # Audit input remains local, not a bulk data API.
-        snapshot["last_attempt"] = (
-            store.last_attempt(source_session=snapshot.get("source_session")) if run is None else None
-        )
     except FileNotFoundError:
         raise HTTPException(status_code=503, detail="尚无轮动快照，请运行 scripts/run_group_rotation.py --stage price --refresh") from None
     except (ValueError, KeyError, OSError, TypeError):
@@ -1089,7 +1086,13 @@ def _rotation_snapshot(run: str | None):
         expected = latest_completed_session().date().isoformat()
         snapshot["freshness"] = "current" if snapshot["source_session"] == expected else "historical"
     except Exception:
+        expected = None
         snapshot["freshness"] = "unknown"
+    # Latest-page run health is the current expected session, not the displayed
+    # snapshot date. A stale successful snapshot must still surface today's failure.
+    snapshot["last_attempt"] = (
+        store.last_attempt(source_session=expected) if run is None else None
+    )
     return snapshot
 
 
