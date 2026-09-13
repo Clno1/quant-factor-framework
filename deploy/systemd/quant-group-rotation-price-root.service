@@ -19,6 +19,7 @@ Environment=GROUP_ANALYTICS_ENABLED=true
 Environment=GROUP_ANALYTICS_WEB_ENABLED=false
 ExecStartPre=/home/projects/quant/.venv/bin/python -c "import sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
 ExecStart=/usr/bin/flock --exclusive --wait 10800 /home/projects/quant/data/lake/.broad-production.lock /home/projects/quant/.venv/bin/python /home/projects/quant/scripts/run_group_rotation.py --stage price --refresh --asof latest
+ExecStartPost=-/usr/bin/timeout 120 /home/projects/quant/.venv/bin/python /home/projects/quant/scripts/refresh_rotation_reference.py
 TimeoutStartSec=3h
 Restart=on-failure
 RestartSec=30min

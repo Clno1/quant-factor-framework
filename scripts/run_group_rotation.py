@@ -46,9 +46,11 @@ def load_momentum_report(source_session):
     """Import the momentum source only when the linkage stage actually runs."""
     from src.premarket_digest.momentum import CompletedSessionMomentumSource
     from src.premarket_digest.settings import load_premarket_digest_settings
+    from src.premarket_digest.rotation_momentum_data import load_rotation_momentum_dataset
 
     return CompletedSessionMomentumSource(
-        load_premarket_digest_settings(load_env=False)
+        load_premarket_digest_settings(load_env=False),
+        dataset_loader=load_rotation_momentum_dataset,
     ).load(source_session)
 
 

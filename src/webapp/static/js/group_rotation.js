@@ -375,6 +375,8 @@
       SESSION_MISMATCH: "轮动快照日期与最新收盘不一致，未绘制热力图。",
       STALE_TARGET_SESSION: "US_EQUITY_COVERAGE 不是最新收盘，未绘制热力图。",
       COVERAGE_NOT_PUBLISHED: "覆盖行情尚未发布，热力图留空。",
+      CAP_REFERENCE_UNAVAILABLE: "市值或分类参考尚未就绪、已过期或版本不符；不使用旧缓存填充。",
+      NO_USABLE_MARKET_CAP: "没有可用的正市值，未绘制热力图。",
       PRICE_GAP: "当日价格不足，热力图留空。",
       EMPTY_UNIVERSE: "覆盖成员为空，热力图留空。"
     })[reason] || "热力图暂不可用。";
@@ -459,7 +461,10 @@
     const counts = (heatData.counts && heatData.counts.windows && heatData.counts.windows[String(windowDays)]) || {};
     const eligible = heatData.counts && heatData.counts.eligible;
     if (status) {
-      status.textContent = `覆盖 ${heatData.counts.coverage_current} · 基准ETF ${heatData.counts.benchmark_only} · 可加权 ${eligible} · 图中 ${counts.in_tree ?? "—"} · 无市值 ${counts.no_market_cap ?? "—"} · 无价格 ${counts.no_price ?? "—"} · ${heatData.source_session}`;
+      status.textContent = `覆盖 ${heatData.counts.coverage_current} · 基准ETF ${heatData.counts.benchmark_only} · 股票/ADR ${eligible} · 图中 ${counts.in_tree ?? "—"} · 无市值 ${counts.no_market_cap ?? "—"} · 无价格 ${counts.no_price ?? "—"} · ${heatData.source_session}`;
+      if (heatData.cap_observation) {
+        status.textContent += ` · 市值观测 ${heatData.cap_observation.captured_at}（非历史市值）`;
+      }
     }
     if (crumb) {
       crumb.replaceChildren();

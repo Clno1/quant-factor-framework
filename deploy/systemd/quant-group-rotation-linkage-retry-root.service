@@ -14,6 +14,10 @@ WorkingDirectory=/home/projects/quant
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONPATH=/home/projects/quant
+Environment=OPENBLAS_NUM_THREADS=1
+Environment=OMP_NUM_THREADS=1
+Environment=MKL_NUM_THREADS=1
+Environment=NUMEXPR_NUM_THREADS=1
 EnvironmentFile=-/etc/quant/momentum-alerts.env
 Environment=GROUP_ANALYTICS_ENABLED=true
 Environment=GROUP_ANALYTICS_WEB_ENABLED=false

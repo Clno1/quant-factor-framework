@@ -43,11 +43,20 @@ def _symbols(etf, all_proxies):
     return [etf]
 
 
-def _observe_one(etf, *, holdings_root, cache_root, sessions, end, max_members, refresh_members):
+def summarize_observations(results, holdings_root):
+    succeeded = sum(item["status"] == "SUCCESS" for item in results)
+    status = "SUCCESS" if results and succeeded == len(results) else "PARTIAL" if succeeded else "FAILED"
+    return {"status": status, "succeeded": succeeded, "failed": len(results) - succeeded,
+            "holdings_root": str(holdings_root), "results": results}
+
+
+def _observe_one(etf, *, holdings_root, cache_root, sessions, end, max_members, refresh_members,
+                 securities, reference_id):
     from src.data.fmp import _get
 
     rows = _get("/etf/holdings", {"symbol": etf})
-    observation = normalize_observation(rows, etf, pd.Timestamp.now(tz="UTC"))
+    observation = normalize_observation(rows, etf, pd.Timestamp.now(tz="UTC"),
+                                        securities=securities, reference_id=reference_id)
     if len(observation["members"]) > max_members:
         raise ValueError("Member limit exceeded; increase --max-members explicitly")
     path = save_observation(holdings_root, observation)
@@ -111,28 +120,28 @@ def main(argv=None):
             end.date().isoformat())
     ).tz_localize(None)
     results = []
+    from src.group_analytics.rotation.reference import bound_reference, equity_lookup
+    version, reference, generation = bound_reference()
+    if str(version.target_session) != end.date().isoformat():
+        raise ValueError("Holdings identity reference is stale")
+    securities = equity_lookup(reference["master"])
     for etf in _symbols(args.etf, args.all):
         try:
             results.append(_observe_one(
                 etf, holdings_root=holdings_root, cache_root=args.cache_root,
                 sessions=sessions, end=end, max_members=args.max_members,
                 refresh_members=args.refresh_members,
+                securities=securities, reference_id=generation.generation_id,
             ))
         except Exception as exc:
-            results.append({"etf": etf, "status": "FAILED", "error_type": type(exc).__name__})
-    succeeded = sum(item["status"] == "SUCCESS" for item in results)
-    summary = {
-        "status": "SUCCESS" if succeeded else "FAILED",
-        "succeeded": succeeded,
-        "failed": len(results) - succeeded,
-        "holdings_root": str(holdings_root),
-        "results": results,
-    }
+            results.append({"etf": etf, "status": "FAILED", "error_type": type(exc).__name__,
+                            "error_code": getattr(exc, "code", "HOLDINGS_OBSERVATION_FAILED")})
+    summary = summarize_observations(results, holdings_root)
     if args.output is not None:
         from src.group_analytics.adapters import _atomic_json
         _atomic_json(args.output / "report.json", summary)
     print(encoded(summary).decode())
-    return 0 if succeeded else 1
+    return 0 if summary["status"] == "SUCCESS" else 1
 
 
 if __name__ == "__main__":

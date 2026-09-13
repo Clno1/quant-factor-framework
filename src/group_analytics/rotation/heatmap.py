@@ -56,11 +56,6 @@ def unavailable(reason, **extra):
     return payload
 
 
-def _label(value, fallback=UNKNOWN_CLASSIFICATION):
-    text = str(value or "").strip()
-    return text or fallback
-
-
 def _href(ticker):
     return "/breakouts/" + quote(str(ticker), safe="")
 
@@ -102,7 +97,8 @@ def _node_returns(frame):
 def build_coverage_heatmap(members, prices, *, source_session, windows=HEATMAP_WINDOWS, sessions=None):
     """Build a two-level cap-weighted tree. Does not mutate production rows."""
     source = pd.Timestamp(source_session).normalize()
-    universe = members.copy()
+    from .reference import current_members
+    universe = current_members(members)
     universe["ticker"] = universe["ticker"].astype(str).str.strip().str.upper()
     universe = universe.loc[universe["ticker"].ne("")].drop_duplicates("ticker", keep="last")
     if "is_current_member" in universe.columns:
@@ -198,6 +194,8 @@ def build_coverage_heatmap(members, prices, *, source_session, windows=HEATMAP_W
         "eligible": int(len(eligible)),
         "windows": window_counts,
     }
+    if usable.empty:
+        return unavailable("NO_USABLE_MARKET_CAP", source_session=source.date().isoformat(), counts=counts)
     return {
         "version": HEATMAP_VERSION,
         "status": "available",
@@ -224,7 +222,7 @@ def _session_lookback(source, *, calendar=None):
     return pd.DatetimeIndex(sessions).normalize()
 
 
-def load_coverage_heatmap(*, source_session=None, historical=False, reader=None, now=None, calendar=None):
+def load_coverage_heatmap(*, source_session=None, historical=False, reader=None, now=None, calendar=None, reference_root=None):
     """Read published coverage. Never calls a market-data provider."""
     if historical:
         return unavailable("HISTORICAL_VIEW_FORBIDDEN", source_session=source_session)
@@ -247,7 +245,11 @@ def load_coverage_heatmap(*, source_session=None, historical=False, reader=None,
                 source_session=session,
                 coverage_session=target.isoformat(),
             )
-        members = market.load_universe(US_EQUITY_COVERAGE, current_only=True, version=version)
+        from .capitalization import heatmap_members
+        try:
+            members, cap_observation = heatmap_members(market, version, root=reference_root, now=now)
+        except (OSError, ValueError, KeyError, TypeError):
+            return unavailable("CAP_REFERENCE_UNAVAILABLE", source_session=session)
         if members is None or members.empty:
             return unavailable("EMPTY_UNIVERSE", source_session=session)
         sessions = _session_lookback(session, calendar=calendar)
@@ -261,6 +263,8 @@ def load_coverage_heatmap(*, source_session=None, historical=False, reader=None,
         )
         if prices is None or prices.empty:
             return unavailable("PRICE_GAP", source_session=session)
-        return build_coverage_heatmap(members, prices, source_session=session, sessions=sessions)
+        result = build_coverage_heatmap(members, prices, source_session=session, sessions=sessions)
+        result["cap_observation"] = cap_observation
+        return result
     except (NoPublishedDataError, DataFoundationError, FileNotFoundError, OSError, ValueError, KeyError, TypeError):
         return unavailable("COVERAGE_NOT_PUBLISHED", source_session=session)

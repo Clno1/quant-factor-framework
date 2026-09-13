@@ -35,43 +35,103 @@ def _finite(value):
     return number if math.isfinite(number) else None
 
 
-def normalize_observation(rows, symbol, captured_at):
+class HoldingsValidationError(ValueError):
+    def __init__(self, code):
+        self.code = code
+        super().__init__(code)
+
+
+def _non_equity_kind(row):
+    """Conservative provider evidence, not a general company-name classifier."""
+    asset = str(row.get("asset") or "").upper()
+    name = str(row.get("name") or "").strip().upper()
+    cusip = str(row.get("securityCusip") or "").upper()
+    if (cusip.startswith("ADI") and re.search(r"(?:MAR|JUN|SEP|DEC)\d{2}$", name)):
+        return "derivative"
+    if not asset:
+        if name in {"CASH", "USD CASH", "-USD CASH-", "OTHER/CASH", "US DOLLAR", "EURO",
+                    "SWISS FRANC", "JAPANESE YEN", "CANADIAN DOLLAR", "TAIWAN DOLLAR",
+                    "KOREAN WON", "POUND STERLING", "CHINESE YUAN RENMINBI",
+                    "HONG KONG DOLLAR", "AUSTRALIAN DOLLAR", "SINGAPORE DOLLAR"}:
+            return "cash_fx"
+        if name == "OTHER PAYABLE & RECEIVABLES" or name.startswith("CASH COLLATERAL "):
+            return "cash_accounting"
+        if cusip in {"924QSGII3", "066922477"}:
+            return "money_market"
+        if re.search(r"E-MINI.*(?:MAR|JUN|SEP|DEC)\d{2}$", name):
+            return "derivative"
+    return None
+
+
+def normalize_observation(rows, symbol, captured_at, *, securities=None, reference_id=None):
+    """Normalize account rows without treating excluded balances as equities.
+
+    Scheduled ingestion MUST supply the bound securities lookup. None preserves
+    standalone/legacy research compatibility and is explicitly labelled as such.
+    Neither policy makes these observations historical PIT data.
+    """
     captured = pd.Timestamp(captured_at)
     if captured.tzinfo is None or not isinstance(rows, list) or not rows:
-        raise ValueError("Need dated nonempty holdings observation")
+        raise HoldingsValidationError("EMPTY_OR_UNDATED_HOLDINGS")
     members, excluded, seen = [], [], set()
     for row in rows:
         if row.get("symbol") != symbol:
-            raise ValueError("Holding fund mismatch")
+            raise HoldingsValidationError("HOLDING_FUND_MISMATCH")
         asset = str(row.get("asset") or "")
         try:
             weight = float(row["weightPercentage"])
         except (KeyError, TypeError, ValueError):
-            raise ValueError("Missing holding weight") from None
-        if not math.isfinite(weight) or weight < 0 or weight > 100:
-            raise ValueError("Invalid holding weight")
+            raise HoldingsValidationError("MISSING_HOLDING_WEIGHT") from None
+        if not math.isfinite(weight) or abs(weight) > 100:
+            raise HoldingsValidationError("INVALID_HOLDING_WEIGHT")
         identity = str(row.get("isin") or row.get("securityCusip") or "")
-        if asset in seen:
-            raise ValueError("Duplicate/ambiguous holding symbol")
-        seen.add(asset)
+        kind = _non_equity_kind(row)
+        if kind:
+            excluded.append({"asset": asset, "name": str(row.get("name") or ""),
+                             "weight_pct": weight, "reason": kind})
+            continue
+        if weight < 0:
+            raise HoldingsValidationError("NEGATIVE_EQUITY_OR_UNRESOLVED_WEIGHT")
         # Cash/derivatives and exchange-suffixed listings are not silently
         # mapped onto US equity sessions. Retain them in excluded evidence.
         if not identity or not re.fullmatch(r"[A-Z][A-Z0-9-]{0,14}", asset):
-            excluded.append({"asset": asset, "weight_pct": weight, "reason": "cash_or_unresolved_listing"})
+            excluded.append({"asset": asset, "name": str(row.get("name") or ""),
+                             "weight_pct": weight, "reason": "UNRESOLVED_LISTING"})
             continue
-        members.append({"ticker": asset, "security_id": identity, "weight_pct": weight})
+        security_id = identity
+        if securities is not None:
+            match = securities.get(asset)
+            if match is None:
+                excluded.append({"asset": asset, "weight_pct": weight, "reason": "UNRESOLVED_US_EQUITY"})
+                continue
+            pairs = [(str(row.get(k) or ""), str(match.get(m) or ""))
+                     for k, m in (("isin", "isin"), ("securityCusip", "cusip"))]
+            comparable = [(a, b) for a, b in pairs if a and b]
+            if not comparable or any(a != b for a, b in comparable):
+                excluded.append({"asset": asset, "weight_pct": weight, "reason": "IDENTITY_UNRESOLVED_OR_CONFLICT"})
+                continue
+            security_id = match["security_id"]
+        if security_id in seen or asset in {m["ticker"] for m in members}:
+            raise HoldingsValidationError("DUPLICATE_EQUITY_IDENTITY")
+        seen.add(security_id)
+        members.append({"ticker": asset, "security_id": security_id, "weight_pct": weight})
     if not members:
-        raise ValueError("No resolvable equity holdings")
+        raise HoldingsValidationError("NO_RESOLVABLE_EQUITY_HOLDINGS")
     total = sum(m["weight_pct"] for m in members) + sum(x["weight_pct"] for x in excluded)
     if not 95 <= total <= 105:
-        raise ValueError("Holding weights suggest partial or inconsistent response")
+        raise HoldingsValidationError("INCONSISTENT_TOTAL_HOLDING_WEIGHT")
     return {"schema_version": HOLDINGS_SCHEMA, "etf": symbol,
             "source": "FMP /stable/etf/holdings", "captured_at": captured.isoformat(),
             "provider_updated_at_raw": sorted({str(r.get("updatedAt") or "") for r in rows}),
             "holdings_effective_at": None, "point_in_time": False,
             "status": "OBSERVATION_ONLY_NO_PROVIDER_DATE",
+            "identity_policy": "BOUND_SECURITY_MASTER" if securities is not None else "PROVIDER_ONLY_LEGACY",
+            "normalization_version": "holdings-identity-v2",
+            "security_master_generation_id": reference_id,
             "response_sha256": hashlib.sha256(encoded(rows)).hexdigest(),
-            "members": members, "excluded": excluded, "reported_weight_pct": total}
+            "members": members, "excluded": excluded, "reported_weight_pct": total,
+            "excluded_gross_weight_pct": sum(abs(x["weight_pct"]) for x in excluded),
+            "negative_excluded_weight_pct": sum(x["weight_pct"] for x in excluded if x["weight_pct"] < 0)}
 
 
 def _member_price_series(frame):
@@ -241,6 +301,8 @@ def holdings_fingerprint(observations, *, now=None):
             "captured_at": observation.get("captured_at"),
             "applied": not stale,
             "stale": stale,
+            "normalized_sha256": hashlib.sha256(encoded({key: observation.get(key) for key in
+                ("members", "excluded", "identity_policy", "security_master_generation_id")})).hexdigest(),
         })
     return hashlib.sha256(encoded(payload)).hexdigest() if payload else None
 
