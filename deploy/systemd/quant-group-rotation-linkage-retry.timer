@@ -1,0 +1,12 @@
+[Unit]
+Description=Independent premarket retry of rotation candidate linkage
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 07:00:00 America/New_York
+Persistent=true
+AccuracySec=30s
+RandomizedDelaySec=15s
+Unit=quant-group-rotation-linkage-retry.service
+
+[Install]
+WantedBy=timers.target

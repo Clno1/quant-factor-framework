@@ -306,14 +306,15 @@ X 轴（月度相对强弱）与 Y 轴（近 5 日相对前 15 日速度）**独
 - `linkage`：不重新计算主题。从 `RotationStore.load()` 读取最新快照，校验 `source_session` 与目标一致，尝试关联，成功则重新 `publish`。
 - `all`：现有行为。
 
-**幂等与不可变性**：`store.publish` 以 `sha256(snapshot)[:16]` 生成 `run_id`，重新关联后 digest 改变 → 产生新 run，旧 run 原样保留；`latest.json` 的 `old["source_session"] <= new` 判断允许同日前移。**架构已支持，无需改 store。**
+**幂等与不可变性**：`store.publish` 以 `sha256(snapshot)[:16]` 生成 `run_id`，重新关联后 digest 改变 → 产生新 run，旧 run 原样保留；`latest.json` 的 `old["source_session"] <= new` 判断允许同日前移。linkage 发布必须传入 `expected_parent`，在写指针的同一把锁内比较。
 
 `linkage` 阶段必须满足：
 
-- 若 `candidate_linkage.status == "available"` 且 `input_fingerprint` 未变 → 直接返回 `NOOP`，不产生新 run。
+- 若 `candidate_linkage.status == "available"` 且关联层 `linkage_fingerprint` 未变 → 直接返回 `NOOP`，不产生新 run。该指纹覆盖匹配、过滤、排序和展示实际使用的字段（成员、行业、status、pivot、close、base_pass、score 等），不只是动量报告的 `input_fingerprint`。
 - 若动量报告仍不可用 → 记录失败原因码，**不覆盖**现有快照。
 - 重复执行不产生重复 run。
 - `store.load()` 返回值带 `run_id`，重新 `publish` 前必须 `snapshot.pop("run_id", None)`（现有 `run_group_rotation.py` 已有此处理，拆分阶段后不能丢）。
+- `RotationStore.publish(..., expected_parent=...)` 在**同一把发布锁内**比较价格父版本后再写 `latest`。父版本含 `source_session`、发布指纹和 `run_id`。不一致则 `ROTATION_PARENT_MOVED` 且 `record_failure=False`，避免校验通过后、写入前被更新的价格快照覆盖。
 
 #### P0.1.1 重复 run 抑制（必做，否则每天产生冗余快照）
 
@@ -328,15 +329,17 @@ X 轴（月度相对强弱）与 Y 轴（近 5 日相对前 15 日速度）**独
                                            主题定义、背景证据
 持仓观测指纹     holdings_fingerprint       当前持仓 JSON（不含成员价）
 广度测量指纹     holdings_measurement_fingerprint
-                                           实际用于 overlay 的成员价格
+                                           实际用于 MA20 的 20 个交易日价格、日期和缺失状态
 资金流指纹       flows_fingerprint
 发布指纹         publish_fingerprint        以上各项的组合
 ```
 
-若 latest 的 `source_session` 与 `publish_fingerprint` 均相同 → 跳过发布，返回 NOOP。
-`amount_verified` 翻转、只修正一只成员价格、背景证据或主题定义变化，都必须产生新 run。不能只比较 `input_fingerprint` + 持仓 JSON。
+若 latest 的 `source_session` 与 `publish_fingerprint` 均相同 → 跳过发布，返回 NOOP。NOOP **不**创建新 run，但必须把该阶段的 `last_attempt` 记为成功检查，并区分 price / linkage，避免「计算成功且内容相同」后页面仍显示上次 FAILED。
+`amount_verified` 翻转、只修正一只成员价格（含窗口内非最后一日）、背景证据或主题定义变化，都必须产生新 run。不能只比较 `input_fingerprint` + 持仓 JSON，也不能只哈希最后一日收盘价。
 
-关联阶段在 `publish` 前必须重读 `latest.json`：若价格父版本（`publish_fingerprint`）已变，返回 `ROTATION_PARENT_MOVED` 且 `record_failure=False`，避免旧价格快照派生的关联覆盖较新价格。
+关联阶段在 `publish` 的文件锁内校验价格父版本：若已变，返回 `ROTATION_PARENT_MOVED` 且 `record_failure=False`，避免旧价格快照派生的关联覆盖较新价格。锁外预读不能作为唯一保证。
+
+关联每次执行先清除上次关联产生的 `NO_QUALIFIED_CANDIDATE` / `LINKAGE_FAILED`，再按本次结果重建；价格引擎写入 `production.evidence_gaps` 的缺口保留。
 
 #### P0.2 定时器调整
 
@@ -359,7 +362,7 @@ Unit=quant-group-rotation-price.service
 
 盘前摘要三个时点必须分开：
 
-1. 关联重试截止（07:00 ET `ExecStartPre` linkage）
+1. 关联重试（07:00 ET 独立 `quant-group-rotation-linkage-retry.timer`，`TimeoutStartSec=15min`；**不是** `quant-premarket-prepare` 的 `ExecStartPre`，摘要准备不以它完成为前提）
 2. 允许降级为无候选摘要的时点（仍可预生成）
 3. 消息最终冻结时点（进入 SENDING/SENT）
 
@@ -398,7 +401,7 @@ Unit=quant-group-rotation-price.service
 
 **回退（完整步骤，停用新 timer 不等于回到原行为）**：
 
-1. 停止 writer：`quant-group-rotation-price.timer`、`quant-group-rotation-holdings.timer`；13:15 linkage 也先停，避免只关联不写价格。
+1. 停止 writer：`quant-group-rotation-price.timer`、`quant-group-rotation-holdings.timer`、`quant-group-rotation-linkage-retry.timer`；13:15 linkage 也先停，避免只关联不写价格。
 2. 恢复代码版本到仍使用 `--stage all`（或旧单进程价格+关联）的 git 与对应 unit/drop-in。
 3. 若回退代码只能读 v2.1：把 `latest.json` 指回最后一份 `rotation.v2.1` run；不要让旧读取器去读 v3 schema。新代码能读 v2 **不等于**旧代码能读 v3。
 4. 未发送摘要：确认 outbox 中 PENDING 是否仍指向将下线的 v3 run；必要时重建或跳过当日板块频道。
@@ -469,7 +472,7 @@ speed_axis    = "accelerating" if y >  δy
 - **没有 `cooling` 档**。"领先但降温"由 `speed_axis=decelerating` 独立表达，不占用优先级档位 —— 这正是"一个标签只回答一个问题"。降温的领先主题仍属 `focus`，排序时靠 RS20 和速度列自然下沉。
 - `defensive`（相对抗跌）对应 [V2 研究稿 §6.3](sector_rotation_v2_research.md) 已确立的约束：相对排名第一但绝对趋势向下时只报"相对抗跌"，不进默认强势方向。此档不可省略，否则"跑赢但在跌"会被误读成可研究方向。
 
-档内排序沿用当前默认的 RS20 降序，可切 RS5/RS60。优先级只决定分组，不决定组内顺序。
+档内排序沿用当前默认的 RS20 降序，可切 RS5/RS60。**页面主表不先按优先级分组**：用户选定指标后对当前 cohort 全表排序。优先级是每行的研究建议标签，并用于 Discord「优先观察」卡片筛选，不决定主表行序。这是有意的产品行为，与「优先级只决定分组」的早期表述以页面为准。
 
 关键差异：
 
@@ -928,6 +931,7 @@ P5.2 增量验证         （在 P1 / P2 / P3 各自结束时分别跑一次）
 | 2026-09-13 | P4.3：六个 ETF 代理绝对收益条（TLT/IEF/UUP/GLD/USO/DBC）；标 ETF 代理，不是指数或现货；不进优先级；不做 FRED |
 | 2026-09-13 | 呈现层收口：新增 §11 阶段性总结。P4 代码已齐，不视为 P0–P4 验收通过，不得开始 FRED |
 | 2026-09-13 | SG 部署前合入 `origin/main`（`44d5062`）：EP 消费者验收、茶杯柄隔离与 coverage 修复；与轮动无文件冲突 |
+| 2026-09-13 | 可靠性闭环：关联重试从盘前 `ExecStartPre` 拆成独立限时服务；`publish` 锁内校验父版本；广度指纹覆盖 20 日窗口；关联自有指纹；NOOP 记成功检查；关联缺口按本次结果重建。页面主表按选定指标全表排序，计划与产品对齐 |
 
 ---
 
@@ -940,7 +944,7 @@ P5.2 增量验证         （在 P1 / P2 / P3 各自结束时分别跑一次）
 | 阶段 | 状态 | 要点 |
 |---|---|---|
 | 计划 | 已写，并按外部审阅修订原则 | 本文 + 自审 + 发布/数据链缺口修订 |
-| P0 | **实现存在，关键闭环与真实数据验收未完成** | 价格/关联拆分已有；17:30 是启动不是完成承诺；未发送摘要可换版；轮询更新 freshness/last_attempt；linkage 运维读 RotationStore；父版本校验；完整回退步骤见 P0。SG 观察未做 |
+| P0 | **实现存在，关键闭环已按审阅补齐，真实数据验收未完成** | 价格/关联拆分已有；17:30 是启动不是完成承诺；未发送摘要可换版；轮询更新 freshness/last_attempt；linkage 运维读 RotationStore；父版本在发布锁内校验；关联重试独立于盘前准备。SG 观察未做 |
 | P1 | **实现存在，真实量价抽样未完成** | 双轴已落地；canonical close×volume 计算；`amount_audit_status=SYNTHETIC_GATES_ONLY`；缺少 close 不再回退 adj_close。6 标的 FMP 抽样未做 |
 | P2 | **接入管线存在，日度成员价格链和覆盖展示已按审阅修正，活样本未做** | 名单周更、成员价日更；部分覆盖同时显示已测基金权重与样本内参与；历史 asof 不用当前持仓。17 ETF 活样本与「周任务后连续两日广度」未在 SG 跑过 |
 | P3 | **接口审计未通过，只有禁用状态与预留管线，不能称真实净申赎功能已交付** | 篮子「不适用」，ETF「—」；无份额/NAV 拉取 |
@@ -959,11 +963,14 @@ P5.2 增量验证         （在 P1 / P2 / P3 各自结束时分别跑一次）
 3. `publish_fingerprint` 覆盖配置、持仓观测、成员价格与资金流；NOOP 不再只比行情面板。
 4. 部分持仓展示已测基金权重 +「仅部分持仓观察」；历史 asof 拒绝当前持仓配过去价格。
 5. 未发送的板块摘要可按 payload 变化换版；SENT 不换。
-6. linkage `publish` 前校验价格父版本。
-7. 未钉住的 latest 轮询更新 freshness / last_attempt。
+6. linkage `publish` 在同一把文件锁内校验价格父版本。
+7. 未钉住的 latest 轮询更新 freshness / last_attempt；NOOP 也记录该阶段成功检查。
 8. `group_analytics` 运维 job 改为 `group_rotation` 适配器，看 `candidate_linkage` 而不是旧单日板块产物。
 9. 价格/持仓 unit 增加 FMP `EnvironmentFile`；价格层内存与成员日更匹配。
 10. 验证 `make_panel` 在存在 close 时走 execution_close；研究下载仍单独命名。
+11. 07:00 ET 关联重试为独立 `quant-group-rotation-linkage-retry` 服务，盘前 prepare 不再 `ExecStartPre` 等待它。
+12. `holdings_measurement_fingerprint` 覆盖 MA20 所用 20 个交易日；关联层使用自有 `linkage_fingerprint`。
+13. 每次关联清除并重建 `NO_QUALIFIED_CANDIDATE` / `LINKAGE_FAILED`，保留引擎缺口。
 
 ### 10.3 刻意保持的行为
 

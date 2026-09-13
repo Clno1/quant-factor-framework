@@ -19,9 +19,14 @@ if str(ROOT) not in sys.path:
 
 from src.alerts.config import load_local_env
 from src.group_analytics.rotation.service import run_rotation
-from src.group_analytics.rotation.store import RotationStore, encoded
+from src.group_analytics.rotation.store import (
+    RotationParentMoved,
+    RotationStore,
+    encoded,
+    price_parent_identity,
+)
 from src.group_analytics.rotation.themes import Theme
-from src.premarket_digest.rotation import attach_candidates
+from src.premarket_digest.rotation import attach_candidates, candidate_linkage_fingerprint
 
 LINKAGE_PENDING_REASON = "个股关联待后续阶段"
 SAFE_ERROR_CODE = re.compile(r"^[A-Z0-9_]{1,80}$")
@@ -88,10 +93,7 @@ def same_price_inputs(existing, snapshot):
 
 
 def price_identity(snapshot):
-    return (
-        snapshot.get("source_session"),
-        snapshot.get("publish_fingerprint") or snapshot.get("input_fingerprint"),
-    )
+    return price_parent_identity(snapshot)
 
 
 def _load_latest(store):
@@ -142,10 +144,14 @@ def run_price_stage(
         return _summary(snapshot, status="DRY_RUN", run_id=None, stage="price") | {"snapshot": snapshot}
     existing = _load_latest(store)
     if existing is not None and same_price_inputs(existing, snapshot):
+        store.record_check(
+            existing.get("source_session"), stage="price", published=False,
+            run_id=existing.get("run_id"),
+        )
         return _summary(existing, status="NOOP", run_id=existing.get("run_id"), stage="price") | {
             "snapshot": existing,
         }
-    run_id = store.publish(snapshot)
+    run_id = store.publish(snapshot, stage="price")
     published = {**snapshot, "run_id": run_id}
     return _summary(published, status="SUCCESS", run_id=run_id, stage="price") | {"snapshot": published}
 
@@ -168,11 +174,17 @@ def run_linkage_stage(*, asof, store, dry_run, snapshot=None):
     original_generated_at = snapshot.get("generated_at")
     original_run_id = snapshot.get("run_id")
     linkage = snapshot.get("candidate_linkage") or {}
+    expected_parent = price_identity(snapshot)
     try:
         report = load_momentum_report(snapshot["source_session"])
     except Exception as exc:
         reason = f"同日动量扫描未通过数据门槛（{safe_error_code(exc)}），主题计算不受影响"
         if linkage.get("status") == "available":
+            if not dry_run:
+                store.record_check(
+                    snapshot.get("source_session"), stage="linkage", published=False,
+                    run_id=original_run_id,
+                )
             return _summary(snapshot, status="NOOP", run_id=original_run_id, stage="linkage") | {
                 "snapshot": snapshot,
             }
@@ -180,8 +192,14 @@ def run_linkage_stage(*, asof, store, dry_run, snapshot=None):
             snapshot, status="LINKAGE_UNAVAILABLE", run_id=original_run_id, stage="linkage",
             extra={"reason": reason},
         ) | {"snapshot": snapshot}
-    new_fp = report.get("input_fingerprint") if isinstance(report, dict) else None
-    if linkage.get("status") == "available" and linkage.get("input_fingerprint") == new_fp:
+    new_fp = candidate_linkage_fingerprint(snapshot, report)
+    if linkage.get("status") == "available" and linkage.get("linkage_fingerprint") and (
+            linkage.get("linkage_fingerprint") == new_fp):
+        if not dry_run:
+            store.record_check(
+                snapshot.get("source_session"), stage="linkage", published=False,
+                run_id=original_run_id,
+            )
         return _summary(snapshot, status="NOOP", run_id=original_run_id, stage="linkage") | {
             "snapshot": snapshot,
         }
@@ -197,14 +215,10 @@ def run_linkage_stage(*, asof, store, dry_run, snapshot=None):
     attached["generated_at"] = original_generated_at
     if dry_run:
         return _summary(attached, status="DRY_RUN", run_id=None, stage="linkage") | {"snapshot": attached}
-    latest = _load_latest(store)
-    if latest is not None and price_identity(latest) != price_identity(working):
-        raise RotationStageError(
-            "ROTATION_PARENT_MOVED",
-            "关联期间价格快照已被更新的价格版本替换，未覆盖较新结果",
-            record_failure=False,
-        )
-    run_id = store.publish(attached)
+    try:
+        run_id = store.publish(attached, expected_parent=expected_parent, stage="linkage")
+    except RotationParentMoved as exc:
+        raise RotationStageError("ROTATION_PARENT_MOVED", str(exc), record_failure=False) from exc
     published = {**attached, "run_id": run_id}
     return _summary(published, status="SUCCESS", run_id=run_id, stage="linkage") | {"snapshot": published}
 
@@ -290,14 +304,20 @@ def main(argv=None):
         return 0
     except RotationStageError as exc:
         if not args.dry_run and exc.record_failure:
-            store.failure(failure_source_session(args.asof), exc.code)
+            store.failure(
+                failure_source_session(args.asof), exc.code,
+                stage=args.stage if args.stage in {"price", "linkage"} else None,
+            )
         print(json.dumps({"status": "FAILED", "error_type": exc.code,
                           "message": "轮动构建失败；检查缓存、日期和配置。未覆盖成功快照。"}, ensure_ascii=False),
               file=sys.stderr)
         return 1
     except Exception as exc:
         if not args.dry_run:
-            store.failure(failure_source_session(args.asof), type(exc).__name__)
+            store.failure(
+                failure_source_session(args.asof), type(exc).__name__,
+                stage=args.stage if args.stage in {"price", "linkage"} else None,
+            )
         print(json.dumps({"status": "FAILED", "error_type": type(exc).__name__,
                           "message": "轮动构建失败；检查缓存、日期和配置。未覆盖成功快照。"}, ensure_ascii=False),
               file=sys.stderr)

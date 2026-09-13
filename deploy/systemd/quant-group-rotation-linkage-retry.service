@@ -1,0 +1,36 @@
+[Unit]
+Description=Retry rotation candidate linkage before the premarket digest, independently of payload prepare
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=40min
+StartLimitBurst=2
+
+[Service]
+Type=oneshot
+User=quant
+Group=quant
+WorkingDirectory=/opt/quant
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/opt/quant
+EnvironmentFile=-/etc/quant/momentum-alerts.env
+Environment=GROUP_ANALYTICS_ENABLED=true
+Environment=GROUP_ANALYTICS_WEB_ENABLED=false
+ExecStartPre=/opt/quant/.venv/bin/python -c "import sys; assert sys.version_info >= (3, 11), 'Python 3.11+ required'"
+ExecStart=/usr/bin/flock --exclusive --wait 60 /opt/quant/data/lake/.broad-production.lock /opt/quant/.venv/bin/python /opt/quant/scripts/run_group_rotation.py --stage linkage --asof latest
+TimeoutStartSec=15min
+Restart=on-failure
+RestartSec=10min
+MemoryHigh=400M
+MemoryMax=550M
+MemorySwapMax=0
+CPUQuota=100%
+TasksMax=64
+OOMPolicy=stop
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

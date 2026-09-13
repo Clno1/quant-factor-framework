@@ -10,6 +10,7 @@ from src.group_analytics.rotation.holdings import (
     format_holdings_breadth_text,
     is_observation_stale,
     load_latest_observations,
+    member_measurement_fingerprint,
     normalize_observation,
     observation_breadth,
     save_observation,
@@ -180,6 +181,22 @@ def test_close_only_member_frames_still_measure():
     result = observation_breadth(obs, frames, dates)
     assert result["above_ma20_pct"] == 100
     assert result["eligible_members"] == 5
+
+
+def test_prior_session_price_changes_measurement_fingerprint_and_breadth():
+    obs = normalize_observation(rows(), "SMH", "2026-09-08T18:00:00Z")
+    dates = pd.bdate_range("2026-08-01", periods=21)
+    frames = {m["ticker"]: pd.DataFrame({"adj_close": list(range(100, 121))}, index=dates)
+              for m in obs["members"]}
+    before_fp = member_measurement_fingerprint(frames, dates)
+    before = observation_breadth(obs, frames, dates)
+    assert before["above_ma20_pct"] == 100
+    changed = {symbol: frame.copy() for symbol, frame in frames.items()}
+    changed["AMD"].loc[dates[-2], "adj_close"] = 10000
+    after_fp = member_measurement_fingerprint(changed, dates)
+    after = observation_breadth(obs, changed, dates)
+    assert after_fp != before_fp
+    assert after["above_ma20_pct"] == 80
 
 
 def test_overlay_price_exception_does_not_abort_later_rows():

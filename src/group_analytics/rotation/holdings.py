@@ -17,6 +17,7 @@ from .store import encoded
 HOLDINGS_SCHEMA = "rotation.holdings-observation.v1"
 HOLDINGS_STALE_CALENDAR_DAYS = 14
 HOLDINGS_NOTE = "当前持仓观测广度（持仓生效日未披露）"
+BREADTH_MA_SESSIONS = 20
 STAMP_NAME = re.compile(r"^[0-9]{8}T[0-9]{6}Z\.json$")
 SAFE_ETF = re.compile(r"^[A-Z][A-Z0-9]{1,9}$")
 UNLINKED_WARNING = "ETF真实持仓广度未接入，不能将趋势代理当成成员比例"
@@ -87,7 +88,7 @@ def observation_breadth(observation, frames, sessions):
     """Evaluate member MA20 on a completed price date, not on a claimed holding date."""
     if observation.get("status") != "OBSERVATION_ONLY_NO_PROVIDER_DATE":
         raise ValueError("Unsupported holdings observation")
-    if len(sessions) < 20:
+    if len(sessions) < BREADTH_MA_SESSIONS:
         raise ValueError("Need 20 exchange sessions")
     symbols = [m["ticker"] for m in observation["members"]]
     series = {}
@@ -99,7 +100,7 @@ def observation_breadth(observation, frames, sessions):
             series[symbol] = prices
     table = clean_table(pd.DataFrame(series), sessions)
     table = table.reindex(columns=symbols).where(lambda f: f > 0)
-    ma = table.rolling(20, min_periods=20).mean().iloc[-1]
+    ma = table.rolling(BREADTH_MA_SESSIONS, min_periods=BREADTH_MA_SESSIONS).mean().iloc[-1]
     last = table.iloc[-1]
     valid = last.notna() & ma.notna()
     above = last.gt(ma) & valid
@@ -222,32 +223,35 @@ def holdings_fingerprint(observations, *, now=None):
 
 
 def member_measurement_fingerprint(frames, sessions):
+    """Hash the same 20-session window observation_breadth uses for MA20."""
     if not frames or sessions is None or len(sessions) == 0:
         return None
-    last = pd.Timestamp(sessions[-1]).tz_localize(None).normalize()
-    payload = []
-    for symbol in sorted(frames):
-        frame = frames[symbol]
-        series = _member_price_series(frame) if isinstance(frame, pd.DataFrame) else None
-        value = None
-        rows = int(len(frame)) if isinstance(frame, pd.DataFrame) else 0
-        columns = sorted(map(str, frame.columns)) if isinstance(frame, pd.DataFrame) else []
-        if series is not None and not series.empty:
-            aligned = series.copy()
-            aligned.index = pd.DatetimeIndex(aligned.index).tz_localize(None).normalize()
-            if last in aligned.index:
-                raw = aligned.loc[last]
-                if isinstance(raw, pd.Series):
-                    raw = raw.iloc[-1]
-                value = _finite(raw)
-        payload.append({
-            "symbol": symbol,
-            "last_session": last.date().isoformat(),
-            "value": value,
-            "rows": rows,
-            "columns": columns,
-        })
-    return hashlib.sha256(encoded(payload)).hexdigest()
+    series = {}
+    for symbol, frame in frames.items():
+        prices = _member_price_series(frame) if isinstance(frame, pd.DataFrame) else None
+        if prices is not None and not prices.empty:
+            series[str(symbol)] = prices
+    if series:
+        table = clean_table(pd.DataFrame(series), sessions).where(lambda frame: frame > 0)
+        window = table.iloc[-BREADTH_MA_SESSIONS:]
+        session_ids = [pd.Timestamp(idx).date().isoformat() for idx in window.index]
+    else:
+        window = None
+        tail = list(sessions[-BREADTH_MA_SESSIONS:]) if len(sessions) >= BREADTH_MA_SESSIONS else list(sessions)
+        session_ids = [pd.Timestamp(idx).date().isoformat() for idx in tail]
+    members = []
+    for symbol in sorted(map(str, frames)):
+        if window is not None and symbol in window.columns:
+            values, missing = [], []
+            for raw in window[symbol].tolist():
+                number = _finite(raw)
+                values.append(number)
+                missing.append(number is None)
+        else:
+            values = [None] * len(session_ids)
+            missing = [True] * len(session_ids)
+        members.append({"symbol": symbol, "values": values, "missing": missing})
+    return hashlib.sha256(encoded({"sessions": session_ids, "members": members})).hexdigest()
 
 
 def format_holdings_breadth_text(overlay):

@@ -609,6 +609,9 @@ def test_rotation_page_freshness_contract():
     assert "已测基金权重" in js
     assert "PARTIAL_HOLDINGS_COVERAGE" in js
     assert "仅部分持仓观察" in js
+    cmp = js.split("function cmpRows")[1].split("function timelineDetail")[0]
+    assert "b.production[sort]" in cmp
+    assert "priority" not in cmp
 
 
 def test_group_rotation_price_adapter_reads_store(tmp_path):
@@ -1075,3 +1078,147 @@ def test_linkage_ops_adapter_requires_available_candidates(tmp_path):
         result = collect_research_evidence([job], now=now, observed_at=now.isoformat())
     assert result.snapshots[0].status == JobStatus.SUCCESS
     assert result.snapshots[0].stage == "主题个股关联"
+
+
+def test_publish_expected_parent_is_checked_inside_lock(tmp_path):
+    from src.group_analytics.rotation.store import RotationParentMoved, price_parent_identity
+    store = RotationStore(tmp_path)
+    first = attach_candidates(snapshot())
+    run_a = store.publish(first, stage="price")
+    parent = price_parent_identity(store.load())
+    second = copy.deepcopy(first)
+    second["publish_fingerprint"] = "price-b"
+    second["notes"] = ["moved"]
+    run_b = store.publish(second, stage="price")
+    assert run_b != run_a
+    linked = attach_candidates(copy.deepcopy(first), {
+        "source_session": first["source_session"], "input_fingerprint": "fp",
+        "universe": "SP500", "rows": [],
+    })
+    with pytest.raises(RotationParentMoved):
+        store.publish(linked, expected_parent=parent, stage="linkage")
+    assert store.load()["run_id"] == run_b
+    assert store.last_attempt()["checks"]["price"]["status"] == "SUCCESS"
+    assert "linkage" not in store.last_attempt()["checks"] or store.last_attempt()["checks"].get("linkage", {}).get("status") != "FAILED"
+
+
+def test_price_noop_after_failure_records_success(tmp_path, capsys):
+    from scripts.run_group_rotation import main
+    patches, root = _price_cli_patches(tmp_path)
+    nows = iter(["2026-09-09T01:00:00Z", "2026-09-09T03:00:00Z"])
+    with patches[0], patches[1], \
+         patch("scripts.run_group_rotation.run_rotation",
+               side_effect=lambda **kw: run_rotation(now=next(nows), **kw)):
+        assert main(["--stage", "price", "--asof", "2026-09-08", "--output-root", str(root)]) == 0
+        first = json.loads(capsys.readouterr().out)
+        store = RotationStore(root)
+        store.failure("2026-09-08", "TransientError", stage="price")
+        assert store.last_attempt()["status"] == "FAILED"
+        assert main(["--stage", "price", "--asof", "2026-09-08", "--output-root", str(root)]) == 0
+        second = json.loads(capsys.readouterr().out)
+    assert first["status"] == "SUCCESS"
+    assert second["status"] == "NOOP"
+    attempt = RotationStore(root).last_attempt()
+    assert attempt["status"] == "SUCCESS"
+    assert attempt["checks"]["price"]["status"] == "SUCCESS"
+    assert attempt["checks"]["price"]["published"] is False
+    assert len(list((root / "runs").glob("*.json"))) == 1
+
+
+def test_linkage_pivot_correction_is_not_noop(tmp_path):
+    from scripts.run_group_rotation import run_linkage_stage
+    store = RotationStore(tmp_path)
+    pending = attach_candidates(snapshot())
+    store.publish(pending, stage="price")
+    session = pending["source_session"]
+    row = {"ticker": "S0", "data_date": session, "status": "READY", "close": 100,
+           "pivot": 100, "score": 88, "base_pass": True}
+    report = {"source_session": session, "input_fingerprint": "same-fp", "universe": "SP500", "rows": [row]}
+    with patch("scripts.run_group_rotation.load_momentum_report", return_value=report):
+        first = run_linkage_stage(asof=session, store=store, dry_run=False)
+    assert first["status"] == "SUCCESS"
+    assert store.load()["rows"][1]["candidates"][0]["pivot"] == 100
+    moved = {**row, "pivot": 105}
+    report2 = {"source_session": session, "input_fingerprint": "same-fp", "universe": "SP500", "rows": [moved]}
+    with patch("scripts.run_group_rotation.load_momentum_report", return_value=report2):
+        second = run_linkage_stage(asof=session, store=store, dry_run=False)
+    assert second["status"] == "SUCCESS"
+    latest = store.load()
+    assert latest["rows"][1]["candidates"][0]["pivot"] == 105
+    assert latest["candidate_linkage"]["input_fingerprint"] == "same-fp"
+    assert latest["candidate_linkage"]["linkage_fingerprint"] != first["snapshot"]["candidate_linkage"]["linkage_fingerprint"]
+
+
+def test_recovered_candidates_clear_stale_linkage_gaps():
+    pending = snapshot()
+    empty = attach_candidates(pending, {
+        "source_session": pending["source_session"], "input_fingerprint": "fp",
+        "universe": "SP500", "rows": [],
+    })
+    basket = empty["rows"][1]
+    assert "NO_QUALIFIED_CANDIDATE" in basket["evidence_gaps"]
+    assert "NO_QUALIFIED_CANDIDATE" not in basket["production"]["evidence_gaps"]
+    recovered = attach_candidates(empty, {
+        "source_session": pending["source_session"], "input_fingerprint": "fp",
+        "universe": "SP500",
+        "rows": [{"ticker": "S0", "data_date": pending["source_session"], "status": "READY",
+                  "close": 100, "pivot": 102, "score": 88, "base_pass": True}],
+    })
+    basket = recovered["rows"][1]
+    assert basket["candidates"]
+    assert "NO_QUALIFIED_CANDIDATE" not in basket["evidence_gaps"]
+    assert basket["production"]["evidence_gaps"] == empty["rows"][1]["production"]["evidence_gaps"]
+
+
+def test_prior_session_member_price_change_republishes(tmp_path, capsys):
+    from scripts.run_group_rotation import main
+    from src.group_analytics.rotation.holdings import normalize_observation, save_observation
+    import exchange_calendars as xcals
+    dates = xcals.get_calendar("XNYS").sessions_in_range("2025-10-01", "2026-09-08")
+    close = 100 * np.exp(.0001 * np.arange(len(dates)))
+    frame = pd.DataFrame({"adj_close": close, "close": close, "volume": 10000}, index=dates)
+    members = {f"S{i}": frame.copy() for i in range(5)}
+    theme = Theme("etf", "测试", "technology", "QQQ", proxy="ETF")
+    holdings = tmp_path / "holdings"
+    data = [{"symbol": "ETF", "asset": f"S{i}", "isin": f"US{i}", "weightPercentage": 20,
+             "updatedAt": "2026-09-08 17:00:00"} for i in range(5)]
+    save_observation(holdings, normalize_observation(data, "ETF", "2026-09-08T18:00:00Z"))
+    frames = {"ETF": frame, "QQQ": frame, **members}
+    nows = iter(["2026-09-09T01:00:00Z", "2026-09-09T03:00:00Z"])
+    argv = ["--stage", "price", "--asof", "2026-09-08", "--output-root", str(tmp_path / "out"),
+            "--holdings-root", str(holdings)]
+    with patch("src.group_analytics.rotation.service.default_themes", return_value=[theme]), \
+         patch("src.group_analytics.rotation.service.load_frames", return_value=frames), \
+         patch("scripts.run_group_rotation.run_rotation",
+               side_effect=lambda **kw: run_rotation(now=next(nows), **kw)):
+        assert main(argv) == 0
+        first = json.loads(capsys.readouterr().out)
+        members["S0"].loc[dates[-2], "adj_close"] = float(members["S0"].iloc[-2]["adj_close"]) * 0.5
+        members["S0"].loc[dates[-2], "close"] = float(members["S0"].iloc[-2]["close"]) * 0.5
+        assert main(argv) == 0
+        second = json.loads(capsys.readouterr().out)
+    assert first["status"] == "SUCCESS"
+    assert second["status"] == "SUCCESS"
+    assert second["run_id"] != first["run_id"]
+
+
+def test_price_adapter_ignores_linkage_stage_failure(tmp_path):
+    from datetime import datetime, timezone
+    from src.operations.adapters.research import collect_research_evidence
+    from src.operations.models import JobDefinition, JobStatus
+    store = RotationStore(tmp_path / "group_analytics" / "rotation")
+    published = attach_candidates(snapshot())
+    published["source_session"] = "2026-09-08"
+    store.publish(published, stage="price")
+    store.failure("2026-09-08", "LINKAGE_FAILED", stage="linkage")
+    job = JobDefinition(
+        job_id="group_rotation_price", display_name="板块轮动价格层", category="RESEARCH",
+        run_type="SCHEDULED_BATCH", adapter="group_rotation", order=35, enabled_expected=True,
+        schedule={"timezone": "America/New_York", "time": "17:30", "deadline_minutes": 75,
+                  "target_policy": "latest_publishable_xnys"},
+    )
+    now = datetime(2026, 9, 8, 22, 0, tzinfo=timezone.utc)
+    with patch("src.operations.adapters.research._rotation_store", return_value=store), \
+         patch("src.operations.adapters.research.expected_target_session", return_value="2026-09-08"):
+        result = collect_research_evidence([job], now=now, observed_at=now.isoformat())
+    assert result.snapshots[0].status == JobStatus.SUCCESS

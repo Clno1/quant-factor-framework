@@ -130,6 +130,17 @@ class SystemdUnitTests(unittest.TestCase):
             holdings_timer,
         )
         self.assertIn("Unit=quant-group-rotation-holdings.service", holdings_timer)
+        linkage_retry_timer = (
+            SYSTEMD_DIR / "quant-group-rotation-linkage-retry.timer"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "OnCalendar=Mon..Fri *-*-* 07:00:00 America/New_York",
+            linkage_retry_timer,
+        )
+        self.assertIn(
+            "Unit=quant-group-rotation-linkage-retry.service",
+            linkage_retry_timer,
+        )
 
     def test_broad_units_form_a_resource_bounded_success_chain(self):
         coverage = (
@@ -277,22 +288,36 @@ class SystemdUnitTests(unittest.TestCase):
         self.assertNotIn("--refresh", next(
             line for line in linkage.splitlines() if line.startswith("ExecStart=")
         ))
-        self.assertIn(
-            "ExecStartPre=-/usr/bin/flock --exclusive --wait 60",
-            prepare,
-        )
-        self.assertIn("--stage linkage --asof latest", prepare)
-        self.assertIn(
-            "ExecStartPre=-/usr/bin/flock --exclusive --wait 60",
-            prepare_root,
-        )
-        self.assertIn("--stage linkage --asof latest", prepare_root)
+        retry = (
+            SYSTEMD_DIR / "quant-group-rotation-linkage-retry.service"
+        ).read_text(encoding="utf-8")
+        retry_root = (
+            SYSTEMD_DIR / "quant-group-rotation-linkage-retry-root.service"
+        ).read_text(encoding="utf-8")
+        for content in (retry, retry_root):
+            start = next(line for line in content.splitlines() if line.startswith("ExecStart="))
+            self.assertIn("flock --exclusive --wait 60", start)
+            self.assertIn("--stage linkage --asof latest", start)
+            self.assertNotIn("--refresh", start)
+            self.assertIn("TimeoutStartSec=15min", content)
+            self.assertIn("MemoryHigh=400M", content)
+            self.assertIn("MemoryMax=550M", content)
+            self.assertIn("Environment=GROUP_ANALYTICS_ENABLED=true", content)
+            self.assertNotIn("quant-premarket-prepare.service", content)
         for content in (prepare, prepare_root):
+            self.assertNotIn("--stage linkage", content)
+            self.assertNotIn("run_group_rotation.py", content)
+            self.assertNotIn("quant-group-rotation-linkage-retry.service", content)
+            self.assertNotIn(
+                "ExecStartPre=-/usr/bin/flock --exclusive --wait 60",
+                content,
+            )
             self.assertIn("Environment=GROUP_ANALYTICS_ENABLED=true", content)
             self.assertGreater(
                 content.index("Environment=GROUP_ANALYTICS_ENABLED=true"),
                 content.index("EnvironmentFile=/etc/quant/premarket-digest.env"),
             )
+            self.assertIn("--prepare --channel all", content)
 
     def test_operations_site_is_independent_and_read_only(self):
         web = (

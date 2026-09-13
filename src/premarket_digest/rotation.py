@@ -6,12 +6,14 @@ are frozen into the writer's snapshot so Web and Discord show the same evidence.
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
 import math
+import re
 from urllib.parse import quote
 
 from src.alerts.discord import validate_discord_payload
 from src.group_analytics.rotation.holdings import format_holdings_breadth_text
-from src.group_analytics.rotation.store import RotationStore
+from src.group_analytics.rotation.store import RotationStore, encoded
 from src.group_analytics.rotation.timeline import format_rotation_timeline_text
 from .models import SourceGateError
 
@@ -39,6 +41,7 @@ ACTION_ZH = {
 }
 ELIGIBLE_ACTIONS = {"focus", "recover", "priority", "price_watch", "watch"}
 LINKAGE_PENDING_REASONS = {"个股关联待后续阶段", "个股关联未启用"}
+LINKAGE_GAP_CODES = ("NO_QUALIFIED_CANDIDATE", "LINKAGE_FAILED")
 RISK_FLAG_ZH = {
     "EXTENDED": "延伸偏大",
     "BELOW_ABSOLUTE_MA20": "低于绝对20日均线",
@@ -54,25 +57,13 @@ def _number(value):
         return None
 
 
-def attach_candidates(snapshot, report=None, *, unavailable_reason=None):
-    result = deepcopy(snapshot)
-    valid_report = isinstance(report, dict) and report.get("source_session") == result["source_session"]
-    result["candidate_linkage"] = {
-        "status": "available" if valid_report else "unavailable",
-        "source_session": report.get("source_session") if isinstance(report, dict) else None,
-        "input_fingerprint": report.get("input_fingerprint") if valid_report else None,
-        "universe": report.get("universe") if valid_report else None,
-        "reason": None if valid_report else (unavailable_reason or "没有同日突破扫描产物"),
-    }
-    raw = report.get("rows", []) if valid_report else []
-    universe = report.get("universe") if valid_report else None
-    universe_query = "?universe=" + quote(universe, safe="") if universe in {"SP500", "US_ACTIVE"} else ""
+def _usable_momentum_rows(report, source_session):
     unique = {}
+    raw = report.get("rows", []) if isinstance(report, dict) else []
     for row in raw:
-        if row.get("data_date") != result["source_session"] or row.get("status") not in STATUS_ZH:
+        if row.get("data_date") != source_session or row.get("status") not in STATUS_ZH:
             continue
         ticker = str(row.get("ticker", ""))
-        import re
         if not re.fullmatch(r"[A-Z0-9][A-Z0-9.-]{0,15}", ticker):
             continue
         if (_number(row.get("pivot")) or 0) <= 0 or (_number(row.get("close")) or 0) <= 0:
@@ -80,11 +71,69 @@ def attach_candidates(snapshot, report=None, *, unavailable_reason=None):
         if row.get("base_pass") is False:
             continue
         unique.setdefault(ticker, row)
+    return unique
+
+
+def _theme_matches(theme, unique):
+    members = {m["ticker"] for m in (theme.get("members") or []) if m.get("ticker")}
+    sector = SECTORS.get(theme.get("id"))
+    matched = [
+        row for ticker, row in unique.items()
+        if ticker in members or (sector and row.get("sector") == sector)
+    ]
+    matched.sort(key=lambda row: (
+        {"BREAKOUT": 0, "READY": 1, "SETUP": 2}[row["status"]],
+        -(_number(row.get("score")) or 0),
+        row["ticker"],
+    ))
+    return members, sector, matched
+
+
+def candidate_linkage_fingerprint(snapshot, report):
+    """Hash match/filter/sort/display inputs owned by the rotation association layer."""
+    source_session = snapshot.get("source_session")
+    unique = _usable_momentum_rows(report, source_session)
+    themes = []
+    for theme in snapshot.get("rows") or []:
+        members, sector, matched = _theme_matches(theme, unique)
+        themes.append({
+            "id": theme.get("id"),
+            "members": sorted(members),
+            "sector": sector,
+            "candidates": [{
+                "ticker": row.get("ticker"),
+                "status": row.get("status"),
+                "score": _number(row.get("score")),
+                "pivot": _number(row.get("pivot")),
+                "close": _number(row.get("close")),
+                "base_pass": row.get("base_pass"),
+                "sector": row.get("sector"),
+                "data_date": row.get("data_date"),
+            } for row in matched[:3]],
+        })
+    return hashlib.sha256(encoded({
+        "source_session": source_session,
+        "universe": report.get("universe") if isinstance(report, dict) else None,
+        "themes": themes,
+    })).hexdigest()
+
+
+def attach_candidates(snapshot, report=None, *, unavailable_reason=None):
+    result = deepcopy(snapshot)
+    valid_report = isinstance(report, dict) and report.get("source_session") == result["source_session"]
+    unique = _usable_momentum_rows(report, result["source_session"]) if valid_report else {}
+    result["candidate_linkage"] = {
+        "status": "available" if valid_report else "unavailable",
+        "source_session": report.get("source_session") if isinstance(report, dict) else None,
+        "input_fingerprint": report.get("input_fingerprint") if valid_report else None,
+        "linkage_fingerprint": candidate_linkage_fingerprint(result, report) if valid_report else None,
+        "universe": report.get("universe") if valid_report else None,
+        "reason": None if valid_report else (unavailable_reason or "没有同日突破扫描产物"),
+    }
+    universe = report.get("universe") if valid_report else None
+    universe_query = "?universe=" + quote(universe, safe="") if universe in {"SP500", "US_ACTIVE"} else ""
     for theme in result["rows"]:
-        members = {m["ticker"] for m in theme["members"]}
-        sector = SECTORS.get(theme["id"])
-        matched = [r for ticker, r in unique.items() if ticker in members or (sector and r.get("sector") == sector)]
-        matched.sort(key=lambda r: ({"BREAKOUT": 0, "READY": 1, "SETUP": 2}[r["status"]], -(_number(r.get("score")) or 0), r["ticker"]))
+        members, sector, matched = _theme_matches(theme, unique)
         theme["candidates"] = [{"ticker": r["ticker"], "security_id": r["ticker"],
                                  "status": r["status"], "status_name": STATUS_ZH[r["status"]],
                                  "score": _number(r.get("score")), "pivot": _number(r["pivot"]),
@@ -99,12 +148,12 @@ def attach_candidates(snapshot, report=None, *, unavailable_reason=None):
         theme["confirmation"] = "观察20日相对优势能否保持，并核验成员广度与既有个股突破位"
         theme["invalidation"] = "20日相对转弱或既有突破形态失效时重新评估；不是自动止损指令"
         gaps = list(theme.get("evidence_gaps") or theme["production"].get("evidence_gaps") or [])
+        gaps = [gap for gap in gaps if gap not in LINKAGE_GAP_CODES]
         if valid_report:
-            if not theme["candidates"] and "NO_QUALIFIED_CANDIDATE" not in gaps:
+            if not theme["candidates"]:
                 gaps.append("NO_QUALIFIED_CANDIDATE")
         elif (unavailable_reason or "没有同日突破扫描产物") not in LINKAGE_PENDING_REASONS:
-            if "LINKAGE_FAILED" not in gaps:
-                gaps.append("LINKAGE_FAILED")
+            gaps.append("LINKAGE_FAILED")
         theme["evidence_gaps"] = gaps
         # Linkage/display gaps stay on the row. production.evidence_gaps remains
         # the engine snapshot so replay MATCH still holds after association.

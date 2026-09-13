@@ -330,6 +330,17 @@ def _collect_group_analytics(
     return result
 
 
+def _rotation_attempt_status(attempt, *, linkage):
+    checks = attempt.get("checks") if isinstance(attempt, dict) else None
+    key = "linkage" if linkage else "price"
+    if isinstance(checks, dict) and isinstance(checks.get(key), dict):
+        return checks[key].get("status")
+    stage = attempt.get("stage") if isinstance(attempt, dict) else None
+    if stage in {"price", "linkage"} and stage != key:
+        return None
+    return attempt.get("status") if isinstance(attempt, dict) else None
+
+
 def _rotation_store():
     from src.group_analytics.rotation.store import RotationStore
     from src.group_analytics.settings import load_group_analytics_settings
@@ -400,7 +411,7 @@ def _collect_group_rotation(
         success_reason = "已发布目标交易日轮动价格快照"
         pending_reason = "轮动价格快照尚未到目标交易日"
         source_name = "rotation/latest.json"
-    if attempt.get("status") == "FAILED" and (
+    if _rotation_attempt_status(attempt, linkage=linkage) == "FAILED" and (
         not session_ok or str(attempt.get("source_session") or "") in {expected, ""}
     ):
         status = JobStatus.FAILED
