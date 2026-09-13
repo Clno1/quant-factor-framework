@@ -59,6 +59,12 @@ def main():
     if args.config.stat().st_size > 100_000:
         raise ValueError("WORKER_CONFIG_TOO_LARGE")
     config = WorkerConfig.model_validate_json(args.config.read_text())
+    if args.command == 'run' and args.execute and config.collect_enabled:
+        from src.breakouts.ep.consumers import market_window
+        if not market_window(datetime.now(timezone.utc)):
+            print(json.dumps({'status': 'OUTSIDE_MARKET_WINDOW', 'external_requests': 0,
+                              'llm_requests': 0, 'discord_messages': 0}))
+            return 0
     store = EpStore(config.database, read_only=True)
     if args.command == 'latency':
         from src.breakouts.ep.latency import report as latency_report
